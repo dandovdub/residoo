@@ -1,19 +1,45 @@
 {
   "name": "residoo",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Find secrets leaking through your AI coding agent's session history. Zero network calls in the scan path, zero dependencies.",
   "license": "MIT",
   "author": "CloudRoam (https://cloudroam.io)",
-  "repository": { "type": "git", "url": "git+https://github.com/dandovdub/residoo.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dandovdub/residoo.git"
+  },
   "homepage": "https://github.com/dandovdub/residoo#readme",
-  "bugs": { "url": "https://github.com/dandovdub/residoo/issues" },
-  "bin": { "residoo": "bin/residoo.js" },
+  "bugs": {
+    "url": "https://github.com/dandovdub/residoo/issues"
+  },
+  "bin": {
+    "residoo": "bin/residoo.js"
+  },
   "main": "src/cli.js",
-  "engines": { "node": ">=18" },
-  "scripts": { "test": "node tests/smoke.js" },
-  "files": ["bin", "src", "README.md", "SECURITY.md", "LICENSE"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node tests/smoke.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
   "keywords": [
-    "security", "secrets", "secret-scanning", "ai-agent", "claude-code",
-    "cursor", "copilot", "mcp", "privacy", "cli", "encryption"
+    "security",
+    "secrets",
+    "secret-scanning",
+    "ai-agent",
+    "claude-code",
+    "cursor",
+    "copilot",
+    "mcp",
+    "privacy",
+    "cli",
+    "encryption"
   ]
 }

@@ -49,9 +49,14 @@
 //    is recovered by retrying the decode with ONE edge chunk dropped — but
 //    only one, and only at an edge: junk on both edges, or prose merged into
 //    the middle of a blob, still loses the whole candidate.
-//  - At most B64_MAX_CANDIDATES candidates are decoded per line; a line with
-//    more encoded runs than that is reported by the caller as only partially
-//    checked rather than silently truncated.
+//  - There is deliberately NO per-line candidate cap. Real transcript lines
+//    routinely hold hundreds of decode-sized alnum runs (uuids, hashes,
+//    request ids), so any cap either silently starves a genuine blob
+//    sitting past it or flags nearly every real file as partially checked.
+//    None is needed for cost: each character belongs to at most one
+//    candidate and decoding is a few linear passes, so total work per line
+//    is O(line length) with small constants, and line length is already
+//    bounded by the sources' own file-read caps.
 
 // A run is made of characters that can appear in base64 or base64url:
 // A-Z a-z 0-9 + / = _ - (see isB64Code). Wrap separators between chunks of
@@ -74,7 +79,6 @@ const B64_MIN_CHUNK = 4;
 
 const B64_MIN_CHARS = 24;          // fewer chars cannot hide a real credential
 const B64_MAX_ENCODED = 90000;     // ~64KB decoded ceiling; skip bigger runs
-const B64_MAX_CANDIDATES = 256;    // per line, so a pathological line stays bounded
 const PRINTABLE_MIN = 0.85;        // decoded bytes must be mostly text to rescan
 
 /** JSON whitespace escapes -> the real line breaks they stand for. */
@@ -91,9 +95,10 @@ function normalizeEscapes(line) {
  *
  * Each candidate is returned as its ARRAY of chunks, not pre-joined: the
  * decode step needs the chunk boundaries to retry with an edge chunk dropped
- * (see findDecodedMatches). `truncated` is true when the per-line candidate
- * cap cut the list short, so the caller can surface the partial coverage
- * instead of silently dropping the rest.
+ * (see findDecodedMatches). Candidates shorter than B64_MIN_CHARS joined are
+ * discarded here for free: they can never decode (decodeToText rejects them
+ * by length), and most base64-charset runs on a line are exactly such short
+ * prose words and ids.
  */
 function isB64Code(c) {
   return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) ||
@@ -123,14 +128,13 @@ function splitAtPadding(chunk) {
 
 function b64Candidates(norm) {
   const candidates = []; // array of chunk arrays
-  let truncated = false;
   let current = null;   // chunk array of the candidate in progress
   let runStart = -1;    // start of the b64 run in progress, -1 when not in one
   let gapClean = true;  // gap since the last chunk held only \r \n
   const push = (cand) => {
-    if (candidates.length >= B64_MAX_CANDIDATES) { truncated = true; return false; }
-    candidates.push(cand);
-    return true;
+    let len = 0;
+    for (const c of cand) len += c.length;
+    if (len >= B64_MIN_CHARS) candidates.push(cand);
   };
   const n = norm.length;
   for (let i = 0; i <= n; i++) {
@@ -147,13 +151,13 @@ function b64Candidates(norm) {
         for (let p = 0; p < parts.length; p++) {
           if (p === 0 && current !== null && gapClean) current.push(parts[p]);
           else {
-            if (current !== null && !push(current)) return { candidates, truncated };
+            if (current !== null) push(current);
             current = [parts[p]];
           }
           // A part ending in padding is a complete value: nothing after it —
           // not even across a clean wrap gap — can belong to the same blob.
           if (parts[p].charCodeAt(parts[p].length - 1) === 61) {
-            if (!push(current)) return { candidates, truncated };
+            push(current);
             current = null;
           }
         }
@@ -168,7 +172,7 @@ function b64Candidates(norm) {
     if (c !== -1 && c !== 10 && c !== 13) gapClean = false;
   }
   if (current !== null) push(current);
-  return { candidates, truncated };
+  return candidates;
 }
 
 /**
@@ -211,19 +215,15 @@ function decodeToText(cleaned) {
 /**
  * Find credentials that appear only base64-encoded on one line. `rules` MUST
  * be the high-confidence subset (see LIMITS above). Returns
- * { matches, truncated } where matches is
  * [{ ruleId, label, confidence, value, encoding }] with `value` the DECODED
  * secret (caller redacts), deduped by rule+value so a blob echoed twice on
- * one line (content plus tool-result mirror) is one entry, and `truncated`
- * is true when the per-line candidate cap left runs unchecked (the caller
- * surfaces that as partial coverage, never silently).
+ * one line (content plus tool-result mirror) is one entry.
  */
 function findDecodedMatches(line, rules) {
   const out = [];
   const seen = new Set();
   const norm = normalizeEscapes(line);
-  const { candidates, truncated } = b64Candidates(norm);
-  for (const chunks of candidates) {
+  for (const chunks of b64Candidates(norm)) {
     // A wrap-merged candidate can carry one glued-on neighbor token: a word
     // or filename sitting directly above or below the blob across the wrap
     // newline merges into the candidate and breaks the decode (alignment
@@ -254,7 +254,7 @@ function findDecodedMatches(line, rules) {
       }
     }
   }
-  return { matches: out, truncated };
+  return out;
 }
 
 // ── Feature 2: split-line boundary join ─────────────────────────────────────

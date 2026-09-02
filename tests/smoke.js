@@ -393,12 +393,24 @@ async function main() {
     check("edge-retry: word below the wrapped blob no longer loses it",
       belowRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.encoding === "base64"));
 
-    // Candidate cap: a line with more encoded runs than the per-line bound is
-    // flagged as partially checked, never silently truncated.
-    const manyRuns = Array.from({ length: 300 }, (_, i) => "runx" + String(i).padStart(4, "0")).join(" ");
-    const capRes = await scanOneFile("cap.jsonl", JSON.stringify({ message: { content: manyRuns } }) + "\n");
-    check("candidate cap: over-the-bound line is flagged as partially checked",
-      capRes.unreadableFiles.some((u) => u.reason.includes("encoded runs")));
+    // No candidate starvation: real transcript lines hold hundreds of
+    // decode-sized alnum runs (uuids, hashes, ids), and an earlier design
+    // capped candidates per line — silently missing a genuine blob sitting
+    // past the cap. There is no cap now: a real blob after 300 decode-sized
+    // junk runs must still be found, and nothing is flagged partial.
+    const junkRuns = Array.from({ length: 300 }, (_, i) => ("r" + String(i)).padEnd(28, "x")).join(" ");
+    const lateB64 = Buffer.from("late: " + plantedAwsKey + " found\n").toString("base64");
+    const lateRes = await scanOneFile("late.jsonl",
+      JSON.stringify({ message: { content: junkRuns + " " + lateB64 } }) + "\n");
+    check("no starvation: blob past hundreds of decode-sized runs is still found, nothing flagged",
+      lateRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.encoding === "base64") &&
+      lateRes.unreadableFiles.length === 0);
+    // Ordinary prose (short word-runs, however many) produces zero decode
+    // work and zero findings.
+    const proseRuns = Array.from({ length: 400 }, (_, i) => "word" + String(i)).join(" ");
+    const proseRes = await scanOneFile("prose.jsonl", JSON.stringify({ message: { content: proseRuns } }) + "\n");
+    check("prose line: hundreds of short word runs, no findings, nothing flagged",
+      proseRes.unreadableFiles.length === 0 && proseRes.findings.length === 0);
 
     // A vendor prefix followed by a multi-megabyte same-charset run overflows
     // V8's regex backtrack stack inside a RULE regex (RangeError), a crash

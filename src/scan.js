@@ -196,12 +196,9 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // was present only encoded on this line. It redacts from the DECODED value
   // (the encoded run is treated as secret material and never appears in the
   // preview), and carries an `encoding` marker the report renders as
-  // "base64-wrapped". Returns true when the per-line candidate cap left
-  // encoded runs on this line unchecked, so the caller can flag the file as
-  // only partially checked instead of staying silent about the gap.
+  // "base64-wrapped".
   const decodeLine = (line, file, relFile, lineNo, mtimeMs) => {
-    const { matches, truncated } = findDecodedMatches(line, highRules);
-    for (const d of matches) {
+    for (const d of findDecodedMatches(line, highRules)) {
       const suppressedReason = suppressionReason(d.value, null);
       if (suppressedReason && !includeSuppressed) {
         suppressedCount++;
@@ -210,7 +207,6 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       record({ id: d.ruleId, label: d.label }, d.value, relFile, file, lineNo,
         mtimeMs, suppressedReason ? "low" : "high", suppressedReason, { encoding: d.encoding });
     }
-    return truncated;
   };
 
   // Feature 2: split-line boundary join. A finding here means one credential
@@ -291,10 +287,9 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       // Content projection of the PREVIOUS line, kept so each line is
       // projected once and reused for both pairs it belongs to.
       let prevContent = null;
-      // Per-file degradation flags, each surfaced at most once so a
-      // pathological file produces one visible entry, not thousands.
+      // Per-file degradation flag, surfaced at most once so a pathological
+      // file produces one visible entry, not thousands.
       let lineMatchFailed = false;
-      let decodeTruncated = false;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (line) {
@@ -307,7 +302,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           // (same contract as the readLines catch above).
           try {
             matchLine(line, file, relFile, i + 1, mtimeMs);
-            decodeTruncated = decodeLine(line, file, relFile, i + 1, mtimeMs) || decodeTruncated;
+            decodeLine(line, file, relFile, i + 1, mtimeMs);
             const content = contentProjection(line);
             // Boundary join with the previous line (2-way splits only; see
             // decode.js). Both lines must be non-empty so a blank separator
@@ -326,9 +321,6 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
         } else {
           prevContent = null;
         }
-      }
-      if (decodeTruncated) {
-        unreadableFiles.push({ file: safeName(file), reason: "some lines held more encoded runs than the per-line bound; checked partially" });
       }
     }
 
