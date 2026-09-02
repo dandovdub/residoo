@@ -1,0 +1,14 @@
+{
+  "name": "residoo",
+  "version": "0.1.0",
+  "description": "Find secrets leaking through your AI coding agent's session history. Zero network calls, zero dependencies.",
+  "license": "MIT",
+  "bin": { "residoo": "bin/residoo.js" },
+  "main": "src/cli.js",
+  "engines": { "node": ">=18" },
+  "files": ["bin", "src", "README.md", "LICENSE"],
+  "keywords": [
+    "security", "secrets", "secret-scanning", "ai-agent", "claude-code",
+    "cursor", "copilot", "mcp", "privacy", "cli"
+  ]
+}
