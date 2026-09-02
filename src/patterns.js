@@ -28,12 +28,13 @@ const PATTERNS = [
     re: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g },
   { id: "stripe_key", label: "Stripe API key", confidence: "high",
     re: /\b(sk|rk)_live_[A-Za-z0-9]{20,}\b/g },
-  // The negative lookahead keeps this rule and anthropic_key mutually exclusive —
-  // without it, "sk-ant-..." matches BOTH patterns and gets reported twice under
-  // two different (one wrong) provider labels. Verified: both regexes independently
-  // matched a synthetic sk-ant- key before this fix.
+  // The negative lookahead keeps this rule mutually exclusive with anthropic_key
+  // and openrouter_key below — without it, "sk-ant-..." or "sk-or-v1-..." match
+  // BOTH this pattern and the more specific one, and get reported twice under
+  // two different (one wrong) provider labels. Verified: all three regexes
+  // independently matched their overlapping synthetic keys before this fix.
   { id: "openai_key", label: "OpenAI API key", confidence: "high",
-    re: /\bsk-(?!ant-)(proj-)?[A-Za-z0-9_-]{20,}\b/g },
+    re: /\bsk-(?!ant-|or-)(proj-)?[A-Za-z0-9_-]{20,}\b/g },
   { id: "anthropic_key", label: "Anthropic API key", confidence: "high",
     re: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g },
   { id: "google_api_key", label: "Google / Firebase API key", confidence: "high",
@@ -54,6 +55,78 @@ const PATTERNS = [
     re: /"refresh_token"\s*:\s*"[^"\s]{20,}"/gi },
   { id: "access_token_field", label: "access_token field", confidence: "medium",
     re: /"access_token"\s*:\s*"[^"\s]{20,}"/gi },
+
+  // ── AI / LLM providers (added: competitive gap-close, see project history) ─
+  // Every regex body below was checked against a production, field-tested
+  // detector — trufflehog's (github.com/trufflesecurity/trufflehog,
+  // pkg/detectors/<vendor>) — not guessed from a blog post, as of 2026-09.
+  // Cohere, Mistral, Together AI, Fireworks and DeepSeek were researched too
+  // and deliberately left out: none has a trufflehog detector, official docs
+  // describe them as unprefixed/opaque tokens, and DeepSeek's "sk-" prefix is
+  // provably indistinguishable from OpenAI's (trufflehog's own DeepSeek
+  // detector only fires with a nearby "deepseek" keyword as extra context,
+  // which this flat-regex model doesn't have) — exactly the shaky-prefix case
+  // this file's own header comment says to leave out rather than force.
+  { id: "groq_key", label: "Groq API key", confidence: "high",
+    re: /\bgsk_[a-zA-Z0-9]{52}\b/g },
+  { id: "xai_key", label: "xAI (Grok) API key", confidence: "high",
+    re: /\bxai-[0-9a-zA-Z_]{80}\b/g },
+  { id: "openrouter_key", label: "OpenRouter API key", confidence: "high",
+    re: /\bsk-or-v1-[0-9a-f]{64}\b/g },
+  { id: "huggingface_token", label: "Hugging Face access token", confidence: "high",
+    re: /\b(?:hf_|api_org_)[a-zA-Z0-9]{34}\b/g },
+  { id: "pinecone_key", label: "Pinecone API key", confidence: "high",
+    re: /\bpcsk_[A-Za-z0-9]{5,6}_[A-Za-z0-9]{63}\b/g },
+  // No trufflehog detector exists for this one, so it leans on a second,
+  // independent signal instead: Perplexity's own product is literally named
+  // "pplx-api" (see their "Introducing pplx-api" launch post), and every
+  // integration doc that shows a real key (liteLLM, apideck, etc.) agrees on
+  // "pplx-" + a >=40-char body — consistent across independent sources even
+  // without one canonical spec page.
+  { id: "perplexity_key", label: "Perplexity API key", confidence: "high",
+    re: /\bpplx-[A-Za-z0-9]{40,}\b/g },
+  { id: "replicate_token", label: "Replicate API token", confidence: "high",
+    re: /\br8_[0-9A-Za-z_-]{37}\b/g },
+
+  // ── Cloud / infra ──────────────────────────────────────────────────────
+  { id: "digitalocean_token", label: "DigitalOcean access token", confidence: "high",
+    re: /\b(?:dop|doo|dor)_v1_[a-f0-9]{64}\b/g },
+  { id: "supabase_token", label: "Supabase personal access token", confidence: "high",
+    re: /\bsbp_[a-z0-9]{40}\b/g },
+  { id: "vault_token", label: "HashiCorp Vault service token", confidence: "high",
+    // Vault 1.10+ format only (hvs.<90-120 chars>). The pre-1.10 legacy
+    // format is a bare "s." + 18-40 chars — "s." is nowhere near specific
+    // enough to be a vendor prefix, so that older shape is deliberately left
+    // out rather than turned into a noisy 2-character trigger.
+    re: /\bhvs\.[A-Za-z0-9_-]{90,120}\b/g },
+  { id: "onepassword_service_token", label: "1Password service account token", confidence: "high",
+    // Confirmed against 1Password's own developer docs (developer.1password.com
+    // -> 1password.dev/service-accounts/security): the token is "ops_" plus a
+    // base64-encoded JWT, so it always continues "eyJ" (base64 of `{"`).
+    re: /\bops_eyJ[A-Za-z0-9+/=_-]{40,}\b/g },
+
+  // ── Comms / SaaS ───────────────────────────────────────────────────────
+  { id: "discord_webhook", label: "Discord webhook URL", confidence: "high",
+    re: /\bhttps:\/\/discord\.com\/api\/webhooks\/[0-9]{18,19}\/[0-9a-zA-Z_-]{68}\b/g },
+  { id: "telegram_bot_token", label: "Telegram bot token", confidence: "high",
+    re: /\b[0-9]{8,10}:[a-zA-Z0-9_-]{35}\b/g },
+  { id: "mailgun_key", label: "Mailgun API key", confidence: "high",
+    re: /\bkey-[a-z0-9]{32}\b/g },
+  // Notion's own docs explicitly warn against regex-matching its tokens,
+  // since the format has changed before and may again — noted, not ignored,
+  // and worth restating here rather than treating this as equally solid as
+  // the others. secret_ (legacy, exactly 43 chars) is trufflehog-verified;
+  // ntn_ (current format since 2024-09-25) is vendor-confirmed as a prefix
+  // but Notion has not published an exact body length for it, so its bound
+  // below is a floor, not a verified exact count.
+  { id: "notion_token", label: "Notion integration token", confidence: "high",
+    re: /\b(?:secret_[A-Za-z0-9]{43}|ntn_[A-Za-z0-9]{20,})\b/g },
+  { id: "linear_key", label: "Linear API key", confidence: "high",
+    re: /\blin_api_[0-9A-Za-z]{40}\b/g },
+  { id: "sentry_token", label: "Sentry auth token", confidence: "high",
+    // Covers both current Sentry token shapes: org-scoped (sntrys_, base64
+    // JWT-like body) and user-scoped (sntryu_, hex body).
+    re: /\b(?:sntrys_eyJ[A-Za-z0-9+/=_]{100,}|sntryu_[a-f0-9]{64})\b/g },
 ];
 
 /**
