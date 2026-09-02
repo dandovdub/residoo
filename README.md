@@ -91,8 +91,22 @@ won't be built into the tool that writes it.
 - Scans your local AI-agent session transcripts for high-confidence secret
   patterns: cloud provider keys, private key blocks, OAuth/API tokens,
   database connection strings, and more (see `src/patterns.js`).
+- Sees through two transcript-specific disguises. A credential present only
+  base64-encoded on a line (an env dump piped through `base64`, wrap
+  newlines included) is decoded and rescanned with the high-confidence
+  vendor-prefixed rules; the report marks it `base64-wrapped` and redacts
+  the decoded value. A credential split across two adjacent streaming
+  records, contiguous on neither line, is rejoined at the content boundary
+  and rescanned; the report marks it `split across lines` with the line
+  pair. Both are general mechanisms with stated limits (one decode level,
+  no base64 blocks spanning physical lines, two-way splits only; see
+  `src/decode.js`).
+- Covers Stripe keys in both modes: live (`sk_live`/`rk_live`) and test
+  (`sk_test`/`rk_test`), because a leaked test key still holds real
+  permissions in its sandbox and reveals account structure.
 - Redacts everything in its own output. You get a shape and a first/last-4
-  preview, never the real value, including in `--json` mode.
+  preview, never the real value, including in `--json` mode. A decoded or
+  rejoined secret is redacted exactly like a plain one.
 - Tells you how many **distinct** secrets it found versus how many times one
   got echoed back across tool calls, so the headline number reflects real
   exposure, not repetition.
@@ -172,7 +186,7 @@ counted as clean.
   │            ├──────────────┬───────────────┤                   │
   │            ▼              │               ▼                   │
   │   stream + match          │        integrity checks           │
-  │   35 verified rules       │        hooks · droppers ·         │
+  │   36 verified rules       │        hooks · droppers ·         │
   │            │              │        zero-width unicode         │
   │            ▼              ▼               │                   │
   │        redacted report (first/last 4 chars only) ◀────────────┤
@@ -454,12 +468,17 @@ submitting. See the note above on why that matters here specifically.
 
 Shape-based detection can't tell a real secret from a realistic-looking
 example in a fetched web page or a piece of documentation your agent read
-aloud back to you. Two suppression layers narrow the gap: known
+aloud back to you. Three suppression layers narrow the gap: known
 vendor-documented example values (AWS's `AKIAIOSFODNN7EXAMPLE` and its
 siblings, GitHub's docs tokens, jwt.io's demo token) are suppressed by
-exact match, and placeholder-looking context around a match catches the
-common UI-hint case. Neither catches every case, and both are re-includable
-with `--include-suppressed`. Treat every finding as a lead to check, not a
+exact match; a placeholder body built from one repeated character (no
+vendor issues zero-entropy key material) is suppressed by value; and
+placeholder-looking context around a match catches the common UI-hint
+case. The two value-based layers apply identically to base64-decoded and
+boundary-joined findings, since a decoded example is the same non-secret
+as a plain one. None of the three catches every case, and all are
+re-includable with `--include-suppressed`. Treat every finding as a lead
+to check, not a
 certainty. The same is true of every tool in this category, including the
 well-established ones.
 
