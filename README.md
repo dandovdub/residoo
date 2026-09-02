@@ -47,14 +47,40 @@ contents, terminal output, and whatever got pasted into a prompt.
   `placeholder="AKIA..."` hint, a doc's example key) separately from real
   findings, rather than either hiding them or inflating the count with them.
 
+## Sealing what it finds
+
+Finding a leaked key in a transcript raises the obvious next question: *now
+what?* `--seal` is the answer:
+
+```bash
+residoo scan --seal
+```
+
+Every transcript that carried a finding is encrypted into a local vault
+directory — AES-256-GCM, key derived from your passphrase with scrypt, streamed
+(an 800MB transcript never touches memory whole). The vault's manifest — the
+mapping from numbered blobs back to real paths — is itself encrypted, so the
+vault doesn't advertise what's inside it even by name. **Originals are never
+touched**: once you've verified a restore works (`residoo unseal <vault> --restore
+0001.sealed --out /tmp/check` — verified byte-identical via a recorded SHA-256),
+deleting the plaintext is your decision, made by you, not by this tool.
+
+Optionally, `--upload-cloudroam` (with `CLOUDROAM_API_KEY`, `--connector`,
+`--bucket`) copies the sealed vault to [CloudRoam](https://cloudroam.io) for
+durable, cross-cloud storage. **This is the only feature in residoo that touches
+the network, it never runs unless you pass the flag, and only ciphertext is
+transmitted** — the vault is sealed before upload code ever executes.
+
 ## What it does not do
 
-- **No network calls, ever, in the default path.** A secret scanner that
-  phones home is not a tool you should trust with your secrets, so it isn't
-  one. Verify this yourself — there is no HTTP client anywhere in this
-  codebase.
-- **Nothing destructive.** It reads and reports. It does not move, delete,
-  redact-in-place, or touch anything on disk.
+- **No network calls in the default path — and none at all unless you
+  explicitly pass `--upload-cloudroam`.** A secret scanner that phones home is
+  not a tool you should trust with your secrets. Verify this yourself: the one
+  `fetch` call in the codebase is in `src/sealvault.js`, reachable only behind
+  that flag, and sends only encrypted bytes.
+- **Nothing destructive, ever.** Scanning is read-only. Sealing creates *new*
+  files and modifies or deletes nothing — not even the plaintext it just
+  encrypted a copy of. That last step is deliberately left to a human.
 - **No telemetry, no analytics, no update-check ping.**
 
 ## Install
@@ -82,7 +108,19 @@ residoo scan [options]
   --include-suppressed    also show matches that looked like placeholder/example text
   --fail-on-find          exit code 1 if anything is found (for CI)
   --no-color              disable ANSI colour
+
+  --seal                  encrypt every transcript with findings into a local vault
+  --vault-dir <dir>       vault location (default ./residoo-vault-<stamp>)
+  --upload-cloudroam      also upload the sealed vault (needs CLOUDROAM_API_KEY,
+                          --connector <id>, --bucket <name>; ciphertext only)
+
+residoo unseal <vault-dir>                          list a vault's contents
+residoo unseal <vault-dir> --restore <n> --out <p>  restore one file, hash-verified
 ```
+
+The vault passphrase comes from `RESIDOO_PASSPHRASE` or a hidden interactive
+prompt. There is no recovery if you lose it — that is the point of the design,
+so pick one you keep.
 
 ## Sources supported today
 

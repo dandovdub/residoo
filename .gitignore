@@ -1,3 +1,7 @@
 node_modules/
 *.log
 .DS_Store
+# Internal launch/positioning notes — not part of the public repo.
+LAUNCH.md
+# Local test vaults must never be committed.
+residoo-vault-*/

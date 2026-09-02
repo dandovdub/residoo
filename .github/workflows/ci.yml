@@ -1,0 +1,33 @@
+# Runs on every push and PR: syntax-check everything, then the smoke tests,
+# across every supported Node line. No secrets, no tokens, nothing to steal —
+# and dependency lifecycle scripts can't run because there are no dependencies.
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["18", "20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      - name: Syntax-check every source file
+        run: |
+          for f in src/*.js src/sources/*.js bin/residoo.js tests/smoke.js; do
+            node --check "$f"
+          done
+      - run: npm test
+      - name: CLI help renders
+        run: node bin/residoo.js --help

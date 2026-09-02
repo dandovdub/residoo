@@ -23,9 +23,17 @@ stay anonymous.
 This isn't a claim taken on faith. Every property below was tested, not
 just asserted — see the git history for the actual commands run:
 
-- **No network calls.** Grepped for every network-capable primitive
-  (`http`, `https`, `fetch`, `child_process`, etc.) across the full source.
-- **Read-only.** Grepped for every filesystem write/delete primitive.
+- **No network calls in the scan path.** Grepped for every network-capable
+  primitive (`http`, `https`, `fetch`, `child_process`, etc.) across the
+  scanning code. The codebase's single `fetch` lives in `src/sealvault.js`,
+  is reachable only behind the explicit `--upload-cloudroam` flag, and
+  transmits ciphertext only — the vault is fully sealed before that code
+  can run.
+- **Scanning is read-only.** Grepped for every filesystem write/delete
+  primitive in the scan path. Sealing (`--seal`) writes NEW files into a
+  vault directory it creates; nothing in the codebase modifies or deletes
+  an existing file, including the plaintext originals a seal just encrypted —
+  removing those is deliberately left to the human.
 - **Output can't leak more than it shows.** The one raw matched value is
   used in exactly two places: an in-memory dedup count (never serialized)
   and the redaction function. Verified with a crafted input containing a
@@ -55,9 +63,13 @@ the kind of thing worth impersonating.
 
 - The only npm package is **`residoo`**, published from **this** GitHub
   repository via CI, not uploaded by hand from a maintainer's laptop.
-- The only GitHub org is the one this file lives in. If you found residoo
-  through a link, a blog post, or a search result rather than directly on
-  npm or GitHub, cross-check the org name before running it.
+- The canonical repository is **`github.com/dandovdub/residoo`** — the one
+  named in this package's own `repository` field, which npm's provenance
+  attestation cryptographically ties each release to. A GitHub account named
+  "residoo" exists and is NOT this project. If you found residoo through a
+  link, a blog post, or a search result rather than directly on npm, check
+  the provenance badge on the npm page — it names the exact repo and
+  workflow that built the release.
 - Nothing here needs a postinstall script, a config change to another
   tool, or elevated permissions. If a "residoo" you found asks for any of
   those, it isn't this project.
