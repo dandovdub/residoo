@@ -216,7 +216,16 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
     const distinctNote = distinct && distinct !== items.length
       ? paint(c.dim, `  (${distinct} distinct value${distinct === 1 ? "" : "s"}, re-exposed ${items.length - distinct}× across tool output)`)
       : "";
-    push(`  ${paint(c.bold, String(items.length).padStart(4))}  [${tag}]  ${label}${distinctNote}`);
+    // Flag when a rule's matches came from a decode/reconstruct pass rather
+    // than plain text: those would be invisible to a line-oriented scanner,
+    // so the reader should know the value was hidden.
+    const encoded = items.filter((f) => f.encoding).length;
+    const split = items.filter((f) => f.spanLines).length;
+    const marks = [];
+    if (encoded) marks.push(`${encoded} base64-wrapped`);
+    if (split) marks.push(`${split} split across lines`);
+    const markNote = marks.length ? paint(c.yellow, `  [${marks.join(", ")}]`) : "";
+    push(`  ${paint(c.bold, String(items.length).padStart(4))}  [${tag}]  ${label}${distinctNote}${markNote}`);
   }
 
   push();
@@ -268,7 +277,16 @@ function renderJson(result, integrity = null, rotation = null) {
       findings: result.findings.map((f) => ({
         rule: f.ruleId, label: f.label, confidence: f.confidence,
         source: f.source, file: f.relFile, line: f.line, preview: f.preview,
+        // Markers for the two decode/reconstruct passes (absent on ordinary
+        // findings). `encoding` names how the value was wrapped ("base64" /
+        // "base64url"); `spanLines` names the adjacent line pair a split value
+        // was reconstructed across.
+        ...(f.encoding ? { encoding: f.encoding } : {}),
+        ...(f.spanLines ? { spanLines: f.spanLines } : {}),
         fingerprint: fingerprintFinding(f),
+        // Only present on an --include-suppressed run: says WHY this finding
+        // is low-confidence, so a JSON consumer doesn't have to guess.
+        ...(f.suppressedReason ? { suppressedReason: f.suppressedReason } : {}),
       })),
       // orderAdvisory mirrors the human report's ChainDrop ordering warning:
       // remediation order is safety-critical when planted persistence and

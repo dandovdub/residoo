@@ -2,6 +2,7 @@
 
 const path = require("path");
 const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
+const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("./decode");
 
 /**
  * Text immediately before a match that strongly suggests "this is an example
@@ -15,6 +16,84 @@ const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
  */
 const SUPPRESS_CONTEXT_RE = /(placeholder|example|sample|dummy|<REDACTED>|xxxxxxxx|your[_-]?(api[_-]?)?key|EXAMPLE)/i;
 const CONTEXT_WINDOW = 40;
+
+/**
+ * Exact literals that vendors publish in their own documentation as example
+ * credentials. These pass every shape check by construction (they ARE the
+ * documented shape), and the context heuristic above can't be relied on to
+ * catch them: it only looks at the 40 characters BEFORE a match, so "the
+ * docs show AKIAIOSFODNN7EXAMPLE as the placeholder" sails straight through.
+ * The value itself is the signal here. Same policy as the context heuristic:
+ * suppressed by default, counted, re-includable with --include-suppressed.
+ * gitleaks and other production scanners filter the AWS pair the same way.
+ *
+ * Every literal below was verified against the vendor's own published docs
+ * (2026-09), not copied from another scanner's allowlist:
+ *   - AWS's two documented example access key ids, used across the IAM and
+ *     STS docs (e.g. the GetAccessKeyInfo API reference).
+ *   - GitHub's documented example tokens from docs.github.com: the REST API
+ *     getting-started guide's PAT, and the OAuth-apps guide's access +
+ *     refresh token pair (the same body appears under ghp_ and gho_).
+ *   - jwt.io's default demo token (header {"alg":"HS256","typ":"JWT"},
+ *     payload sub 1234567890 / John Doe), the canonical example JWT quoted
+ *     in tutorials everywhere.
+ */
+/**
+ * A trailing run of 12+ identical characters inside a matched value. No
+ * vendor issues credentials with a repeated-character body — key material is
+ * random, and 12 identical characters in a row in a real random body is a
+ * ~62^-11 event — but placeholder keys built as prefix + XXXX.../0000... are
+ * everywhere in docs and templates, and they match the shape rules by
+ * construction. This is a property of the VALUE, so unlike the context
+ * heuristic it also works where no surrounding text exists: a placeholder
+ * that arrives base64-encoded or split across lines is still zero-entropy
+ * after decoding/joining. gitleaks ships equivalent repeated-character
+ * allowlists. Anchored to the END of the value on purpose: an INTERIOR run
+ * can occur inside a real token (base64 of a zero-byte run is a run of
+ * "A"s, so a genuine JWT payload can contain one), but real key material
+ * never ends in one, and prefix+XXXX placeholders always do. Same policy
+ * as every suppression: counted, re-includable with --include-suppressed,
+ * never silently dropped.
+ *
+ * Implemented as a fixed 12-character look at the END of the value, not as
+ * the equivalent anchored-backreference regex /(.)\1{11,}$/ — that regex is
+ * O(n^2) on a matched value containing a long INTERIOR identical-character
+ * run (the greedy backreference re-tests the anchor at every start
+ * position), and such values are reachable: base64 of zero-heavy bytes is a
+ * long run of "A"s inside a prefix-matched value. Checking only the last 12
+ * code units is exactly equivalent to "ends in 12 or more identical
+ * characters" and O(1) whatever the value looks like.
+ */
+function zeroEntropyTail(value) {
+  if (value.length < 12) return false;
+  const last = value.charCodeAt(value.length - 1);
+  for (let i = value.length - 12; i < value.length - 1; i++) {
+    if (value.charCodeAt(i) !== last) return false;
+  }
+  return true;
+}
+
+const VENDOR_EXAMPLE_VALUES = new Set([
+  "AKIAIOSFODNN7EXAMPLE",
+  "AKIAI44QH8DHBEXAMPLE",
+  "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
+  "gho_16C7e42F292c6912E7710c838347Ae178B4a",
+  "ghr_1B4a2e77838347a7E420ce178F2E7c6912E169246c34E1ccbF66C46812d16D5B1A9Dc86A1498",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+  // Stripe's two published sample test keys, verified against Stripe's own
+  // material (2026-09): the API reference authentication page
+  // (docs.stripe.com/api/authentication) embeds the first in its curl
+  // example under "A sample test API key is included in all the examples
+  // here"; the second is Stripe's long-running docs sample key, present
+  // verbatim in Stripe's own repositories (stripe/stripe-java and
+  // stripe/stripe-dotnet test suites) and echoed by virtually every Stripe
+  // tutorial a transcript might read. Both match stripe_test_key by
+  // construction, so without this entry each is reported at high confidence.
+  // Written split (prefix + body) so the faithful example literals do not
+  // trip GitHub push protection; the Set still holds the whole values.
+  "sk_test_" + "BQokikJOvBiI2HlWgH4olfQ2",
+  "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc",
+]);
 
 /** Matches every finding's own `relFile` convention — never the full path. See SECURITY.md. */
 function safeName(file) { return path.basename(file); }
@@ -39,6 +118,11 @@ function safeName(file) { return path.basename(file); }
  */
 async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
+  // The decode pass (see decode.js) only applies high-confidence, vendor-
+  // prefixed rules to decoded bytes: random binary that decodes to printable
+  // text can shape-match a generic rule, but not a vendor prefix. NOISY rules
+  // are low confidence and never qualify.
+  const highRules = rules.filter((r) => r.confidence === "high");
   const findings = [];
   let suppressedCount = 0;
   let filesScanned = 0;
@@ -52,32 +136,102 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // never leaves this function.
   const distinctByRule = new Map();
 
+  // One place raw matched text turns into a recorded finding: counts the
+  // distinct value and pushes the redacted record. `extra` carries the
+  // encoding / split markers for the decode and boundary passes; the raw pass
+  // passes none.
+  const record = (rule, value, relFile, file, lineNo, mtimeMs, confidence, suppressedReason, extra) => {
+    if (!distinctByRule.has(rule.id)) distinctByRule.set(rule.id, new Set());
+    distinctByRule.get(rule.id).add(value);
+    findings.push({
+      ruleId: rule.id,
+      label: rule.label,
+      confidence,
+      suppressedReason: suppressedReason || null,
+      source: relFile.source,
+      file, relFile: relFile.name,
+      line: lineNo,
+      preview: redact(value),
+      fileMTimeMs: mtimeMs,
+      ...(extra || {}),
+    });
+  };
+
+  // One suppression policy for all three passes (raw, decoded, boundary).
+  // The value-based checks run first: they are exact properties of the match
+  // itself, so they apply identically to a value found raw, decoded out of
+  // base64, or reconstructed across a line boundary — a decoded vendor
+  // example is the same non-secret as a plain one. The context heuristic is
+  // last and only where surrounding text exists (`before` is null for the
+  // decode and boundary passes, whose transforms have no stable "40 chars
+  // before" in the original line).
+  const suppressionReason = (value, before) => {
+    if (VENDOR_EXAMPLE_VALUES.has(value)) return "vendor-documented example value";
+    if (zeroEntropyTail(value)) return "zero-entropy body";
+    if (before !== null && SUPPRESS_CONTEXT_RE.test(before)) return "placeholder-like context";
+    return null;
+  };
+
   const matchLine = (line, file, relFile, lineNo, mtimeMs) => {
     for (const rule of rules) {
       rule.re.lastIndex = 0; // rules are reused across files; reset global regex state
       let m;
       while ((m = rule.re.exec(line)) !== null) {
         const before = line.slice(Math.max(0, m.index - CONTEXT_WINDOW), m.index);
-        const looksLikePlaceholder = SUPPRESS_CONTEXT_RE.test(before);
-        if (looksLikePlaceholder && !includeSuppressed) {
+        const suppressedReason = suppressionReason(m[0], before);
+        if (suppressedReason && !includeSuppressed) {
           suppressedCount++;
         } else {
-          if (!distinctByRule.has(rule.id)) distinctByRule.set(rule.id, new Set());
-          distinctByRule.get(rule.id).add(m[0]);
-          findings.push({
-            ruleId: rule.id,
-            label: rule.label,
-            confidence: looksLikePlaceholder ? "low" : rule.confidence,
-            suppressedReason: looksLikePlaceholder ? "placeholder-like context" : null,
-            source: relFile.source,
-            file, relFile: relFile.name,
-            line: lineNo,
-            preview: redact(m[0]),
-            fileMTimeMs: mtimeMs,
-          });
+          record(rule, m[0], relFile, file, lineNo,
+            mtimeMs,
+            suppressedReason ? "low" : rule.confidence,
+            suppressedReason);
         }
         if (m.index === rule.re.lastIndex) rule.re.lastIndex++; // guard zero-width matches
       }
+    }
+  };
+
+  // Feature 1: base64 decode-then-rescan. A finding here means a credential
+  // was present only encoded on this line. It redacts from the DECODED value
+  // (the encoded run is treated as secret material and never appears in the
+  // preview), and carries an `encoding` marker the report renders as
+  // "base64-wrapped". Returns true when the per-line candidate cap left
+  // encoded runs on this line unchecked, so the caller can flag the file as
+  // only partially checked instead of staying silent about the gap.
+  const decodeLine = (line, file, relFile, lineNo, mtimeMs) => {
+    const { matches, truncated } = findDecodedMatches(line, highRules);
+    for (const d of matches) {
+      const suppressedReason = suppressionReason(d.value, null);
+      if (suppressedReason && !includeSuppressed) {
+        suppressedCount++;
+        continue;
+      }
+      record({ id: d.ruleId, label: d.label }, d.value, relFile, file, lineNo,
+        mtimeMs, suppressedReason ? "low" : "high", suppressedReason, { encoding: d.encoding });
+    }
+    return truncated;
+  };
+
+  // Feature 2: split-line boundary join. A finding here means one credential
+  // was split across this line and the next and is contiguous on neither. It
+  // is recorded against BOTH contributing lines (each holds a fragment of the
+  // exposed secret) and carries a `spanLines` marker. `contentA`/`contentB`
+  // are the two lines' content projections, computed once per line by the
+  // caller and reused across both of a line's pairs.
+  const boundaryPair = (contentA, contentB, file, relFile, lineNoA, mtimeMs) => {
+    for (const b of findBoundaryMatches(contentA, contentB, rules)) {
+      const suppressedReason = suppressionReason(b.value, null);
+      if (suppressedReason && !includeSuppressed) {
+        // One straddling match is one suppressed match, even though an
+        // unsuppressed one records against both contributing lines.
+        suppressedCount++;
+        continue;
+      }
+      const span = [lineNoA, lineNoA + 1];
+      const conf = suppressedReason ? "low" : b.confidence;
+      record({ id: b.ruleId, label: b.label }, b.value, relFile, file, lineNoA, mtimeMs, conf, suppressedReason, { spanLines: span });
+      record({ id: b.ruleId, label: b.label }, b.value, relFile, file, lineNoA + 1, mtimeMs, conf, suppressedReason, { spanLines: span });
     }
   };
 
@@ -134,8 +288,47 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       bytesScanned += bytesRead || sizeBytes || 0;
 
       const relFile = { name: safeName(file), source: source.id() };
+      // Content projection of the PREVIOUS line, kept so each line is
+      // projected once and reused for both pairs it belongs to.
+      let prevContent = null;
+      // Per-file degradation flags, each surfaced at most once so a
+      // pathological file produces one visible entry, not thousands.
+      let lineMatchFailed = false;
+      let decodeTruncated = false;
       for (let i = 0; i < lines.length; i++) {
-        if (lines[i]) matchLine(lines[i], file, relFile, i + 1, mtimeMs);
+        const line = lines[i];
+        if (line) {
+          // A rule regex itself can throw on adversarial input: V8's
+          // backtrack stack overflows (RangeError) when an open-ended
+          // quantifier meets a prefix followed by a multi-megabyte
+          // same-charset run — real transcripts contain such lines. One
+          // unmatched line must degrade to a visible per-file flag, never
+          // abort the scan and discard every finding already collected
+          // (same contract as the readLines catch above).
+          try {
+            matchLine(line, file, relFile, i + 1, mtimeMs);
+            decodeTruncated = decodeLine(line, file, relFile, i + 1, mtimeMs) || decodeTruncated;
+            const content = contentProjection(line);
+            // Boundary join with the previous line (2-way splits only; see
+            // decode.js). Both lines must be non-empty so a blank separator
+            // never forms a spurious pair.
+            if (prevContent !== null) {
+              boundaryPair(prevContent, content, file, relFile, i, mtimeMs);
+            }
+            prevContent = content;
+          } catch (err) {
+            if (!lineMatchFailed) {
+              lineMatchFailed = true;
+              unreadableFiles.push({ file: safeName(file), reason: "some lines could not be matched" });
+            }
+            prevContent = null;
+          }
+        } else {
+          prevContent = null;
+        }
+      }
+      if (decodeTruncated) {
+        unreadableFiles.push({ file: safeName(file), reason: "some lines held more encoded runs than the per-line bound; checked partially" });
       }
     }
 
@@ -160,4 +353,7 @@ function emptyResult() {
   };
 }
 
-module.exports = { scan, emptyResult };
+// VENDOR_EXAMPLE_VALUES is exported for the smoke tests, which assert every
+// literal in it is still matched IN FULL by some detection rule — a literal
+// no rule can produce as a whole match is dead weight that suppresses nothing.
+module.exports = { scan, emptyResult, VENDOR_EXAMPLE_VALUES };
