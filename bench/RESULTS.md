@@ -329,9 +329,9 @@ invocations. Every other tool's recall and precision rows reproduced their
 published numbers cell for cell, which is the determinism claim
 demonstrated again; their tables above are simultaneously the retained
 originals and the fresh rerun. (Single-run wall times and TruffleHog's
-default-mode verification attempt count, 48 in this window against the 50
-above, vary run to run and are labeled as indicative wherever they
-appear.) residoo 0.3.1, same harness, same rules of scoring:
+default-mode verification attempt count, 50, 48, and 50 across this day's
+three windows, vary run to run and are labeled as indicative wherever
+they appear.) residoo 0.3.1, same harness, same rules of scoring:
 
 | class | sites | residoo 0.3.0 (retained above) | residoo 0.3.1 | best other tool |
 |---|---|---|---|---|
@@ -379,6 +379,21 @@ precedes a multi-megabyte same-charset run, so one unmatched line now
 degrades to a visible per-file flag instead of aborting the scan and
 discarding every finding already collected. A fix tuned to the corpus
 would never have met any of the three.
+
+Same-day addendum, v0.3.2 (commit a7a5608): the first full-machine scan
+after tagging v0.3.1 added a fourth lesson of the same kind. v0.3.1
+bounded base64 decode candidates at 256 per line and flagged lines past
+the bound as partially checked; on 1.2 GB of real transcripts that flag
+fired on 96 of 102 files, because real transcript lines routinely carry
+hundreds of decode-sized alnum runs (uuids, hashes, request ids), and the
+same bound had been silently skipping any genuine blob sitting past it.
+v0.3.2 removes the cap outright: per-line decode work is linear in line
+length with or without one (each character belongs to at most one
+candidate), so the cap bought nothing and cost either silence or noise.
+The full benchmark was then re-run a third time on v0.3.2: every residoo
+row in the table above and every other tool's scored rows reproduced
+exactly (the committed scoreboard files are that third run, labeled
+0.3.2), so the table stands for both versions. npm latest is 0.3.2.
 
 ## Egress during the scan (the second axis)
 
