@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "residoo"
+version = "0.1.0"
+description = "Find secrets leaking through your AI coding agent's session history. This is the official PyPI launcher for the Node.js CLI."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "CloudRoam" }]
+requires-python = ">=3.8"
+keywords = ["security", "secrets", "secret-scanning", "ai-agent", "claude-code", "cursor", "cli"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Environment :: Console",
+  "Topic :: Security",
+  "Intended Audience :: Developers",
+]
+
+[project.urls]
+Homepage = "https://github.com/dandovdub/residoo"
+Repository = "https://github.com/dandovdub/residoo"
+
+[project.scripts]
+residoo = "residoo_launcher:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/residoo_launcher"]
