@@ -43,11 +43,40 @@ clean: a scanner that checks the wrong place and reports "no secrets found"
 is worse than one that admits it doesn't support the tool. Say in the PR what
 you verified against (tool + version + OS).
 
-Note for Cursor/Copilot specifically: their history lives in SQLite
-(`state.vscdb`), which the current line-based engine cannot read. Supporting
-them properly is an architecture discussion (built-in `node:sqlite` needs
-Node 22.5+; a dependency violates rule 1) — open an issue first so the
-tradeoff gets decided deliberately, not inside a PR.
+**42 sources are supported as of this writing** — see `src/sources/index.js`
+for the full registry and its trust-tier note, and README.md's "Sources
+supported today" for the same list from a user's perspective. Only Claude
+Code is real-install-verified; every other source, Cursor included, is
+**multi-source-corroborated-but-unverified**: its path/schema is backed by
+2+ independent, credible sources (official docs, the tool's own shipped
+source, a real community tool reading the same files, or a real user's
+reported install) but has not been checked against a real installation on
+any machine this project was built on. This is a real, named gap for all of
+them, not glossed over — see each file's own header docstring for exactly
+what was and wasn't checked, and its PR/commit description for the research
+trail. **If you have any of these tools installed, running `residoo scan`
+and confirming the file counts look right for what's actually on your disk
+is the single most useful way to move a source out of this tier** — please
+report back either way, a "looks right" is as useful as a bug report.
+
+**Cursor** (`src/sources/cursor.js`) is the reference example for a source
+backed by SQLite rather than line-delimited text: its history lives in
+`state.vscdb`, which the line-based engine can't read directly, so it's
+handled via the built-in `node:sqlite` module (stable without a flag since
+Node 22.5), feature-detected at runtime so a Node runtime older than that
+gets a clear "detected but not scanned" message instead of a crash — this
+keeps residoo at zero runtime dependencies (rule 1) since `node:sqlite`
+ships inside the `node` binary itself, not as a package. Ten more sources
+(Crush, Cody, Devin CLI, Hermes, Kiro CLI, `llm`, Trae, Void, Warp, Zed)
+follow the identical pattern. Use any of these as the template for a new
+SQLite-backed source.
+
+Sources investigated and deliberately **not** included, rather than guessed
+at — see `src/sources/index.js`'s docstring for the one-line reason each:
+Plandex, CodeGPT, Augment Code, Replit Agent, Tabby, Tabnine, Zencoder,
+Tongyi Lingma, Berd. A verified adapter for any of these (or for a tool not
+listed anywhere in this file) is a welcome PR — see the verification bar
+above.
 
 ## Adding a detection pattern
 

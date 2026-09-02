@@ -33,6 +33,43 @@ looking at the **conversation transcripts** these agents leave behind, which
 contain a superset of everything a commit does: not just code, but file
 contents, terminal output, and whatever got pasted into a prompt.
 
+Two newer categories are adjacent but solve a different problem, worth being
+precise about rather than lumping together:
+
+- **Real-time hooks** (e.g. GitGuardian's `ggshield` AI hook, GitHub's secret
+  scanning via its MCP server) intercept a prompt or a code change *as it
+  happens*, going forward, in the session that has the hook installed. They
+  do nothing for the months of transcripts already sitting on disk, or for
+  any session run without the hook active. residoo scans **retroactively, at
+  rest** — every file already there, from every past session.
+- **agentsweep** is a genuine, welcome peer covering similar ground — broader,
+  in fact: 31 agent sources and 209 detection rules to residoo's smaller set,
+  plus in-place redaction, SARIF output, and a pre-commit hook. Worth naming
+  the tradeoffs precisely rather than either dismissing it or copying it
+  blindly: it needs Python 3.11+ and three pip packages (all clean ones, on
+  inspection — no known CVEs), where residoo needs nothing beyond Node. Its
+  own README documents that its in-place redaction leaves the pre-redaction
+  original sitting in a **plaintext** `.bak` file, and its issue tracker shows
+  the real cost of that design: a merged fix
+  ([PR #13](https://github.com/Ishannaik/agent-sweep/pull/13)) for a case
+  where redacting a WAL-mode SQLite database left the secret recoverable from
+  a leftover journal file. residoo's `--seal` takes a different tradeoff —
+  encrypt a copy, touch nothing, never claim a file is "cleaned" — precisely
+  to avoid that failure class. Its tracker also shows several real,
+  since-fixed false-*clean* reports (schema drift and malformed lines
+  silently skipped, `--root` pointed at a file scanning nothing and exiting
+  0) — the exact failure mode residoo's `broken`/`partial` status contract
+  (see `CONTRIBUTING.md`) exists to make structurally hard to reproduce. None
+  of this makes agentsweep bad; it makes for a legitimately different set of
+  choices, and its README is honest about its own tradeoffs too — worth a
+  look if broader source coverage matters more to you than a minimal
+  dependency footprint.
+
+This isn't a gap Anthropic is planning to close upstream, either: a
+[request to scrub secrets from `~/.claude/projects` natively](https://github.com/anthropics/claude-code/issues/50014)
+was filed and closed as **not planned**. Whatever scans this directory, it
+won't be built into the tool that writes it.
+
 ## What it does
 
 - Scans your local AI-agent session transcripts for high-confidence secret
@@ -96,7 +133,10 @@ npm install -g residoo
 residoo scan
 ```
 
-Requires Node.js 18+. Zero runtime dependencies — check `package.json`.
+Requires Node.js 18+ (the SQLite-backed sources listed above additionally
+need 22.5+; residoo still runs and scans every line-delimited/JSON source,
+including Claude Code, fine without it). Zero runtime dependencies — check
+`package.json`.
 
 ## Usage
 
@@ -124,15 +164,48 @@ so pick one you keep.
 
 ## Sources supported today
 
-**Claude Code** (`~/.claude/projects/**/*.jsonl`) — verified against real,
-populated transcript directories while building this.
+42 sources as of this writing, in two honestly-distinct tiers — see
+`src/sources/index.js` for the full list and grouping, and each source file's
+own header for exactly what was and wasn't checked.
 
-Cursor, GitHub Copilot, and Windsurf all keep local session history too, and
-support for them is very much wanted — but shipping a scanner that checks a
-guessed path and reports "all clear" when it simply didn't know where to
-look is worse than not supporting a tool at all. If you use one of these and
-want to add a verified adapter, see below — it's a small, self-contained
-file.
+**Real-install-verified** — the adapter was run against an actual, populated
+installation and confirmed to find real transcript content:
+
+- **Claude Code** (`~/.claude/projects/**/*.jsonl`)
+
+**Multi-source-corroborated-but-unverified** — the path/schema is backed by
+2+ independent, credible sources (official docs, the tool's own shipped
+source code, a real community tool that reads the same files for a living,
+or a real user's own reported install) but was **not** checked against a real
+install of the tool on any machine this project was built on. Every adapter
+in this tier is still built to fail loudly (`broken: true`, `status:
+"failed"`) rather than silently report "all clear" — but the path itself
+could still be stale or wrong in a way only a real install can catch. If you
+use one of these and can confirm `residoo scan`'s file counts look right for
+what's actually on your disk, that report is exactly what moves a source out
+of this tier:
+
+Cursor, Codex CLI, OpenCode, Aider, Cline, Roo Code, Kilo Code, Windsurf,
+PearAI, Trae, Void, Gemini CLI, Qwen Code, Continue, Open Interpreter, Goose,
+GitHub Copilot Chat, GitHub Copilot CLI, `llm` (Simon Willison's Datasette-
+adjacent CLI), Codebuff, Mentat, Hermes, OpenClaw, Warp, Crush, Grok Build,
+Kiro CLI, Kiro IDE, Zed, JetBrains Junie, JetBrains AI Assistant, Sourcegraph
+Cody, Amazon Q Developer, Qodo Gen, OpenHands, Factory Droid CLI, Devin CLI,
+Pi, Google Antigravity, Kimi Code, and `fx`.
+
+A few of these are SQLite-backed (Cursor, Crush, Cody, Devin CLI, Hermes,
+Kiro CLI, `llm`, Trae, Void, Warp, Zed) and need Node.js 22.5+ for the
+built-in `node:sqlite` module (not a dependency — see `package.json`); on an
+older Node, `residoo scan` reports each of those as detected-but-not-scanned
+rather than silently dropping it or crashing.
+
+**Investigated and deliberately not included**, rather than guessed at:
+Plandex (confirmed, from its own source, to be client-server with nothing
+local to scan), CodeGPT and Augment Code (both account/cloud-based, no
+evidence of a local transcript file), and Replit Agent (confirmed
+cloud-only). Tabby, Tabnine, Zencoder, Tongyi Lingma, and Berd were
+researched but didn't clear this project's 2-independent-source bar in the
+time available — a verified adapter for any of these is a welcome PR.
 
 ## Adding a source
 

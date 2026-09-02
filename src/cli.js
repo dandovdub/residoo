@@ -5,6 +5,25 @@ const { availableSources, ALL_SOURCES } = require("./sources");
 const { scan, emptyResult } = require("./scan");
 const { render, renderJson } = require("./report");
 
+/**
+ * A source is unavailable for the ordinary reason (not installed — nothing
+ * more to say) far more often than for a reason worth surfacing. A handful
+ * of sources — the SQLite-backed ones gated on the built-in `node:sqlite`
+ * module (cursor.js, crush.js, cody.js, devin-cli.js, hermes.js, kiro-cli.js,
+ * llm.js, trae.js, void.js, warp.js, zed.js) — export the optional
+ * `unavailableReason()` for the one case worth calling out: the tool IS
+ * installed but this Node runtime is too old to read its database. Every
+ * other source can safely omit this export entirely; this stays a no-op for
+ * those rather than requiring every adapter to implement it.
+ */
+function sourceStatusLabel(source) {
+  const reason = typeof source.unavailableReason === "function" ? source.unavailableReason() : null;
+  return reason ? `${source.label()} (${reason})` : source.label();
+}
+function sourceStatusList() {
+  return ALL_SOURCES.map(sourceStatusLabel).join(", ");
+}
+
 const HELP = `residoo — find secrets leaking through your AI agent's session history
 
   Coding agents (Claude Code, Cursor, Copilot, ...) write everything you do
@@ -49,7 +68,7 @@ Unseal:
 
 The passphrase is read from RESIDOO_PASSPHRASE, or prompted (hidden) on a TTY.
 
-Sources checked on this machine: ${ALL_SOURCES.map((s) => s.label()).join(", ")}
+Sources checked on this machine: ${sourceStatusList()}
 `;
 
 function argValue(args, flag) {
@@ -191,7 +210,7 @@ async function main(argv) {
     } else {
       process.stderr.write(
         "No known transcript sources found on this machine.\n" +
-        `Checked: ${ALL_SOURCES.map((s) => s.label()).join(", ")}.\n`
+        `Checked: ${sourceStatusList()}.\n`
       );
     }
     return 0;
