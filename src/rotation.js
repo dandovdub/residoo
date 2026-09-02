@@ -97,6 +97,21 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "Deactivate before delete: a deactivated key can be re-enabled while you hunt down stragglers, a deleted one cannot.",
   },
+  // The secret half of the same pair (see pairing.js): reported only when
+  // found near a matched aws_access_key_id, so the same key is the one that
+  // needs deactivating. Same console flow, called out separately because the
+  // finding itself is a distinct rule id and deserves its own runbook rather
+  // than silently reusing aws_access_key_id's guidance under a different name.
+  aws_secret_access_key_paired: {
+    label: "AWS IAM secret access key (paired with a leaked access key id)",
+    rotateUrl: "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html",
+    steps: [
+      "This is the secret half of the access key id also found on this line",
+      "Console: IAM > Users > your user > Security credentials > Access keys",
+      "Deactivate and delete the paired access key; its secret dies with it",
+    ],
+    revokeNote: "An AWS secret key cannot be revoked on its own: deactivating its paired access key id is what invalidates it.",
+  },
   // Fetched https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_revoke-sessions.html
   // (2026-09-02): "Revoke IAM role temporary security credentials", console
   // path IAM > Roles > role > Revoke sessions tab.

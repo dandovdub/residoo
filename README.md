@@ -104,6 +104,18 @@ won't be built into the tool that writes it.
 - Covers Stripe keys in both modes: live (`sk_live`/`rk_live`) and test
   (`sk_test`/`rk_test`), because a leaked test key still holds real
   permissions in its sandbox and reveals account structure.
+- Pairs an AWS secret access key (40 base64 characters, no vendor prefix, not
+  a rule on its own) with a nearby confirmed access key id, and reports both
+  at high confidence: the pairing is the vendor-specific signal, not the
+  shape alone. Ambiguous pairings (more than one candidate nearby) are
+  reported as nothing rather than a guess. See `src/pairing.js`.
+- With `--include-noisy`, filters the broad generic-secret rules by how
+  machine-random the matched value actually looks (a lightweight, offline
+  approximation of BPE-tokenization rarity checks): ordinary English, a
+  placeholder, or a variable name is suppressed with its own stated reason
+  instead of padding the count; a value that reads as random gets its
+  confidence raised to `medium`. Never applied to the default high-confidence
+  rules. See `src/rarity.js`.
 - Redacts everything in its own output. You get a shape and a first/last-4
   preview, never the real value, including in `--json` mode. A decoded or
   rejoined secret is redacted exactly like a plain one.
@@ -292,7 +304,7 @@ As a GitHub Action (this repository doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.3.3
+  - uses: dandovdub/residoo@v0.3.4
 ```
 
 As a pre-commit hook:
@@ -300,7 +312,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.3.3
+    rev: v0.3.4
     hooks:
       - id: residoo
 ```

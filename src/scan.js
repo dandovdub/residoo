@@ -3,6 +3,17 @@
 const path = require("path");
 const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
 const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("./decode");
+const { findPairedSecret } = require("./pairing");
+const { looksRandom } = require("./rarity");
+
+// Rule ids that findPairedSecret's window search applies to (see pairing.js):
+// AWS access key ids and STS session tokens both pair with the same shape
+// of 40-char base64 secret value.
+const AWS_PAIR_RULE_IDS = new Set(["aws_access_key_id", "aws_session_token"]);
+
+// The two NOISY_PATTERNS ids (see patterns.js): the only rules the rarity
+// check (rarity.js) ever touches. Never applied to the default 38 rules.
+const NOISY_RULE_IDS = new Set(["generic_password_assignment", "generic_secret_assignment"]);
 
 /**
  * Text immediately before a match that strongly suggests "this is an example
@@ -165,11 +176,29 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // last and only where surrounding text exists (`before` is null for the
   // decode and boundary passes, whose transforms have no stable "40 chars
   // before" in the original line).
-  const suppressionReason = (value, before) => {
+  const suppressionReason = (value, before, ruleId) => {
     if (VENDOR_EXAMPLE_VALUES.has(value)) return "vendor-documented example value";
     if (zeroEntropyTail(value)) return "zero-entropy body";
     if (before !== null && SUPPRESS_CONTEXT_RE.test(before)) return "placeholder-like context";
+    // Rarity check (rarity.js): only the two opt-in NOISY_PATTERNS rules ever
+    // reach here with a matching ruleId. A generic password/secret
+    // assignment whose value reads as English (a placeholder, a variable
+    // name, a pasted sentence) is exactly the false-positive class those
+    // rules are known for; a value that reads as machine-random is not.
+    if (ruleId && NOISY_RULE_IDS.has(ruleId) && !looksRandom(value)) return "reads like natural language, not random";
     return null;
+  };
+
+  // Confidence for a NOISY_PATTERNS match that survives every suppression
+  // check is bumped from the rule's default "low" to "medium" when the
+  // value also reads as machine-random (rarity.js): passing both "not a
+  // known placeholder shape" AND "doesn't read like language" is a real
+  // signal boost, not just the absence of a red flag. Never touches any of
+  // the default 38 rules' own confidence.
+  const resolveConfidence = (ruleId, value, defaultConfidence, suppressedReason) => {
+    if (suppressedReason) return "low";
+    if (NOISY_RULE_IDS.has(ruleId) && looksRandom(value)) return "medium";
+    return defaultConfidence;
   };
 
   const matchLine = (line, file, relFile, lineNo, mtimeMs) => {
@@ -178,14 +207,31 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       let m;
       while ((m = rule.re.exec(line)) !== null) {
         const before = line.slice(Math.max(0, m.index - CONTEXT_WINDOW), m.index);
-        const suppressedReason = suppressionReason(m[0], before);
+        const suppressedReason = suppressionReason(m[0], before, rule.id);
         if (suppressedReason && !includeSuppressed) {
           suppressedCount++;
         } else {
           record(rule, m[0], relFile, file, lineNo,
             mtimeMs,
-            suppressedReason ? "low" : rule.confidence,
+            resolveConfidence(rule.id, m[0], rule.confidence, suppressedReason),
             suppressedReason);
+          // Feature 3: paired-secret detection (see pairing.js). Only
+          // attempted for an UNSUPPRESSED access-key finding — pairing a
+          // vendor-example or placeholder access key with a random-looking
+          // neighbor would be a false amplification, not a real finding.
+          if (!suppressedReason && AWS_PAIR_RULE_IDS.has(rule.id)) {
+            const paired = findPairedSecret(line, m[0], m.index);
+            if (paired) {
+              const pairedSuppressedReason = suppressionReason(paired, null);
+              if (pairedSuppressedReason && !includeSuppressed) {
+                suppressedCount++;
+              } else {
+                record({ id: "aws_secret_access_key_paired", label: "AWS Secret Access Key (paired with access key id)" },
+                  paired, relFile, file, lineNo, mtimeMs,
+                  pairedSuppressedReason ? "low" : "high", pairedSuppressedReason, { paired: true });
+              }
+            }
+          }
         }
         if (m.index === rule.re.lastIndex) rule.re.lastIndex++; // guard zero-width matches
       }
@@ -217,7 +263,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // caller and reused across both of a line's pairs.
   const boundaryPair = (contentA, contentB, file, relFile, lineNoA, mtimeMs) => {
     for (const b of findBoundaryMatches(contentA, contentB, rules)) {
-      const suppressedReason = suppressionReason(b.value, null);
+      const suppressedReason = suppressionReason(b.value, null, b.ruleId);
       if (suppressedReason && !includeSuppressed) {
         // One straddling match is one suppressed match, even though an
         // unsuppressed one records against both contributing lines.
@@ -225,7 +271,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
         continue;
       }
       const span = [lineNoA, lineNoA + 1];
-      const conf = suppressedReason ? "low" : b.confidence;
+      const conf = resolveConfidence(b.ruleId, b.value, b.confidence, suppressedReason);
       record({ id: b.ruleId, label: b.label }, b.value, relFile, file, lineNoA, mtimeMs, conf, suppressedReason, { spanLines: span });
       record({ id: b.ruleId, label: b.label }, b.value, relFile, file, lineNoA + 1, mtimeMs, conf, suppressedReason, { spanLines: span });
     }

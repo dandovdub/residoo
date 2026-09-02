@@ -411,7 +411,103 @@ async function main() {
     const proseRes = await scanOneFile("prose.jsonl", JSON.stringify({ message: { content: proseRuns } }) + "\n");
     check("prose line: hundreds of short word runs, no findings, nothing flagged",
       proseRes.unreadableFiles.length === 0 && proseRes.findings.length === 0);
+  }
 
+  // ── scan: paired-secret detection (see src/pairing.js) ─────────────────────
+  {
+    // A synthetic, pattern-true 40-char base64 body: real AWS secret keys are
+    // exactly this shape. Built by a simple stepping generator, not repeated
+    // characters, so it never trips the zero-entropy-tail placeholder filter.
+    function synthB64Secret(n) {
+      const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+      let s = "";
+      for (let i = 0; i < n; i++) s += charset[(i * 7 + 3) % charset.length];
+      return s;
+    }
+    const pairedSecret = synthB64Secret(40);
+    const otherSecret = synthB64Secret(41).slice(1); // a different 40-char candidate, for the ambiguity case
+
+    const pairRes = await scanOneFile("pair.jsonl",
+      JSON.stringify({ message: { content: "AWS_ACCESS_KEY_ID=" + plantedAwsKey + " AWS_SECRET_ACCESS_KEY=" + pairedSecret } }) + "\n");
+    const pairFind = pairRes.findings.find((f) => f.ruleId === "aws_secret_access_key_paired");
+    check("paired: a real-looking secret next to a real access key id is reported",
+      !!pairFind && pairFind.confidence === "high");
+    check("paired: the access key id itself is still reported too, unaffected",
+      pairRes.findings.some((f) => f.ruleId === "aws_access_key_id"));
+    check("paired: the finding's preview never contains the raw secret",
+      !!pairFind && !pairFind.preview.includes(pairedSecret));
+
+    const aloneRes = await scanOneFile("alone.jsonl",
+      JSON.stringify({ message: { content: "just the key: " + plantedAwsKey + " nothing else nearby" } }) + "\n");
+    check("paired: no candidate nearby means no paired finding",
+      !aloneRes.findings.some((f) => f.ruleId === "aws_secret_access_key_paired"));
+
+    const ambigRes = await scanOneFile("ambiguous.jsonl",
+      JSON.stringify({ message: { content: plantedAwsKey + " " + pairedSecret + " or maybe " + otherSecret } }) + "\n");
+    check("paired: two distinct candidates in the window is ambiguous, neither is reported",
+      !ambigRes.findings.some((f) => f.ruleId === "aws_secret_access_key_paired"));
+
+    const zeroEntRes = await scanOneFile("zeroent.jsonl",
+      JSON.stringify({ message: { content: plantedAwsKey + " padding: " + "x".repeat(40) } }) + "\n");
+    check("paired: a zero-entropy 40-char run (placeholder padding) is never paired",
+      !zeroEntRes.findings.some((f) => f.ruleId === "aws_secret_access_key_paired") &&
+      zeroEntRes.findings.some((f) => f.ruleId === "aws_access_key_id"));
+
+    const vendorExRes = await scanOneFile("vendorex.jsonl",
+      JSON.stringify({ message: { content: docExampleKey + " " + pairedSecret } }) + "\n");
+    check("paired: a suppressed vendor-example access key never triggers pairing",
+      !vendorExRes.findings.some((f) => f.ruleId === "aws_secret_access_key_paired"));
+  }
+
+  // ── scan: rarity-based filtering for generic secrets (see src/rarity.js) ───
+  {
+    const { looksRandom, commonBigramFraction } = require("../src/rarity");
+    // Unit-level calibration: ordinary English (words, placeholders, a
+    // camelCase phrase) must score as language; base64/hex-shaped random
+    // strings must score as random. If this ever flips, the threshold or
+    // the bigram table has drifted and every check below would be
+    // meaningless, so it is asserted directly first.
+    check("rarity: common English words and placeholders read as language, not random",
+      !looksRandom("correcthorsebatterystaple") && !looksRandom("changeme123") &&
+      !looksRandom("temporary_password_value") && !looksRandom("hunter2"));
+    check("rarity: base64/hex-shaped machine output reads as random",
+      looksRandom("Xk9mQ2vP7wRtY4nJ8bL") && looksRandom("9f8a7b6c5d4e3f2a1b0c"));
+    check("rarity: a value with no letter pairs at all (all digits) is random by default",
+      commonBigramFraction("48291057362") === 0 && looksRandom("48291057362"));
+
+    const noisyRandomRes = await scanOneFile("noisy-random.jsonl",
+      JSON.stringify({ message: { content: 'password = Xk9mQ2vP7wRtY4nJ8bL' } }) + "\n",
+      { includeNoisy: true });
+    const noisyRandomFind = noisyRandomRes.findings.find((f) => f.ruleId === "generic_password_assignment");
+    check("rarity: a random-looking noisy-pattern value is kept and its confidence is bumped to medium",
+      !!noisyRandomFind && noisyRandomFind.confidence === "medium");
+
+    const noisyEnglishRes = await scanOneFile("noisy-english.jsonl",
+      JSON.stringify({ message: { content: 'password = correcthorsebatterystaple' } }) + "\n",
+      { includeNoisy: true });
+    check("rarity: a language-shaped noisy-pattern value is suppressed, not reported",
+      !noisyEnglishRes.findings.some((f) => f.ruleId === "generic_password_assignment") &&
+      noisyEnglishRes.suppressedCount > 0);
+
+    const noisyEnglishShownRes = await scanOneFile("noisy-english-shown.jsonl",
+      JSON.stringify({ message: { content: 'password = correcthorsebatterystaple' } }) + "\n",
+      { includeNoisy: true, includeSuppressed: true });
+    const shownFind = noisyEnglishShownRes.findings.find((f) => f.ruleId === "generic_password_assignment");
+    check("rarity: with --include-suppressed, the language-shaped value re-surfaces with its own reason",
+      !!shownFind && shownFind.suppressedReason === "reads like natural language, not random");
+
+    // The rarity check only ever reaches the two NOISY_PATTERNS ids (see
+    // scan.js's NOISY_RULE_IDS): a high-confidence default-set rule's own
+    // confidence must be completely unaffected, whether its value reads as
+    // random or as language.
+    const defaultSetRes = await scanOneFile("default-set.jsonl",
+      JSON.stringify({ message: { content: "AWS_ACCESS_KEY_ID=" + plantedAwsKey } }) + "\n");
+    const defaultFind = defaultSetRes.findings.find((f) => f.ruleId === "aws_access_key_id");
+    check("rarity: a default-set rule's confidence is untouched by the rarity mechanism",
+      !!defaultFind && defaultFind.confidence === "high");
+  }
+
+  {
     // A vendor prefix followed by a multi-megabyte same-charset run used to
     // overflow V8's regex backtrack stack inside a RULE regex (RangeError), a
     // crash class met on real transcript data — every rule's every
