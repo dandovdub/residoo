@@ -2,6 +2,7 @@
 
 const path = require("path");
 const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
+const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("./decode");
 
 /**
  * Text immediately before a match that strongly suggests "this is an example
@@ -39,6 +40,11 @@ function safeName(file) { return path.basename(file); }
  */
 async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
+  // The decode pass (see decode.js) only applies high-confidence, vendor-
+  // prefixed rules to decoded bytes: random binary that decodes to printable
+  // text can shape-match a generic rule, but not a vendor prefix. NOISY rules
+  // are low confidence and never qualify.
+  const highRules = rules.filter((r) => r.confidence === "high");
   const findings = [];
   let suppressedCount = 0;
   let filesScanned = 0;
@@ -52,6 +58,27 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // never leaves this function.
   const distinctByRule = new Map();
 
+  // One place raw matched text turns into a recorded finding: counts the
+  // distinct value and pushes the redacted record. `extra` carries the
+  // encoding / split markers for the decode and boundary passes; the raw pass
+  // passes none.
+  const record = (rule, value, relFile, file, lineNo, mtimeMs, confidence, suppressedReason, extra) => {
+    if (!distinctByRule.has(rule.id)) distinctByRule.set(rule.id, new Set());
+    distinctByRule.get(rule.id).add(value);
+    findings.push({
+      ruleId: rule.id,
+      label: rule.label,
+      confidence,
+      suppressedReason: suppressedReason || null,
+      source: relFile.source,
+      file, relFile: relFile.name,
+      line: lineNo,
+      preview: redact(value),
+      fileMTimeMs: mtimeMs,
+      ...(extra || {}),
+    });
+  };
+
   const matchLine = (line, file, relFile, lineNo, mtimeMs) => {
     for (const rule of rules) {
       rule.re.lastIndex = 0; // rules are reused across files; reset global regex state
@@ -62,22 +89,39 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
         if (looksLikePlaceholder && !includeSuppressed) {
           suppressedCount++;
         } else {
-          if (!distinctByRule.has(rule.id)) distinctByRule.set(rule.id, new Set());
-          distinctByRule.get(rule.id).add(m[0]);
-          findings.push({
-            ruleId: rule.id,
-            label: rule.label,
-            confidence: looksLikePlaceholder ? "low" : rule.confidence,
-            suppressedReason: looksLikePlaceholder ? "placeholder-like context" : null,
-            source: relFile.source,
-            file, relFile: relFile.name,
-            line: lineNo,
-            preview: redact(m[0]),
-            fileMTimeMs: mtimeMs,
-          });
+          record(rule, m[0], relFile, file, lineNo,
+            mtimeMs,
+            looksLikePlaceholder ? "low" : rule.confidence,
+            looksLikePlaceholder ? "placeholder-like context" : null);
         }
         if (m.index === rule.re.lastIndex) rule.re.lastIndex++; // guard zero-width matches
       }
+    }
+  };
+
+  // Feature 1: base64 decode-then-rescan. A finding here means a credential
+  // was present only encoded on this line. It redacts from the DECODED value
+  // (the encoded run is treated as secret material and never appears in the
+  // preview), and carries an `encoding` marker the report renders as
+  // "base64-wrapped".
+  const decodeLine = (line, file, relFile, lineNo, mtimeMs) => {
+    for (const d of findDecodedMatches(line, highRules)) {
+      record({ id: d.ruleId, label: d.label }, d.value, relFile, file, lineNo,
+        mtimeMs, "high", null, { encoding: d.encoding });
+    }
+  };
+
+  // Feature 2: split-line boundary join. A finding here means one credential
+  // was split across this line and the next and is contiguous on neither. It
+  // is recorded against BOTH contributing lines (each holds a fragment of the
+  // exposed secret) and carries a `spanLines` marker. `contentA`/`contentB`
+  // are the two lines' content projections, computed once per line by the
+  // caller and reused across both of a line's pairs.
+  const boundaryPair = (contentA, contentB, file, relFile, lineNoA, mtimeMs) => {
+    for (const b of findBoundaryMatches(contentA, contentB, rules)) {
+      const span = [lineNoA, lineNoA + 1];
+      record({ id: b.ruleId, label: b.label }, b.value, relFile, file, lineNoA, mtimeMs, b.confidence, null, { spanLines: span });
+      record({ id: b.ruleId, label: b.label }, b.value, relFile, file, lineNoA + 1, mtimeMs, b.confidence, null, { spanLines: span });
     }
   };
 
@@ -134,8 +178,25 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       bytesScanned += bytesRead || sizeBytes || 0;
 
       const relFile = { name: safeName(file), source: source.id() };
+      // Content projection of the PREVIOUS line, kept so each line is
+      // projected once and reused for both pairs it belongs to.
+      let prevContent = null;
       for (let i = 0; i < lines.length; i++) {
-        if (lines[i]) matchLine(lines[i], file, relFile, i + 1, mtimeMs);
+        const line = lines[i];
+        if (line) {
+          matchLine(line, file, relFile, i + 1, mtimeMs);
+          decodeLine(line, file, relFile, i + 1, mtimeMs);
+          const content = contentProjection(line);
+          // Boundary join with the previous line (2-way splits only; see
+          // decode.js). Both lines must be non-empty so a blank separator
+          // never forms a spurious pair.
+          if (prevContent !== null) {
+            boundaryPair(prevContent, content, file, relFile, i, mtimeMs);
+          }
+          prevContent = content;
+        } else {
+          prevContent = null;
+        }
       }
     }
 
