@@ -99,10 +99,29 @@ file.
 ## Adding a source
 
 A source is a small object with four methods: `id()`, `label()`,
-`available()`, and `files()` / `readLines(file)`. Copy
-`src/sources/claude-code.js` as a template, point it at the real local
-storage path for your tool, and open a PR. Please verify the path actually
-exists and holds real content before submitting — see the note above on why
+`available()`, `files()`, and `readLines(file)`. `src/sources/claude-code.js`
+is the reference implementation — copy it, point it at the real local
+storage path for your tool, and open a PR. Two contracts scan.js actually
+depends on, worth getting right rather than guessing from a quick skim:
+
+- **`files()`** is a generator yielding `{ file, mtimeMs, sizeBytes, broken }`.
+  Set `broken: true` (other fields can be omitted) for an entry that looked
+  like it should be scannable but wasn't — a dangling symlink is the main
+  case. Don't just `continue` past it inside the generator: an early version
+  of the Claude Code source did exactly that, and a real, non-hypothetical
+  case (a project directory relocated via a symlink whose target no longer
+  exists) went completely invisible — not in the scan count, not in any
+  warning, nothing. Surfacing it as `broken` is what lets scan.js report it
+  instead.
+- **`readLines(file)`** is `async`, returning `{ lines, status, bytesRead }`.
+  `status` is `"complete"`, `"partial"` (some real lines WERE read before a
+  failure partway through — return them, don't discard real content because
+  the rest of the file didn't finish cleanly), `"too-large"`, or `"failed"`.
+  Whatever you return in `lines` for a non-"complete" status still gets
+  scanned normally.
+
+Please verify the path actually exists and holds real content before
+submitting — see the note above on why
 that matters here specifically.
 
 ## A known limitation, stated plainly

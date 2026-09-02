@@ -1,7 +1,7 @@
 "use strict";
 
 const { availableSources, ALL_SOURCES } = require("./sources");
-const { scan } = require("./scan");
+const { scan, emptyResult } = require("./scan");
 const { render, renderJson } = require("./report");
 
 const HELP = `residoo — find secrets leaking through your AI agent's session history
@@ -45,13 +45,16 @@ async function main(argv) {
   const includeNoisy = args.includes("--include-noisy");
   const includeSuppressed = args.includes("--include-suppressed");
   const failOnFind = args.includes("--fail-on-find");
-  // --no-color was documented but never actually read — report.js already respects
-  // NO_COLOR, so forwarding the flag onto that env var is the whole fix.
-  if (args.includes("--no-color")) process.env.NO_COLOR = "1";
+  // Passed through explicitly to render() rather than mutating
+  // process.env.NO_COLOR — main() is an exported function a host process can
+  // legitimately call more than once (a wrapper CLI, a test runner), and a
+  // mutated env var would leak past this one invocation and silently kill
+  // color for a later call that never asked for that.
+  const noColor = args.includes("--no-color");
 
   const sources = availableSources();
   if (sources.length === 0) {
-    const empty = { findings: [], filesScanned: 0, sourcesScanned: [], bytesScanned: 0, suppressedCount: 0 };
+    const empty = emptyResult();
     if (wantsJson) {
       // A --json caller (CI, a script piping into jq) must always get valid JSON
       // on stdout, even on the "nothing to scan" path — a plain-text message on
@@ -67,7 +70,7 @@ async function main(argv) {
   }
 
   const result = await scan({ sources, includeNoisy, includeSuppressed });
-  process.stdout.write((wantsJson ? renderJson(result) : render(result)) + "\n");
+  process.stdout.write((wantsJson ? renderJson(result) : render(result, { noColor })) + "\n");
 
   return failOnFind && result.findings.length > 0 ? 1 : 0;
 }

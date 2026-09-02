@@ -79,26 +79,31 @@ const NOISY_PATTERNS = [
  * one place raw matched text turns into displayable text, rather than left
  * to every call site to remember.
  */
-function stripControlChars(s) {
-  let out = "";
-  for (const ch of s) {
-    const code = ch.codePointAt(0);
-    if (code >= 0x20 && code !== 0x7f) out += ch;
-  }
-  return out;
-}
+// A plain regex, not a manual code-point loop: control characters (0x00-0x1F,
+// 0x7F) are single UTF-16 units that never overlap a surrogate-pair half
+// (those live at 0xD800-0xDFFF), so stripping them by regex can't split or
+// corrupt a multi-unit character — no code-point-aware iteration needed here.
+function stripControlChars(s) { return s.replace(/[\x00-\x1f\x7f]/g, ""); }
 
 /** Mask a matched value for display: never print secret material to a terminal. */
 function redact(value) {
   const v = stripControlChars(String(value));
-  // Split by code point (spread, not .slice/.length) — several rules match via
-  // negated character classes that don't exclude non-ASCII, so a matched value
-  // CAN contain an astral character (surrogate pair) straddling a UTF-16 cut
-  // point. .slice(0,4) on the raw string can then return one half of a pair,
-  // rendering as a broken glyph. Array.from(v) counts code points, not units.
+  // Split by code point (Array.from, not .slice/.length) — several rules
+  // match via a negated character class that doesn't exclude non-ASCII, so a
+  // matched value CAN contain an astral character (surrogate pair)
+  // straddling a UTF-16 cut point. .slice(0,4) on the raw string can then
+  // return one half of a pair, rendering as a broken glyph.
   const cps = Array.from(v);
-  if (cps.length <= 10) return "*".repeat(cps.length || 1);
-  return cps.slice(0, 4).join("") + "…" + cps.slice(-4).join("") + `  (${String(value).length} chars)`;
+  // Every number in this function's OUTPUT — the count included — must come
+  // from the same stripped, code-point-split value the preview itself is
+  // built from. An earlier version reported String(value).length (the raw,
+  // pre-strip, UTF-16-unit count) here: whenever a match actually contained
+  // stripped control bytes, or an astral character, the parenthetical count
+  // visibly didn't match what the preview showed — the exact kind of
+  // internal inconsistency this function exists to avoid.
+  if (cps.length === 0) return "";
+  if (cps.length <= 10) return "*".repeat(cps.length);
+  return cps.slice(0, 4).join("") + "…" + cps.slice(-4).join("") + `  (${cps.length} chars)`;
 }
 
 module.exports = { PATTERNS, NOISY_PATTERNS, redact };

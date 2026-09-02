@@ -16,6 +16,9 @@ const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
 const SUPPRESS_CONTEXT_RE = /(placeholder|example|sample|dummy|<REDACTED>|xxxxxxxx|your[_-]?(api[_-]?)?key|EXAMPLE)/i;
 const CONTEXT_WINDOW = 40;
 
+/** Matches every finding's own `relFile` convention — never the full path. See SECURITY.md. */
+function safeName(file) { return path.basename(file); }
+
 /**
  * Scan every transcript from every available source.
  *
@@ -25,10 +28,14 @@ const CONTEXT_WINDOW = 40;
  * method verified against a real, populated transcript directory while this
  * tool was built, so it's a known-working default rather than a redesign.
  *
- * Returns { findings, filesScanned, sourcesScanned, bytesScanned }.
- * `findings` never contains the raw matched secret — only a redacted
- * preview — because a security tool's own report output is itself a place
- * secrets could leak from (a screenshot, a copied terminal log, a CI artifact).
+ * Returns { findings, filesScanned, sourcesScanned, bytesScanned,
+ * suppressedCount, distinctCounts, unreadableFiles }. `findings` never
+ * contains the raw matched secret — only a redacted preview — because a
+ * security tool's own report output is itself a place secrets could leak
+ * from (a screenshot, a copied terminal log, a CI artifact). Same reasoning
+ * is why `unreadableFiles` holds basenames only, not full paths — an
+ * absolute path can itself carry a username or a project name the rest of
+ * this report is careful never to print.
  */
 async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
@@ -45,55 +52,94 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // never leaves this function.
   const distinctByRule = new Map();
 
-  for (const source of sources) {
-    let touchedThisSource = false;
-    for (const { file, mtimeMs, sizeBytes } of source.files()) {
-      touchedThisSource = true;
-      if (onProgress) onProgress({ source: source.id(), file });
-
-      // readLines() returns null (distinct from a genuinely empty []) if the
-      // file could not be read — e.g. deleted or permissions-changed between
-      // the directory walk and this call. Counting that as "scanned" would
-      // report a false clean bill of health for content that was never
-      // actually looked at; a null .length would also crash the loop below.
-      const lines = await source.readLines(file);
-      if (lines === null) { unreadableFiles.push(file); continue; }
-
-      filesScanned++;
-      bytesScanned += sizeBytes || 0;
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line) continue;
-        for (const rule of rules) {
-          rule.re.lastIndex = 0; // rules are reused across files; reset global regex state
-          let m;
-          while ((m = rule.re.exec(line)) !== null) {
-            const before = line.slice(Math.max(0, m.index - CONTEXT_WINDOW), m.index);
-            const looksLikePlaceholder = SUPPRESS_CONTEXT_RE.test(before);
-            if (looksLikePlaceholder && !includeSuppressed) {
-              suppressedCount++;
-            } else {
-              if (!distinctByRule.has(rule.id)) distinctByRule.set(rule.id, new Set());
-              distinctByRule.get(rule.id).add(m[0]);
-              findings.push({
-                ruleId: rule.id,
-                label: rule.label,
-                confidence: looksLikePlaceholder ? "low" : rule.confidence,
-                suppressedReason: looksLikePlaceholder ? "placeholder-like context" : null,
-                source: source.id(),
-                file,
-                relFile: path.basename(file),
-                line: i + 1,
-                preview: redact(m[0]),
-                fileMTimeMs: mtimeMs,
-              });
-            }
-            if (m.index === rule.re.lastIndex) rule.re.lastIndex++; // guard zero-width matches
-          }
+  const matchLine = (line, file, relFile, lineNo, mtimeMs) => {
+    for (const rule of rules) {
+      rule.re.lastIndex = 0; // rules are reused across files; reset global regex state
+      let m;
+      while ((m = rule.re.exec(line)) !== null) {
+        const before = line.slice(Math.max(0, m.index - CONTEXT_WINDOW), m.index);
+        const looksLikePlaceholder = SUPPRESS_CONTEXT_RE.test(before);
+        if (looksLikePlaceholder && !includeSuppressed) {
+          suppressedCount++;
+        } else {
+          if (!distinctByRule.has(rule.id)) distinctByRule.set(rule.id, new Set());
+          distinctByRule.get(rule.id).add(m[0]);
+          findings.push({
+            ruleId: rule.id,
+            label: rule.label,
+            confidence: looksLikePlaceholder ? "low" : rule.confidence,
+            suppressedReason: looksLikePlaceholder ? "placeholder-like context" : null,
+            source: relFile.source,
+            file, relFile: relFile.name,
+            line: lineNo,
+            preview: redact(m[0]),
+            fileMTimeMs: mtimeMs,
+          });
         }
+        if (m.index === rule.re.lastIndex) rule.re.lastIndex++; // guard zero-width matches
       }
     }
-    if (touchedThisSource) sourcesScanned.push(source.id());
+  };
+
+  for (const source of sources) {
+    let sourceScannedAnything = false;
+
+    for (const entry of source.files()) {
+      if (onProgress) onProgress({ source: source.id(), file: entry.file });
+
+      // files() itself can now report an entry it couldn't resolve at all —
+      // chiefly a dangling symlink. Surfaced the same way an unreadable file
+      // is: visibly, never silently dropped inside the walk.
+      if (entry.broken) {
+        unreadableFiles.push({ file: safeName(entry.file), reason: "could not be resolved" });
+        continue;
+      }
+      const { file, mtimeMs, sizeBytes } = entry;
+
+      // Any unexpected throw here (a source's readLines behaving outside its
+      // documented contract, a future bug) must not take down the rest of
+      // the scan and discard every finding already collected from other
+      // files — one bad file degrading to "unreadable" is the correct
+      // failure mode; the whole run crashing is not.
+      let result;
+      try {
+        result = await source.readLines(file);
+      } catch (err) {
+        unreadableFiles.push({ file: safeName(file), reason: "unexpected error" });
+        continue;
+      }
+
+      const { lines, status, bytesRead } = result;
+      if (status === "failed") {
+        unreadableFiles.push({ file: safeName(file), reason: "could not be read" });
+        continue;
+      }
+      if (status === "too-large") {
+        unreadableFiles.push({ file: safeName(file), reason: "too large to scan" });
+        continue;
+      }
+      // "partial" means the read failed partway through, but real lines WERE
+      // captured before that — those lines get scanned normally below (a
+      // secret in the part that succeeded is still a real finding), and the
+      // file is ALSO flagged so the user knows it wasn't fully checked.
+      if (status === "partial") {
+        unreadableFiles.push({ file: safeName(file), reason: "only partially read" });
+      }
+
+      sourceScannedAnything = true;
+      filesScanned++;
+      // Actual bytes streamed, not the pre-read stat() snapshot — matters
+      // for a file Claude Code is actively appending to mid-scan, where the
+      // two can genuinely differ.
+      bytesScanned += bytesRead || sizeBytes || 0;
+
+      const relFile = { name: safeName(file), source: source.id() };
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i]) matchLine(lines[i], file, relFile, i + 1, mtimeMs);
+      }
+    }
+
+    if (sourceScannedAnything) sourcesScanned.push(source.id());
   }
 
   const distinctCounts = {};
@@ -101,4 +147,17 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   return { findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount, distinctCounts, unreadableFiles };
 }
 
-module.exports = { scan };
+/**
+ * The shape of a scan() result with nothing in it — exported so callers with
+ * a "nothing to scan" path (no sources on this machine) can reuse the exact
+ * result shape instead of hand-typing a duplicate literal that has to be
+ * remembered and kept in sync every time a new field is added here.
+ */
+function emptyResult() {
+  return {
+    findings: [], filesScanned: 0, sourcesScanned: [], bytesScanned: 0,
+    suppressedCount: 0, distinctCounts: {}, unreadableFiles: [],
+  };
+}
+
+module.exports = { scan, emptyResult };

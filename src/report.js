@@ -9,29 +9,41 @@ const c = {
   reset: "\x1b[0m", bold: "\x1b[1m", dim: "\x1b[2m",
   red: "\x1b[31m", yellow: "\x1b[33m", green: "\x1b[32m", cyan: "\x1b[36m",
 };
-// Read fresh on every call, not once at require() time. cli.js sets NO_COLOR
-// in response to --no-color AFTER this module is already required — a module-
-// level const here would freeze the pre-flag value and silently ignore the
-// flag. Verified: with the const version, forcing NO_COLOR post-require still
-// rendered ANSI codes.
-function supportsColor() { return process.stdout.isTTY && process.env.NO_COLOR === undefined; }
-const paint = (code, s) => (supportsColor() ? `${code}${s}${c.reset}` : s);
+// Read fresh on every call, not once at require() time — a module-level
+// const would freeze whatever the environment was at require() time, before
+// cli.js has even parsed argv. `forceNoColor` is how cli.js's --no-color
+// flag actually reaches this function: as an explicit per-call argument, not
+// by mutating process.env.NO_COLOR. `main()` is an exported function, not
+// only a one-shot CLI entrypoint — a mutated env var would leak into any
+// later call in the same process (a test runner, a wrapper CLI reusing it)
+// and silently disable color for calls that never asked for that.
+function supportsColor(forceNoColor) {
+  return !forceNoColor && process.stdout.isTTY && process.env.NO_COLOR === undefined;
+}
+function makePaint(forceNoColor) {
+  return (code, s) => (supportsColor(forceNoColor) ? `${code}${s}${c.reset}` : s);
+}
 
 function ageDays(mtimeMs) {
   return Math.max(0, Math.floor((Date.now() - mtimeMs) / 86400000));
 }
 
-function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount = 0, distinctCounts = {}, unreadableFiles = [] }) {
+function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount = 0, distinctCounts = {}, unreadableFiles = [] }, { noColor = false } = {}) {
+  const paint = makePaint(noColor);
   const lines = [];
   const push = (s = "") => lines.push(s);
 
   const suppressedNote = suppressedCount > 0
     ? paint(c.dim, ` (${suppressedCount} more matched but looked like placeholder/example text — see --include-suppressed)`)
     : "";
-  // Surfaced, not silent: a file that couldn't be read was NOT scanned, and a
-  // clean report must not read as "checked and found nothing" for it.
+  // Surfaced, not silent: a file that couldn't be (fully) read was not fully
+  // scanned, and a report must not read as "checked and found nothing" for
+  // it. `unreadableFiles` holds { file: <basename>, reason } — basenames
+  // only, deliberately: the full path can itself carry a username or a
+  // project-name-derived directory slug, which is exactly the kind of thing
+  // every other line in this report is careful to redact down from.
   const unreadableNote = unreadableFiles.length > 0
-    ? paint(c.yellow, `⚠  ${unreadableFiles.length} file(s) could not be read and were NOT scanned — see --json for paths.`)
+    ? paint(c.yellow, `⚠  ${unreadableFiles.length} file(s) not fully scanned — see --json for which and why.`)
     : null;
 
   if (findings.length === 0) {
