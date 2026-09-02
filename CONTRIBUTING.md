@@ -1,7 +1,7 @@
 # Contributing to residoo
 
-Thanks for considering it. This project is small on purpose — the whole value
-proposition is that a stranger can audit it in one sitting — so the bar for
+Thanks for considering it. This project is small on purpose. The whole value
+proposition is that a stranger can audit it in one sitting, so the bar for
 changes is "keeps it auditable," not "adds more."
 
 ## Ground rules (these are the product, not preferences)
@@ -16,21 +16,21 @@ changes is "keeps it auditable," not "adds more."
 3. **Scanning stays read-only; nothing is ever destructive.** Sealing creates
    new files. No code in this repo may modify or delete an existing file.
 4. **Output stays redacted.** The raw matched value may exist in memory for
-   dedup counting and inside `redact()` — nowhere else, and never in any
+   dedup counting and inside `redact()`. Nowhere else, and never in any
    output format, error message, or log line.
 5. **Never a false "all clear."** A file that couldn't be read, a dangling
-   symlink, a source at a guessed path — all of it must be *surfaced*, not
+   symlink, a source at a guessed path: all of it must be *surfaced*, not
    silently skipped. This principle has caught real bugs here more than once.
 
 ## Adding a transcript source (the most-wanted contribution)
 
-Copy `src/sources/claude-code.js` as your template — it is the reference
+Copy `src/sources/claude-code.js` as your template. It is the reference
 implementation and its comments explain the two contracts `scan.js` depends on:
 
-- `files()` yields `{ file, mtimeMs, sizeBytes, broken }` — and reports
+- `files()` yields `{ file, mtimeMs, sizeBytes, broken }`, and reports
   unresolvable entries as `broken: true` rather than skipping them silently.
 - `readLines(file)` is async and returns `{ lines, status, bytesRead }` with
-  status `"complete" | "partial" | "too-large" | "failed"` — and on a partial
+  status `"complete" | "partial" | "too-large" | "failed"`. On a partial
   failure it returns the lines it DID read, because a secret in the part that
   succeeded is still a finding.
 
@@ -38,7 +38,7 @@ Then register it in `src/sources/index.js`.
 
 A source does not have to be a transcript store. `src/sources/agent-configs.js`
 scans agent **config** files (settings, MCP server configs, memory files)
-through the identical `{ id, label, available, files, readLines }` contract —
+through the identical `{ id, label, available, files, readLines }` contract;
 the engine matches raw text lines either way, so JSON/TOML/Markdown configs
 need no special handling. What a config source changes is the *scope
 reasoning*, not the code: its header must state which files are deliberately
@@ -47,9 +47,9 @@ another source already covers), because a config source that silently
 overlaps a transcript source double-reports every finding. The verification
 bar is unchanged: every path scanned needs a real install or 2+ independent
 published sources behind it, cited in the header. `agent-configs.js` carries
-the one disclosed exception — a path hunted by a published stealer target
-list but backed by only that single source — argued explicitly in its
-header; an exception has to be argued in the open like that, never slipped
+the one disclosed exception, a path hunted by a published stealer target
+list but backed by only that single source, argued explicitly in its
+header. An exception has to be argued in the open like that, never slipped
 past the bar.
 
 **Verify the real path before opening the PR.** Run your adapter against an
@@ -60,7 +60,7 @@ is worse than one that admits it doesn't support the tool. Say in the PR what
 you verified against (tool + version + OS).
 
 **43 sources are supported as of this writing** (42 transcript stores plus
-agent-configs) — see `src/sources/index.js` for the full registry and its
+agent-configs). See `src/sources/index.js` for the full registry and its
 trust-tier note, and README.md's "Sources supported today" for the same list
 from a user's perspective. Only Claude Code and agent-configs' Claude-family
 paths are real-install-verified; every other source, Cursor included, is
@@ -69,31 +69,31 @@ paths are real-install-verified; every other source, Cursor included, is
 source, a real community tool reading the same files, or a real user's
 reported install) but has not been checked against a real installation on
 any machine this project was built on. This is a real, named gap for all of
-them, not glossed over — see each file's own header docstring for exactly
+them, not glossed over. See each file's own header docstring for exactly
 what was and wasn't checked, and its PR/commit description for the research
 trail. **If you have any of these tools installed, running `residoo scan`
 and confirming the file counts look right for what's actually on your disk
-is the single most useful way to move a source out of this tier** — please
-report back either way, a "looks right" is as useful as a bug report.
+is the single most useful way to move a source out of this tier.** Please
+report back either way; a "looks right" is as useful as a bug report.
 
 **Cursor** (`src/sources/cursor.js`) is the reference example for a source
-backed by SQLite rather than line-delimited text: its history lives in
+backed by SQLite rather than line-delimited text. Its history lives in
 `state.vscdb`, which the line-based engine can't read directly, so it's
 handled via the built-in `node:sqlite` module (stable without a flag since
 Node 22.5), feature-detected at runtime so a Node runtime older than that
-gets a clear "detected but not scanned" message instead of a crash — this
-keeps residoo at zero runtime dependencies (rule 1) since `node:sqlite`
+gets a clear "detected but not scanned" message instead of a crash. This
+keeps residoo at zero runtime dependencies (rule 1), since `node:sqlite`
 ships inside the `node` binary itself, not as a package. Ten more sources
 (Crush, Cody, Devin CLI, Hermes, Kiro CLI, `llm`, Trae, Void, Warp, Zed)
 follow the identical pattern. Use any of these as the template for a new
 SQLite-backed source.
 
 Sources investigated and deliberately **not** included, rather than guessed
-at — see `src/sources/index.js`'s docstring for the one-line reason each:
+at (see `src/sources/index.js`'s docstring for the one-line reason each):
 Plandex, CodeGPT, Augment Code, Replit Agent, Tabby, Tabnine, Zencoder,
-Tongyi Lingma, Berd. A verified adapter for any of these (or for a tool not
-listed anywhere in this file) is a welcome PR — see the verification bar
-above.
+Tongyi Lingma, Berd. A verified adapter for any of these, or for a tool not
+listed anywhere in this file, is a welcome PR. The verification bar above
+applies.
 
 ## Adding a detection pattern
 
@@ -112,7 +112,7 @@ go in `PATTERNS`; broad shape-based rules go in `NOISY_PATTERNS` (opt-in via
 
 ## Tests
 
-`npm test` runs `tests/smoke.js` — zero-dep, synthetic fixtures, exits
+`npm test` runs `tests/smoke.js`: zero-dep, synthetic fixtures, exits
 nonzero on failure. CI runs it on Node 18/20/22 plus a syntax check of every
 file. If your change touches sealing or redaction, extend the smoke tests to
 cover it; the deeper adversarial passes recorded in `SECURITY.md` are run
@@ -120,4 +120,4 @@ before releases, not per-PR.
 
 ## Security issues
 
-Not in the public tracker — see [SECURITY.md](SECURITY.md).
+Not in the public tracker. See [SECURITY.md](SECURITY.md).

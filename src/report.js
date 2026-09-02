@@ -54,7 +54,7 @@ function renderIntegrity(integrity, { noColor = false } = {}) {
 
   if (integrity.findings.length === 0) {
     push(paint(c.green + c.bold, "✓ Integrity: no planted hooks, droppers, or hidden instructions detected") +
-      ` — ${checked} location${checked === 1 ? "" : "s"} checked, ${absent} absent.`);
+      `: ${checked} location${checked === 1 ? "" : "s"} checked, ${absent} absent.`);
   } else if (warns.length > 0) {
     push(paint(c.red + c.bold, `⚠  Integrity: ${warns.length} warning${warns.length === 1 ? "" : "s"}`) +
       (infos.length > 0 ? ` + ${infos.length} item${infos.length === 1 ? "" : "s"} to review` : "") +
@@ -81,7 +81,7 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
   const push = (s = "") => lines.push(s);
 
   const suppressedNote = suppressedCount > 0
-    ? paint(c.dim, ` (${suppressedCount} more matched but looked like placeholder/example text — see --include-suppressed)`)
+    ? paint(c.dim, ` (${suppressedCount} more matched but looked like placeholder/example text; see --include-suppressed)`)
     : "";
   // Surfaced, not silent: a file that couldn't be (fully) read was not fully
   // scanned, and a report must not read as "checked and found nothing" for
@@ -90,12 +90,12 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
   // project-name-derived directory slug, which is exactly the kind of thing
   // every other line in this report is careful to redact down from.
   const unreadableNote = unreadableFiles.length > 0
-    ? paint(c.yellow, `⚠  ${unreadableFiles.length} file(s) not fully scanned — see --json for which and why.`)
+    ? paint(c.yellow, `⚠  ${unreadableFiles.length} file(s) not fully scanned. See --json for which and why.`)
     : null;
 
   if (findings.length === 0) {
     push(paint(c.green + c.bold, "✓ No exposed secrets found") +
-      ` — ${filesScanned} file${filesScanned === 1 ? "" : "s"} scanned across ${sourcesScanned.join(", ") || "no sources"}.` +
+      `: ${filesScanned} file${filesScanned === 1 ? "" : "s"} scanned across ${sourcesScanned.join(", ") || "no sources"}.` +
       suppressedNote);
     if (unreadableNote) push(unreadableNote);
     if (integrity) {
@@ -148,7 +148,7 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
   }
 
   push();
-  push(paint(c.dim, "Values are redacted in this report — first/last 4 characters only. Nothing scanned"));
+  push(paint(c.dim, "Values are redacted in this report (first/last 4 characters only). Nothing scanned"));
   push(paint(c.dim, "here left your machine; residoo makes no network calls. Run with --json for full detail."));
 
   return lines.join("\n");

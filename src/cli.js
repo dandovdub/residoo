@@ -25,14 +25,14 @@ function sourceStatusList() {
   return ALL_SOURCES.map(sourceStatusLabel).join(", ");
 }
 
-const HELP = `residoo — find secrets leaking through your AI agent's session history
+const HELP = `residoo: find secrets leaking through your AI agent's session history
 
   Coding agents (Claude Code, Cursor, Copilot, ...) write everything you do
-  to a local transcript, including file contents your prompts touch — which
+  to a local transcript, including file contents your prompts touch. That
   means real credentials sitting in plaintext on disk, indefinitely, in a
   place nobody thinks to check. residoo scans those transcripts for them.
 
-  A scan also runs integrity checks over agent config locations — the 2026
+  A scan also runs integrity checks over agent config locations, the 2026
   supply-chain campaigns planted persistence exactly there: SessionStart
   hooks, dropper scripts, folder-open tasks, zero-width Unicode instructions
   hidden in memory/rules files. Every auto-executing hook found in the
@@ -41,7 +41,7 @@ const HELP = `residoo — find secrets leaking through your AI agent's session h
 
   Scanning makes NO network calls and changes nothing on disk. Findings are
   redacted in every output format. Sealing (--seal) writes NEW encrypted
-  files only — it never modifies or deletes anything that already exists.
+  files only. It never modifies or deletes anything that already exists.
 
 Usage:
   residoo scan [options]
@@ -51,7 +51,7 @@ Scan options:
   --json                  machine-readable output (full detail, still redacted)
   --include-noisy         also run broad, false-positive-prone rules
   --include-suppressed    also show matches that looked like placeholder/example text
-  --fail-on-find          exit code 1 if anything is found (for CI) — secret
+  --fail-on-find          exit code 1 if anything is found (for CI): secret
                           findings and integrity WARNINGS count; integrity
                           info-level review items do not
   --no-integrity          skip the integrity checks (planted hooks, dropper
@@ -104,7 +104,7 @@ async function runSeal(result, args) {
 
   const filesWithFindings = [...new Set(result.findings.map((f) => f.file))];
   if (filesWithFindings.length === 0) {
-    process.stdout.write("Nothing to seal — no findings.\n");
+    process.stdout.write("Nothing to seal: no findings.\n");
     return 0;
   }
 
@@ -124,7 +124,7 @@ async function runSeal(result, args) {
     `${(totalSealed / 1024 / 1024).toFixed(1)}MB encrypted.\n` +
     `Originals were NOT touched. Once you've verified a restore works\n` +
     `(residoo unseal ${path.basename(vaultDir)} --restore 0001.sealed --out /tmp/check), removing the\n` +
-    `plaintext originals is your call — residoo never deletes anything itself.\n`
+    `plaintext originals is your call; residoo never deletes anything itself.\n`
   );
 
   if (args.includes("--upload-cloudroam")) {
@@ -135,7 +135,7 @@ async function runSeal(result, args) {
       process.stderr.write("--upload-cloudroam needs CLOUDROAM_API_KEY (env), --connector and --bucket.\n");
       return 2;
     }
-    process.stdout.write(`\nUploading sealed vault to CloudRoam (${bucket}) — ciphertext only:\n`);
+    process.stdout.write(`\nUploading sealed vault to CloudRoam (${bucket}), ciphertext only:\n`);
     const uploaded = await uploadVaultToCloudRoam({
       vaultDir,
       baseUrl: process.env.CLOUDROAM_BASE_URL || "https://cloudroam.io",
@@ -158,7 +158,7 @@ async function runUnseal(args) {
   try {
     manifest = openManifest(vaultDir, passphrase);
   } catch {
-    process.stderr.write("Could not open vault — wrong passphrase, or the vault is corrupted.\n");
+    process.stderr.write("Could not open vault: wrong passphrase, or the vault is corrupted.\n");
     return 1;
   }
 
@@ -182,7 +182,7 @@ async function runUnseal(args) {
       `verified byte-identical to the original (SHA-256 match).\n`);
     return 0;
   }
-  process.stderr.write(`Restored, but verification FAILED — content does not match what was sealed. Do not trust this copy.\n`);
+  process.stderr.write(`Restored, but verification FAILED: content does not match what was sealed. Do not trust this copy.\n`);
   return 1;
 }
 
@@ -233,7 +233,7 @@ async function main(argv) {
       return {
         findings: [{
           severity: "warn", kind: "integrity-crashed", file: "(integrity checker)",
-          detail: `integrity checks crashed (${why}) — config locations are UNVERIFIED, not clean; the secret-scan results are unaffected`,
+          detail: `integrity checks crashed (${why}). Config locations are UNVERIFIED, not clean; the secret-scan results are unaffected`,
         }],
         filesChecked: [],
         scopeNote: "Integrity checks did not complete on this run.",
