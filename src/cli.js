@@ -3,7 +3,8 @@
 const path = require("path");
 const { availableSources, ALL_SOURCES } = require("./sources");
 const { scan, emptyResult } = require("./scan");
-const { render, renderJson } = require("./report");
+const { render, renderIntegrity, renderJson } = require("./report");
+const { checkIntegrity } = require("./integrity");
 
 /**
  * A source is unavailable for the ordinary reason (not installed — nothing
@@ -31,6 +32,13 @@ const HELP = `residoo — find secrets leaking through your AI agent's session h
   means real credentials sitting in plaintext on disk, indefinitely, in a
   place nobody thinks to check. residoo scans those transcripts for them.
 
+  A scan also runs integrity checks over agent config locations — the 2026
+  supply-chain campaigns planted persistence exactly there: SessionStart
+  hooks, dropper scripts, folder-open tasks, zero-width Unicode instructions
+  hidden in memory/rules files. Every auto-executing hook found in the
+  checked locations is listed for your review; only published campaign IOCs
+  and campaign-shaped behaviors escalate to warnings.
+
   Scanning makes NO network calls and changes nothing on disk. Findings are
   redacted in every output format. Sealing (--seal) writes NEW encrypted
   files only — it never modifies or deletes anything that already exists.
@@ -43,7 +51,11 @@ Scan options:
   --json                  machine-readable output (full detail, still redacted)
   --include-noisy         also run broad, false-positive-prone rules
   --include-suppressed    also show matches that looked like placeholder/example text
-  --fail-on-find          exit code 1 if anything is found (for CI)
+  --fail-on-find          exit code 1 if anything is found (for CI) — secret
+                          findings and integrity WARNINGS count; integrity
+                          info-level review items do not
+  --no-integrity          skip the integrity checks (planted hooks, dropper
+                          files, auto-run tasks, hidden Unicode)
   --no-color              disable ANSI colour
 
 Seal options (used with scan):
@@ -199,32 +211,67 @@ async function main(argv) {
   // color for a later call that never asked for that.
   const noColor = args.includes("--no-color");
 
+  // Integrity runs by default: a scan that reports "no secrets leaked" while
+  // a planted SessionStart hook sits ready to re-leak them next session is
+  // an incomplete answer. Only warn-severity findings (verified campaign
+  // signatures, unverifiable configs) gate --fail-on-find — info items are
+  // the user's own hooks listed for review, and failing CI on those would
+  // train people to pass --no-integrity, which is worse than not checking.
+  const wantsIntegrity = !args.includes("--no-integrity");
+  const integrityWarnCount = (integ) =>
+    integ ? integ.findings.filter((f) => f.severity === "warn").length : 0;
+  // The integrity checker's inputs are, by its own threat model, attacker-
+  // plantable files — a hostile config must not be able to suppress the
+  // secrets report by crashing the checker after the scan already ran. A
+  // throw degrades to a warn-severity finding: the run stays alive, the
+  // failure stays loud (it still gates --fail-on-find), and it is never a
+  // silent all-clear.
+  const runIntegrity = () => {
+    try { return checkIntegrity(); }
+    catch (e) {
+      const why = String((e && e.message) || e).replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200);
+      return {
+        findings: [{
+          severity: "warn", kind: "integrity-crashed", file: "(integrity checker)",
+          detail: `integrity checks crashed (${why}) — config locations are UNVERIFIED, not clean; the secret-scan results are unaffected`,
+        }],
+        filesChecked: [],
+        scopeNote: "Integrity checks did not complete on this run.",
+      };
+    }
+  };
+
   const sources = availableSources();
   if (sources.length === 0) {
     const empty = emptyResult();
+    const integrity = wantsIntegrity ? runIntegrity() : null;
     if (wantsJson) {
       // A --json caller (CI, a script piping into jq) must always get valid JSON
       // on stdout, even on the "nothing to scan" path — a plain-text message on
       // stderr with exit 0 silently breaks that contract.
-      process.stdout.write(renderJson(empty) + "\n");
+      process.stdout.write(renderJson(empty, integrity) + "\n");
     } else {
       process.stderr.write(
         "No known transcript sources found on this machine.\n" +
         `Checked: ${sourceStatusList()}.\n`
       );
+      // The integrity checks are not gated on transcript sources existing —
+      // a planted repo-level hook in the CWD is exactly as dangerous here.
+      if (integrity) process.stdout.write(renderIntegrity(integrity, { noColor }) + "\n");
     }
-    return 0;
+    return failOnFind && integrityWarnCount(integrity) > 0 ? 1 : 0;
   }
 
   const result = await scan({ sources, includeNoisy, includeSuppressed });
-  process.stdout.write((wantsJson ? renderJson(result) : render(result, { noColor })) + "\n");
+  const integrity = wantsIntegrity ? runIntegrity() : null;
+  process.stdout.write((wantsJson ? renderJson(result, integrity) : render(result, { noColor, integrity })) + "\n");
 
   if (args.includes("--seal")) {
     const sealExit = await runSeal(result, args);
     if (sealExit !== 0) return sealExit;
   }
 
-  return failOnFind && result.findings.length > 0 ? 1 : 0;
+  return failOnFind && (result.findings.length > 0 || integrityWarnCount(integrity) > 0) ? 1 : 0;
 }
 
 module.exports = { main };

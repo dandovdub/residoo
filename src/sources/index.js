@@ -1,9 +1,19 @@
 "use strict";
 
 /**
- * Registry of transcript sources. Each source is a small adapter exposing
+ * Registry of scan sources. Each source is a small adapter exposing
  * { id, label, available, files, readLines } — see claude-code.js for the
  * reference implementation and CONTRIBUTING.md for how to add one.
+ *
+ * All but one of these read TRANSCRIPT stores — the session histories agents
+ * write as a side effect of working. The exception is agent-configs.js, which
+ * reads agent CONFIG files (settings, MCP server configs, memory files)
+ * through the identical contract: configs are where users deliberately put
+ * env blocks and where approved-command caches accumulate tokens, so they
+ * leak by a different mechanism than transcripts but are scanned the same
+ * way. The distinction matters for scope reasoning — a transcript source
+ * covers what an agent SAW, the config source covers what an agent was
+ * CONFIGURED with — and each file's header states which it is.
  *
  * TRUST TIERS — read this before treating every row below the same way.
  * Each source file states its own tier plainly in its header docstring;
@@ -11,7 +21,9 @@
  *
  *   - REAL-INSTALL-VERIFIED: the adapter was run against an actual,
  *     populated installation of the tool and confirmed to find real
- *     transcript content. Currently just Claude Code.
+ *     content. Currently Claude Code, plus agent-configs.js's Claude-family
+ *     paths (its non-Claude paths sit in the tier below — that file's
+ *     header tracks verification per path, not per file).
  *   - MULTI-SOURCE-CORROBORATED-BUT-UNVERIFIED: the path/schema is backed by
  *     2+ independent, credible sources (official docs, the tool's own
  *     shipped source code, a real community tool that reads the same files
@@ -45,6 +57,9 @@
  *     local to scan).
  */
 const claudeCode = require("./claude-code");
+// Not a transcript store — agent config/state files (see module docstring
+// above and that file's own header for the per-path verification trail).
+const agentConfigs = require("./agent-configs");
 const cursor = require("./cursor");
 
 // The rest of these are grouped the way they were researched/built, purely
@@ -121,6 +136,7 @@ const fx = require("./fx");
 
 const ALL_SOURCES = [
   claudeCode,
+  agentConfigs,
   cursor,
   codexCli,
   opencode,

@@ -36,6 +36,22 @@ implementation and its comments explain the two contracts `scan.js` depends on:
 
 Then register it in `src/sources/index.js`.
 
+A source does not have to be a transcript store. `src/sources/agent-configs.js`
+scans agent **config** files (settings, MCP server configs, memory files)
+through the identical `{ id, label, available, files, readLines }` contract —
+the engine matches raw text lines either way, so JSON/TOML/Markdown configs
+need no special handling. What a config source changes is the *scope
+reasoning*, not the code: its header must state which files are deliberately
+excluded and why (credential vaults that hold secrets by design, paths
+another source already covers), because a config source that silently
+overlaps a transcript source double-reports every finding. The verification
+bar is unchanged: every path scanned needs a real install or 2+ independent
+published sources behind it, cited in the header. `agent-configs.js` carries
+the one disclosed exception — a path hunted by a published stealer target
+list but backed by only that single source — argued explicitly in its
+header; an exception has to be argued in the open like that, never slipped
+past the bar.
+
 **Verify the real path before opening the PR.** Run your adapter against an
 actual installation of the tool and confirm it finds real transcript content.
 A PR that guesses at a storage path will be declined even if the code is
@@ -43,10 +59,11 @@ clean: a scanner that checks the wrong place and reports "no secrets found"
 is worse than one that admits it doesn't support the tool. Say in the PR what
 you verified against (tool + version + OS).
 
-**42 sources are supported as of this writing** — see `src/sources/index.js`
-for the full registry and its trust-tier note, and README.md's "Sources
-supported today" for the same list from a user's perspective. Only Claude
-Code is real-install-verified; every other source, Cursor included, is
+**43 sources are supported as of this writing** (42 transcript stores plus
+agent-configs) — see `src/sources/index.js` for the full registry and its
+trust-tier note, and README.md's "Sources supported today" for the same list
+from a user's perspective. Only Claude Code and agent-configs' Claude-family
+paths are real-install-verified; every other source, Cursor included, is
 **multi-source-corroborated-but-unverified**: its path/schema is backed by
 2+ independent, credible sources (official docs, the tool's own shipped
 source, a real community tool reading the same files, or a real user's

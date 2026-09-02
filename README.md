@@ -99,14 +99,67 @@ won't be built into the tool that writes it.
 - Flags likely placeholder/example matches (an HTML form's
   `placeholder="AKIA..."` hint, a doc's example key) separately from real
   findings, rather than either hiding them or inflating the count with them.
+- Scans agent **config** files too (settings, MCP server configs, memory
+  files), and checks the places the 2026 supply-chain campaigns planted
+  persistence — hooks, dropper scripts, auto-run tasks, invisible Unicode.
+  See the next section.
+
+## Beyond transcripts: configs and planted persistence
+
+Transcripts leak what your agent *saw*. Config files leak what your agent was
+*configured with* — and it turns out that is the better-measured problem.
+GitGuardian counted 24,008 secrets inside MCP config files on public GitHub
+(2,117 still valid when checked), and Lakera found live credentials inside
+`.claude/settings.local.json` files shipped in roughly 30 published npm
+packages, because Claude Code's approved-command cache quietly accumulates
+tokens and no packaging tool ignores `.claude/` by default. So as of v0.2.0,
+`residoo scan` includes an **agent config source** covering the home-level
+config files of Claude Code, Claude Desktop, Cursor, Gemini CLI, Codex, and
+Kiro — every path verified against a real install or published sources (one
+disclosed exception, a stealer-target path backed by a single published
+list, argued openly in the source header), with the full verification trail
+written into `src/sources/agent-configs.js`.
+
+The same files are also where the year's supply-chain campaigns planted
+their persistence: Mini Shai-Hulud wrote a `SessionStart` hook into
+`.claude/settings.json` and a `"runOn": "folderOpen"` task into
+`.vscode/tasks.json`; Miasma reused both plants and added
+`.gemini/settings.json` hooks and `.cursor/rules/setup.mdc` prompt-injection
+files; the keyv/ChainDrop wave dropped a script literally named `setup.mjs`
+into `.claude/` and `.vscode/`; and TrapDoor hid instructions in
+`CLAUDE.md`/`.cursorrules` as zero-width Unicode — invisible in your editor,
+fully visible to the agent. So every scan now also runs **integrity checks**
+over those exact locations:
+
+- Every auto-executing hook found in the checked locations is listed (hooks
+  run without asking; you should be able to vouch for each one). Only
+  commands matching a published campaign IOC (`setup.mjs`) or a
+  campaign-shaped behavior — piping a download straight into a shell,
+  decoding base64 before executing, running repo-local scripts out of
+  dot-directories — escalate to warnings.
+- Loose scripts in `.claude/`, and the exact planted filenames from the
+  published IOC lists, are flagged by name.
+- `CLAUDE.md`, `.cursorrules`, and `.cursor/rules/*` are checked for
+  zero-width Unicode, with legitimate emoji/script joiners kept to an
+  informational tier so the warning count stays meaningful.
+- `.vscode/tasks.json` is parsed (as JSONC, comments and all) for tasks that
+  execute on folder open.
+
+The checks are read-only like everything else, warnings (not review items)
+count toward `--fail-on-find`, project-level checks cover the directory you
+run from, and `--no-integrity` skips the whole thing. A config that exists
+but can't be read or parsed is reported as unverified — never silently
+counted as clean.
 
 ## How it works
 
 ```mermaid
 flowchart LR
     subgraph machine["Your machine — no network calls"]
-        A["Discover transcripts<br/>42 sources"] --> B["Stream + pattern-match<br/>35 high-confidence rules"]
+        A["Discover transcripts<br/>+ agent configs<br/>43 sources"] --> B["Stream + pattern-match<br/>35 high-confidence rules"]
+        A --> G["Integrity checks<br/>planted hooks, droppers,<br/>zero-width Unicode"]
         B --> C["Redacted report<br/>first/last 4 chars only"]
+        G --> C
         B -.->|"--seal (optional)"| D["AES-256-GCM vault<br/>scrypt key, encrypted manifest"]
         D --> E["unseal --restore<br/>SHA-256-verified"]
     end
@@ -177,7 +230,9 @@ residoo scan [options]
   --json                  machine-readable output (full detail, still redacted)
   --include-noisy         also run broad, false-positive-prone rules
   --include-suppressed    also show matches that looked like placeholder/example text
-  --fail-on-find          exit code 1 if anything is found (for CI)
+  --fail-on-find          exit code 1 if anything is found (for CI) — secret
+                          findings and integrity warnings count, review items don't
+  --no-integrity          skip the integrity checks
   --no-color              disable ANSI colour
 
   --seal                  encrypt every transcript with findings into a local vault
@@ -195,14 +250,20 @@ so pick one you keep.
 
 ## Sources supported today
 
-42 sources as of this writing, in two honestly-distinct tiers — see
+43 sources as of this writing — 42 transcript stores plus the agent-config
+source described above — in two honestly-distinct tiers. See
 `src/sources/index.js` for the full list and grouping, and each source file's
 own header for exactly what was and wasn't checked.
 
 **Real-install-verified** — the adapter was run against an actual, populated
-installation and confirmed to find real transcript content:
+installation and confirmed to find real content:
 
 - **Claude Code** (`~/.claude/projects/**/*.jsonl`)
+- **Agent config files**, for its Claude-family paths (`~/.claude.json` and
+  its `.backup`, `~/.claude/settings*.json`, Claude Desktop's
+  `claude_desktop_config.json`); its Cursor/Gemini/Codex/Kiro paths are in
+  the tier below — `src/sources/agent-configs.js` tracks verification per
+  path, not per file
 
 **Multi-source-corroborated-but-unverified** — the path/schema is backed by
 2+ independent, credible sources (official docs, the tool's own shipped

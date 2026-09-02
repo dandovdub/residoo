@@ -28,7 +28,54 @@ function ageDays(mtimeMs) {
   return Math.max(0, Math.floor((Date.now() - mtimeMs) / 86400000));
 }
 
-function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount = 0, distinctCounts = {}, unreadableFiles = [] }, { noColor = false } = {}) {
+/**
+ * The integrity section — findings from src/integrity.js, rendered in the
+ * same visual language as the scan report. Severity drives everything:
+ * "warn" (a verified campaign signature, or a location that exists but
+ * couldn't be verified) paints red and counts toward --fail-on-find; "info"
+ * (a hook/rules file that runs automatically and merely deserves the user's
+ * confirmation) stays dim. Every finding is printed — integrity findings are
+ * few by construction (checkIntegrity caps its own noise), so unlike scan
+ * findings they are never truncated to a top-N.
+ *
+ * Exported separately because cli.js's "no transcript sources on this
+ * machine" path still runs the integrity checks — a planted repo-level hook
+ * is exactly as dangerous on a machine with no transcripts to scan.
+ */
+function renderIntegrity(integrity, { noColor = false } = {}) {
+  const paint = makePaint(noColor);
+  const lines = [];
+  const push = (s = "") => lines.push(s);
+
+  const warns = integrity.findings.filter((f) => f.severity === "warn");
+  const infos = integrity.findings.filter((f) => f.severity === "info");
+  const checked = integrity.filesChecked.filter((f) => f.status === "checked").length;
+  const absent = integrity.filesChecked.filter((f) => f.status === "absent").length;
+
+  if (integrity.findings.length === 0) {
+    push(paint(c.green + c.bold, "✓ Integrity: no planted hooks, droppers, or hidden instructions detected") +
+      ` — ${checked} location${checked === 1 ? "" : "s"} checked, ${absent} absent.`);
+  } else if (warns.length > 0) {
+    push(paint(c.red + c.bold, `⚠  Integrity: ${warns.length} warning${warns.length === 1 ? "" : "s"}`) +
+      (infos.length > 0 ? ` + ${infos.length} item${infos.length === 1 ? "" : "s"} to review` : "") +
+      paint(c.dim, ` · ${checked} location${checked === 1 ? "" : "s"} checked`));
+  } else {
+    push(paint(c.bold, `Integrity: ${infos.length} item${infos.length === 1 ? "" : "s"} to review`) +
+      paint(c.dim, ` (nothing matching a known campaign signature) · ${checked} location${checked === 1 ? "" : "s"} checked`));
+  }
+  for (const f of warns) {
+    push(`  ${paint(c.red, "warn")}  ${paint(c.cyan, f.file)}`);
+    push(`        ${f.detail}`);
+  }
+  for (const f of infos) {
+    push(`  ${paint(c.dim, "info")}  ${paint(c.cyan, f.file)}`);
+    push(paint(c.dim, `        ${f.detail}`));
+  }
+  push(paint(c.dim, `   ${integrity.scopeNote}`));
+  return lines.join("\n");
+}
+
+function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount = 0, distinctCounts = {}, unreadableFiles = [] }, { noColor = false, integrity = null } = {}) {
   const paint = makePaint(noColor);
   const lines = [];
   const push = (s = "") => lines.push(s);
@@ -51,6 +98,10 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
       ` — ${filesScanned} file${filesScanned === 1 ? "" : "s"} scanned across ${sourcesScanned.join(", ") || "no sources"}.` +
       suppressedNote);
     if (unreadableNote) push(unreadableNote);
+    if (integrity) {
+      push();
+      push(renderIntegrity(integrity, { noColor }));
+    }
     return lines.join("\n");
   }
 
@@ -91,6 +142,11 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
   }
   if (byFile.size > fileRows.length) push(paint(c.dim, `  … and ${byFile.size - fileRows.length} more file(s)`));
 
+  if (integrity) {
+    push();
+    push(renderIntegrity(integrity, { noColor }));
+  }
+
   push();
   push(paint(c.dim, "Values are redacted in this report — first/last 4 characters only. Nothing scanned"));
   push(paint(c.dim, "here left your machine; residoo makes no network calls. Run with --json for full detail."));
@@ -98,7 +154,10 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
   return lines.join("\n");
 }
 
-function renderJson(result) {
+// `integrity` is the checkIntegrity() result, or null when --no-integrity
+// skipped it — the key is always present so a --json consumer can tell
+// "checked, clean" apart from "never checked" without guessing from absence.
+function renderJson(result, integrity = null) {
   return JSON.stringify(
     {
       summary: {
@@ -114,10 +173,18 @@ function renderJson(result) {
         rule: f.ruleId, label: f.label, confidence: f.confidence,
         source: f.source, file: f.relFile, line: f.line, preview: f.preview,
       })),
+      integrity: integrity
+        ? {
+            warningCount: integrity.findings.filter((f) => f.severity === "warn").length,
+            findings: integrity.findings,
+            filesChecked: integrity.filesChecked,
+            scopeNote: integrity.scopeNote,
+          }
+        : null,
     },
     null,
     2
   );
 }
 
-module.exports = { render, renderJson };
+module.exports = { render, renderIntegrity, renderJson };
