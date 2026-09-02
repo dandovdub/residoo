@@ -1,0 +1,3 @@
+# Local tool installs. Reproduce them from VERSIONS.md (the same commands each
+# harness adapter prints as its installHint); do not commit binaries or envs.
+bin/

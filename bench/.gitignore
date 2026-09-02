@@ -1,0 +1,19 @@
+# The corpus is its generator. Generated data, ground truth, and raw scanner
+# outputs contain pattern-true FAKE credentials, and GitHub's push protection
+# (correctly) refuses pattern-faithful fakes - which both keeps forks pushable
+# and independently confirms the fakes' fidelity. Reproduce locally:
+#   node corpus/generate.js && node harness/run.js --all && node harness/score.js
+data/
+corpus/data/
+corpus/truth.json
+results/raw/
+results/*.findings.json
+results-mini/
+minifix/data/
+tools/fixture-smoke/
+tools/samples/
+tools/uv/
+tools/node/
+tools/bin/
+tools/venv*/
+tools/npm/

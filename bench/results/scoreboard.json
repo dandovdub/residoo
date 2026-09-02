@@ -1,0 +1,890 @@
+{
+  "generatedAt": "2026-09-02T16:02:36.353Z",
+  "fixtureRoot": "/Users/Dan/Downloads/Development/residoo/bench/corpus/data",
+  "manifestSeed": 20260902,
+  "scores": [
+    {
+      "tool": "agentsweep",
+      "displayName": "AgentSweep",
+      "version": "agentsweep 0.1.9",
+      "wallMs": 663,
+      "egressVerdict": "none-observed",
+      "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
+      "egressObserved": {
+        "proxyConnectAttempts": 0,
+        "nonProxySockets": 0
+      },
+      "fixtureMutations": [],
+      "scratchWrites": [],
+      "notScoredForRecall": null,
+      "claimedClasses": [
+        "transcript-*"
+      ],
+      "claimsNote": "agentsweep README: 'Find and redact secrets in your AI coding agent's local history' with an explicit --source list of agent history roots. It claims agent transcripts/history, not agent config files or repo-resident files; those classes are out of claimed scope for it, not zeroes.",
+      "perClass": {
+        "transcript-plain": {
+          "class": "transcript-plain",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 24,
+          "sitesFound": 22,
+          "siteRecall": "92%",
+          "values": 24,
+          "valuesFound": 22,
+          "valueRecall": "92%"
+        },
+        "agent-config-plain": {
+          "class": "agent-config-plain",
+          "kind": "secret",
+          "claimed": false,
+          "status": "out of claimed scope (not scored)"
+        },
+        "transcript-json-nested": {
+          "class": "transcript-json-nested",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 6,
+          "sitesFound": 6,
+          "siteRecall": "100%",
+          "values": 6,
+          "valuesFound": 6,
+          "valueRecall": "100%"
+        },
+        "transcript-echo": {
+          "class": "transcript-echo",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 12,
+          "sitesFound": 12,
+          "siteRecall": "100%",
+          "values": 4,
+          "valuesFound": 4,
+          "valueRecall": "100%"
+        },
+        "transcript-b64": {
+          "class": "transcript-b64",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 5,
+          "sitesFound": 0,
+          "siteRecall": "0%",
+          "values": 5,
+          "valuesFound": 0,
+          "valueRecall": "0%"
+        },
+        "transcript-split": {
+          "class": "transcript-split",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 6,
+          "sitesFound": 1,
+          "siteRecall": "17%",
+          "values": 3,
+          "valuesFound": 1,
+          "valueRecall": "33%"
+        },
+        "suppress-placeholder": {
+          "class": "suppress-placeholder",
+          "kind": "suppress",
+          "claimed": true,
+          "instances": 10,
+          "falsePositives": 5
+        },
+        "chaff-shaped": {
+          "class": "chaff-shaped",
+          "kind": "chaff",
+          "claimed": true,
+          "instances": 45,
+          "falsePositives": 0
+        }
+      },
+      "precision": {
+        "matchedSecretSites": 41,
+        "chaffFlags": 0,
+        "suppressFlags": 5,
+        "unplantedFindings": 0,
+        "unplantedSamples": [],
+        "precision": "89%",
+        "precisionExclSuppress": "100%"
+      },
+      "overallDistinctCredentials": {
+        "note": "ALL claimed classes, hard classes included; a distinct credential counts as found when any of its exposure sites matched, in any claimed class; guards dedup-style reporters against value-level undercounting. headlineOnly excludes the hard classes.",
+        "total": 42,
+        "found": 33,
+        "recall": "79%",
+        "headlineOnly": {
+          "total": 34,
+          "found": 32,
+          "recall": "94%"
+        }
+      },
+      "perFamily": {
+        "aws": {
+          "sites": 8,
+          "sitesFound": 5
+        },
+        "anthropic": {
+          "sites": 8,
+          "sitesFound": 7
+        },
+        "slack": {
+          "sites": 6,
+          "sitesFound": 6
+        },
+        "stripe": {
+          "sites": 4,
+          "sitesFound": 3
+        },
+        "github": {
+          "sites": 9,
+          "sitesFound": 6
+        },
+        "gitlab": {
+          "sites": 3,
+          "sitesFound": 2
+        },
+        "npm": {
+          "sites": 4,
+          "sitesFound": 3
+        },
+        "connection-string": {
+          "sites": 3,
+          "sitesFound": 3
+        },
+        "private-key": {
+          "sites": 2,
+          "sitesFound": 2
+        },
+        "discord": {
+          "sites": 2,
+          "sitesFound": 2
+        },
+        "bearer-header": {
+          "sites": 2,
+          "sitesFound": 0
+        },
+        "jwt": {
+          "sites": 2,
+          "sitesFound": 2
+        }
+      },
+      "reExposure": {
+        "note": "re-exposed sites are additional exposure locations of a credential already planted elsewhere; a tool that dedupes distinct credentials scores full value recall but partial site recall",
+        "sitesTotal": 8,
+        "sitesFound": 8
+      },
+      "unexpectedExit": false
+    },
+    {
+      "tool": "ggshield",
+      "displayName": "ggshield (GitGuardian)",
+      "version": "ggshield, version 1.54.0",
+      "wallMs": 297,
+      "egressVerdict": "by-design-requires-server",
+      "egressDetail": "Observed unauthenticated on this harness: the scan command refuses to run without a GitGuardian API key (exit 3, 'A GitGuardian API key is needed to use ggshield'), which is the server dependency demonstrated live. Observed during the scan window: proxy CONNECT attempt \"CONNECT api.github.com:443 HTTP/1.1\".",
+      "egressObserved": {
+        "proxyConnectAttempts": 1,
+        "nonProxySockets": 0
+      },
+      "fixtureMutations": [],
+      "scratchWrites": [
+        "cache/ggshield/update_check.yaml"
+      ],
+      "notScoredForRecall": {
+        "reason": "not scored (requires server account)",
+        "citation": "ggshield README (GitGuardian), describing the invoked `secret scan` command: \"ggshield uses our public API through py-gitguardian to scan and detect potential vulnerabilities in files and other text content.\" For the AI-agent surface specifically, the ggshield v1.53.0 changelog on `ai discover --activity`: it collects raw agent activity and \"ships it to GitGuardian, which scans the content and strips secrets server-side\". Nuance: ggshield supports self-hosted instances via --instance, so the required server need not be GitGuardian's cloud."
+      },
+      "claimedClasses": [
+        "*"
+      ],
+      "claimsNote": "ggshield docs: 'secret scan path -r' scans any directory tree, and since v1.53 it parses AI-agent transcripts explicitly. Claim scope is everything; recall is still not scored here because scanning requires a server account (see notScoredForRecall).",
+      "perClass": {
+        "transcript-plain": {
+          "class": "transcript-plain",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 24,
+          "sitesFound": 0,
+          "siteRecall": "0%",
+          "values": 24,
+          "valuesFound": 0,
+          "valueRecall": "0%"
+        },
+        "agent-config-plain": {
+          "class": "agent-config-plain",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 3,
+          "sitesFound": 0,
+          "siteRecall": "0%",
+          "values": 3,
+          "valuesFound": 0,
+          "valueRecall": "0%"
+        },
+        "transcript-json-nested": {
+          "class": "transcript-json-nested",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 6,
+          "sitesFound": 0,
+          "siteRecall": "0%",
+          "values": 6,
+          "valuesFound": 0,
+          "valueRecall": "0%"
+        },
+        "transcript-echo": {
+          "class": "transcript-echo",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 12,
+          "sitesFound": 0,
+          "siteRecall": "0%",
+          "values": 4,
+          "valuesFound": 0,
+          "valueRecall": "0%"
+        },
+        "transcript-b64": {
+          "class": "transcript-b64",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 5,
+          "sitesFound": 0,
+          "siteRecall": "0%",
+          "values": 5,
+          "valuesFound": 0,
+          "valueRecall": "0%"
+        },
+        "transcript-split": {
+          "class": "transcript-split",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 6,
+          "sitesFound": 0,
+          "siteRecall": "0%",
+          "values": 3,
+          "valuesFound": 0,
+          "valueRecall": "0%"
+        },
+        "suppress-placeholder": {
+          "class": "suppress-placeholder",
+          "kind": "suppress",
+          "claimed": true,
+          "instances": 10,
+          "falsePositives": 0
+        },
+        "chaff-shaped": {
+          "class": "chaff-shaped",
+          "kind": "chaff",
+          "claimed": true,
+          "instances": 45,
+          "falsePositives": 0
+        }
+      },
+      "precision": {
+        "matchedSecretSites": 0,
+        "chaffFlags": 0,
+        "suppressFlags": 0,
+        "unplantedFindings": 0,
+        "unplantedSamples": [],
+        "precision": "n/a",
+        "precisionExclSuppress": "n/a"
+      },
+      "overallDistinctCredentials": {
+        "note": "ALL claimed classes, hard classes included; a distinct credential counts as found when any of its exposure sites matched, in any claimed class; guards dedup-style reporters against value-level undercounting. headlineOnly excludes the hard classes.",
+        "total": 45,
+        "found": 0,
+        "recall": "0%",
+        "headlineOnly": {
+          "total": 37,
+          "found": 0,
+          "recall": "0%"
+        }
+      },
+      "perFamily": {
+        "aws": {
+          "sites": 8,
+          "sitesFound": 0
+        },
+        "anthropic": {
+          "sites": 9,
+          "sitesFound": 0
+        },
+        "slack": {
+          "sites": 7,
+          "sitesFound": 0
+        },
+        "stripe": {
+          "sites": 4,
+          "sitesFound": 0
+        },
+        "github": {
+          "sites": 10,
+          "sitesFound": 0
+        },
+        "gitlab": {
+          "sites": 3,
+          "sitesFound": 0
+        },
+        "npm": {
+          "sites": 4,
+          "sitesFound": 0
+        },
+        "connection-string": {
+          "sites": 3,
+          "sitesFound": 0
+        },
+        "private-key": {
+          "sites": 2,
+          "sitesFound": 0
+        },
+        "discord": {
+          "sites": 2,
+          "sitesFound": 0
+        },
+        "bearer-header": {
+          "sites": 2,
+          "sitesFound": 0
+        },
+        "jwt": {
+          "sites": 2,
+          "sitesFound": 0
+        }
+      },
+      "reExposure": {
+        "note": "re-exposed sites are additional exposure locations of a credential already planted elsewhere; a tool that dedupes distinct credentials scores full value recall but partial site recall",
+        "sitesTotal": 8,
+        "sitesFound": 0
+      },
+      "unexpectedExit": false
+    },
+    {
+      "tool": "gitleaks",
+      "displayName": "gitleaks",
+      "version": "8.30.1",
+      "wallMs": 614,
+      "egressVerdict": "none-observed",
+      "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
+      "egressObserved": {
+        "proxyConnectAttempts": 0,
+        "nonProxySockets": 0
+      },
+      "fixtureMutations": [],
+      "scratchWrites": [],
+      "notScoredForRecall": null,
+      "claimedClasses": [
+        "*"
+      ],
+      "claimsNote": "gitleaks README: detects secrets in files and directories (detect --no-git scans a directory tree, format-agnostic), so every corpus class is in its claimed scope.",
+      "perClass": {
+        "transcript-plain": {
+          "class": "transcript-plain",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 24,
+          "sitesFound": 18,
+          "siteRecall": "75%",
+          "values": 24,
+          "valuesFound": 18,
+          "valueRecall": "75%"
+        },
+        "agent-config-plain": {
+          "class": "agent-config-plain",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 3,
+          "sitesFound": 3,
+          "siteRecall": "100%",
+          "values": 3,
+          "valuesFound": 3,
+          "valueRecall": "100%"
+        },
+        "transcript-json-nested": {
+          "class": "transcript-json-nested",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 6,
+          "sitesFound": 2,
+          "siteRecall": "33%",
+          "values": 6,
+          "valuesFound": 2,
+          "valueRecall": "33%"
+        },
+        "transcript-echo": {
+          "class": "transcript-echo",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 12,
+          "sitesFound": 12,
+          "siteRecall": "100%",
+          "values": 4,
+          "valuesFound": 4,
+          "valueRecall": "100%"
+        },
+        "transcript-b64": {
+          "class": "transcript-b64",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 5,
+          "sitesFound": 5,
+          "siteRecall": "100%",
+          "values": 5,
+          "valuesFound": 5,
+          "valueRecall": "100%"
+        },
+        "transcript-split": {
+          "class": "transcript-split",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 6,
+          "sitesFound": 0,
+          "siteRecall": "0%",
+          "values": 3,
+          "valuesFound": 0,
+          "valueRecall": "0%"
+        },
+        "suppress-placeholder": {
+          "class": "suppress-placeholder",
+          "kind": "suppress",
+          "claimed": true,
+          "instances": 10,
+          "falsePositives": 0
+        },
+        "chaff-shaped": {
+          "class": "chaff-shaped",
+          "kind": "chaff",
+          "claimed": true,
+          "instances": 45,
+          "falsePositives": 0
+        }
+      },
+      "precision": {
+        "matchedSecretSites": 40,
+        "chaffFlags": 0,
+        "suppressFlags": 0,
+        "unplantedFindings": 0,
+        "unplantedSamples": [],
+        "precision": "100%",
+        "precisionExclSuppress": "100%"
+      },
+      "overallDistinctCredentials": {
+        "note": "ALL claimed classes, hard classes included; a distinct credential counts as found when any of its exposure sites matched, in any claimed class; guards dedup-style reporters against value-level undercounting. headlineOnly excludes the hard classes.",
+        "total": 45,
+        "found": 32,
+        "recall": "71%",
+        "headlineOnly": {
+          "total": 37,
+          "found": 27,
+          "recall": "73%"
+        }
+      },
+      "perFamily": {
+        "aws": {
+          "sites": 8,
+          "sitesFound": 6
+        },
+        "anthropic": {
+          "sites": 9,
+          "sitesFound": 6
+        },
+        "slack": {
+          "sites": 7,
+          "sitesFound": 7
+        },
+        "stripe": {
+          "sites": 4,
+          "sitesFound": 3
+        },
+        "github": {
+          "sites": 10,
+          "sitesFound": 8
+        },
+        "gitlab": {
+          "sites": 3,
+          "sitesFound": 3
+        },
+        "npm": {
+          "sites": 4,
+          "sitesFound": 3
+        },
+        "connection-string": {
+          "sites": 3,
+          "sitesFound": 0
+        },
+        "private-key": {
+          "sites": 2,
+          "sitesFound": 2
+        },
+        "discord": {
+          "sites": 2,
+          "sitesFound": 0
+        },
+        "bearer-header": {
+          "sites": 2,
+          "sitesFound": 0
+        },
+        "jwt": {
+          "sites": 2,
+          "sitesFound": 2
+        }
+      },
+      "reExposure": {
+        "note": "re-exposed sites are additional exposure locations of a credential already planted elsewhere; a tool that dedupes distinct credentials scores full value recall but partial site recall",
+        "sitesTotal": 8,
+        "sitesFound": 8
+      },
+      "unexpectedExit": false
+    },
+    {
+      "tool": "residoo",
+      "displayName": "residoo",
+      "version": "residoo 0.3.0",
+      "wallMs": 194,
+      "egressVerdict": "none-observed",
+      "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
+      "egressObserved": {
+        "proxyConnectAttempts": 0,
+        "nonProxySockets": 0
+      },
+      "fixtureMutations": [],
+      "scratchWrites": [],
+      "notScoredForRecall": null,
+      "claimedClasses": [
+        "transcript-*",
+        "agent-config-*",
+        "agent-memory-*"
+      ],
+      "claimsNote": "residoo --help: scans coding-agent session transcripts and agent config locations on the machine. Repo-resident files (e.g. .env inside a project checkout) are claimed only by --project mode, which is not what this benchmark runs.",
+      "perClass": {
+        "transcript-plain": {
+          "class": "transcript-plain",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 24,
+          "sitesFound": 21,
+          "siteRecall": "88%",
+          "values": 24,
+          "valuesFound": 21,
+          "valueRecall": "88%"
+        },
+        "agent-config-plain": {
+          "class": "agent-config-plain",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 3,
+          "sitesFound": 1,
+          "siteRecall": "33%",
+          "values": 3,
+          "valuesFound": 1,
+          "valueRecall": "33%"
+        },
+        "transcript-json-nested": {
+          "class": "transcript-json-nested",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 6,
+          "sitesFound": 5,
+          "siteRecall": "83%",
+          "values": 6,
+          "valuesFound": 5,
+          "valueRecall": "83%"
+        },
+        "transcript-echo": {
+          "class": "transcript-echo",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 12,
+          "sitesFound": 12,
+          "siteRecall": "100%",
+          "values": 4,
+          "valuesFound": 4,
+          "valueRecall": "100%"
+        },
+        "transcript-b64": {
+          "class": "transcript-b64",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 5,
+          "sitesFound": 0,
+          "siteRecall": "0%",
+          "values": 5,
+          "valuesFound": 0,
+          "valueRecall": "0%"
+        },
+        "transcript-split": {
+          "class": "transcript-split",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 6,
+          "sitesFound": 1,
+          "siteRecall": "17%",
+          "values": 3,
+          "valuesFound": 1,
+          "valueRecall": "33%"
+        },
+        "suppress-placeholder": {
+          "class": "suppress-placeholder",
+          "kind": "suppress",
+          "claimed": true,
+          "instances": 10,
+          "falsePositives": 3
+        },
+        "chaff-shaped": {
+          "class": "chaff-shaped",
+          "kind": "chaff",
+          "claimed": true,
+          "instances": 45,
+          "falsePositives": 0
+        }
+      },
+      "precision": {
+        "matchedSecretSites": 40,
+        "chaffFlags": 0,
+        "suppressFlags": 3,
+        "unplantedFindings": 0,
+        "unplantedSamples": [],
+        "precision": "93%",
+        "precisionExclSuppress": "100%"
+      },
+      "overallDistinctCredentials": {
+        "note": "ALL claimed classes, hard classes included; a distinct credential counts as found when any of its exposure sites matched, in any claimed class; guards dedup-style reporters against value-level undercounting. headlineOnly excludes the hard classes.",
+        "total": 45,
+        "found": 32,
+        "recall": "71%",
+        "headlineOnly": {
+          "total": 37,
+          "found": 31,
+          "recall": "84%"
+        }
+      },
+      "perFamily": {
+        "aws": {
+          "sites": 8,
+          "sitesFound": 5
+        },
+        "anthropic": {
+          "sites": 9,
+          "sitesFound": 7
+        },
+        "slack": {
+          "sites": 7,
+          "sitesFound": 6
+        },
+        "stripe": {
+          "sites": 4,
+          "sitesFound": 0
+        },
+        "github": {
+          "sites": 10,
+          "sitesFound": 7
+        },
+        "gitlab": {
+          "sites": 3,
+          "sitesFound": 2
+        },
+        "npm": {
+          "sites": 4,
+          "sitesFound": 3
+        },
+        "connection-string": {
+          "sites": 3,
+          "sitesFound": 3
+        },
+        "private-key": {
+          "sites": 2,
+          "sitesFound": 2
+        },
+        "discord": {
+          "sites": 2,
+          "sitesFound": 2
+        },
+        "bearer-header": {
+          "sites": 2,
+          "sitesFound": 1
+        },
+        "jwt": {
+          "sites": 2,
+          "sitesFound": 2
+        }
+      },
+      "reExposure": {
+        "note": "re-exposed sites are additional exposure locations of a credential already planted elsewhere; a tool that dedupes distinct credentials scores full value recall but partial site recall",
+        "sitesTotal": 8,
+        "sitesFound": 8
+      },
+      "unexpectedExit": false
+    },
+    {
+      "tool": "whatileaked",
+      "displayName": "whatileaked",
+      "version": "whatileaked 0.3.0",
+      "wallMs": 450,
+      "egressVerdict": "none-observed",
+      "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
+      "egressObserved": {
+        "proxyConnectAttempts": 0,
+        "nonProxySockets": 0
+      },
+      "fixtureMutations": [],
+      "scratchWrites": [],
+      "notScoredForRecall": null,
+      "claimedClasses": [
+        "transcript-*",
+        "agent-memory-*"
+      ],
+      "claimsNote": "whatileaked README: scans local Claude Code, Codex and Cursor transcripts (plus memory files, per its own scan banner). It claims agent transcripts, not agent config files or repo-resident files; those are out of claimed scope for it, not zeroes.",
+      "perClass": {
+        "transcript-plain": {
+          "class": "transcript-plain",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 24,
+          "sitesFound": 18,
+          "siteRecall": "75%",
+          "values": 24,
+          "valuesFound": 18,
+          "valueRecall": "75%"
+        },
+        "agent-config-plain": {
+          "class": "agent-config-plain",
+          "kind": "secret",
+          "claimed": false,
+          "status": "out of claimed scope (not scored)"
+        },
+        "transcript-json-nested": {
+          "class": "transcript-json-nested",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 6,
+          "sitesFound": 2,
+          "siteRecall": "33%",
+          "values": 6,
+          "valuesFound": 2,
+          "valueRecall": "33%"
+        },
+        "transcript-echo": {
+          "class": "transcript-echo",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 12,
+          "sitesFound": 5,
+          "siteRecall": "42%",
+          "values": 4,
+          "valuesFound": 4,
+          "valueRecall": "100%"
+        },
+        "transcript-b64": {
+          "class": "transcript-b64",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 5,
+          "sitesFound": 4,
+          "siteRecall": "80%",
+          "values": 5,
+          "valuesFound": 4,
+          "valueRecall": "80%"
+        },
+        "transcript-split": {
+          "class": "transcript-split",
+          "kind": "secret",
+          "claimed": true,
+          "sites": 6,
+          "sitesFound": 0,
+          "siteRecall": "0%",
+          "values": 3,
+          "valuesFound": 0,
+          "valueRecall": "0%"
+        },
+        "suppress-placeholder": {
+          "class": "suppress-placeholder",
+          "kind": "suppress",
+          "claimed": true,
+          "instances": 10,
+          "falsePositives": 0
+        },
+        "chaff-shaped": {
+          "class": "chaff-shaped",
+          "kind": "chaff",
+          "claimed": true,
+          "instances": 45,
+          "falsePositives": 0
+        }
+      },
+      "precision": {
+        "matchedSecretSites": 29,
+        "chaffFlags": 0,
+        "suppressFlags": 0,
+        "unplantedFindings": 0,
+        "unplantedSamples": [],
+        "precision": "100%",
+        "precisionExclSuppress": "100%"
+      },
+      "overallDistinctCredentials": {
+        "note": "ALL claimed classes, hard classes included; a distinct credential counts as found when any of its exposure sites matched, in any claimed class; guards dedup-style reporters against value-level undercounting. headlineOnly excludes the hard classes.",
+        "total": 42,
+        "found": 28,
+        "recall": "67%",
+        "headlineOnly": {
+          "total": 34,
+          "found": 24,
+          "recall": "71%"
+        }
+      },
+      "perFamily": {
+        "aws": {
+          "sites": 8,
+          "sitesFound": 4
+        },
+        "anthropic": {
+          "sites": 8,
+          "sitesFound": 4
+        },
+        "slack": {
+          "sites": 6,
+          "sitesFound": 4
+        },
+        "stripe": {
+          "sites": 4,
+          "sitesFound": 3
+        },
+        "github": {
+          "sites": 9,
+          "sitesFound": 5
+        },
+        "gitlab": {
+          "sites": 3,
+          "sitesFound": 3
+        },
+        "npm": {
+          "sites": 4,
+          "sitesFound": 2
+        },
+        "connection-string": {
+          "sites": 3,
+          "sitesFound": 0
+        },
+        "private-key": {
+          "sites": 2,
+          "sitesFound": 2
+        },
+        "discord": {
+          "sites": 2,
+          "sitesFound": 0
+        },
+        "bearer-header": {
+          "sites": 2,
+          "sitesFound": 0
+        },
+        "jwt": {
+          "sites": 2,
+          "sitesFound": 2
+        }
+      },
+      "reExposure": {
+        "note": "re-exposed sites are additional exposure locations of a credential already planted elsewhere; a tool that dedupes distinct credentials scores full value recall but partial site recall",
+        "sitesTotal": 8,
+        "sitesFound": 1
+      },
+      "unexpectedExit": false
+    }
+  ]
+}
