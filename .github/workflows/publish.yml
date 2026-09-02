@@ -1,0 +1,39 @@
+# Publishes to npm via Trusted Publishing (OIDC) — no NPM_TOKEN secret exists
+# anywhere in this repo or its settings, by design. npm mints a short-lived,
+# workflow-scoped credential for this exact run instead of trusting a
+# long-lived token that could sit in a maintainer's shell history or leak
+# from a compromised laptop. Requires configuring this repo + this workflow
+# filename as the registered trusted publisher on npmjs.com for the
+# `residoo` package before the first run — see docs.npmjs.com/trusted-publishers.
+#
+# Triggered by pushing a version tag (`git tag v0.2.0 && git push --tags`),
+# not by every push to main — a release stays a deliberate, human action.
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  id-token: write # required for OIDC trusted publishing — nothing else needs it
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      # Zero dependencies means there's nothing to install, but `npm ci`
+      # still validates package.json/lockfile integrity before we publish.
+      - run: npm ci
+
+      - run: node bin/residoo.js --help # smoke test: the CLI must at least run
+
+      - run: npm publish --provenance
