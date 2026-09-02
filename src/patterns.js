@@ -21,13 +21,13 @@ const PATTERNS = [
   { id: "private_key_block", label: "Private key block", confidence: "high",
     re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/g },
   { id: "github_pat", label: "GitHub personal access token", confidence: "high",
-    re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g },
+    re: /\bgh[pousr]_[A-Za-z0-9]{36,255}\b/g },
   { id: "gitlab_pat", label: "GitLab personal access token", confidence: "high",
-    re: /\bglpat-[A-Za-z0-9_-]{20,}\b/g },
+    re: /\bglpat-[A-Za-z0-9_-]{20,100}\b/g },
   { id: "slack_token", label: "Slack token", confidence: "high",
-    re: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g },
+    re: /\bxox[baprs]-[0-9A-Za-z-]{10,500}\b/g },
   { id: "stripe_key", label: "Stripe API key (live mode)", confidence: "high",
-    re: /\b(sk|rk)_live_[A-Za-z0-9]{20,}\b/g },
+    re: /\b(sk|rk)_live_[A-Za-z0-9]{20,250}\b/g },
   // The sandbox-mode twin of the rule above, same body charset and the same
   // 20-char floor. Format verified against two production detectors plus the
   // vendor (2026-09-02): gitleaks' stripe-access-token rule matches
@@ -45,34 +45,34 @@ const PATTERNS = [
   // transcript that pastes sk_test today is the same workflow that will
   // paste sk_live at go-live.
   { id: "stripe_test_key", label: "Stripe API key (test mode)", confidence: "high",
-    re: /\b(sk|rk)_test_[A-Za-z0-9]{20,}\b/g },
+    re: /\b(sk|rk)_test_[A-Za-z0-9]{20,250}\b/g },
   // The negative lookahead keeps this rule mutually exclusive with anthropic_key
   // and openrouter_key below — without it, "sk-ant-..." or "sk-or-v1-..." match
   // BOTH this pattern and the more specific one, and get reported twice under
   // two different (one wrong) provider labels. Verified: all three regexes
   // independently matched their overlapping synthetic keys before this fix.
   { id: "openai_key", label: "OpenAI API key", confidence: "high",
-    re: /\bsk-(?!ant-|or-)(proj-)?[A-Za-z0-9_-]{20,}\b/g },
+    re: /\bsk-(?!ant-|or-)(proj-)?[A-Za-z0-9_-]{20,300}\b/g },
   { id: "anthropic_key", label: "Anthropic API key", confidence: "high",
-    re: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g },
+    re: /\bsk-ant-[A-Za-z0-9_-]{20,300}\b/g },
   { id: "google_api_key", label: "Google / Firebase API key", confidence: "high",
     re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
   { id: "npm_token", label: "npm access token", confidence: "high",
     re: /\bnpm_[A-Za-z0-9]{36}\b/g },
   { id: "sendgrid_key", label: "SendGrid API key", confidence: "high",
-    re: /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b/g },
+    re: /\bSG\.[A-Za-z0-9_-]{16,100}\.[A-Za-z0-9_-]{16,100}\b/g },
   { id: "twilio_key", label: "Twilio API key", confidence: "high",
     re: /\bSK[a-f0-9]{32}\b/g },
   { id: "jwt", label: "JWT-shaped token", confidence: "medium",
-    re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g },
+    re: /\beyJ[A-Za-z0-9_-]{10,2000}\.eyJ[A-Za-z0-9_-]{10,20000}\.[A-Za-z0-9_-]{10,2000}\b/g },
   { id: "connection_string_with_password", label: "Database connection string with embedded password", confidence: "high",
-    re: /\b(postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:@\/]+:[^\s@\/]{3,}@[^\s\/]+/g },
+    re: /\b(postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:@\/]{1,255}:[^\s@\/]{3,255}@[^\s\/]{1,255}/g },
   { id: "bearer_header", label: "Authorization: Bearer header with a real-looking token", confidence: "medium",
-    re: /\bauthorization["']?\s*[:=]\s*["']?bearer\s+[A-Za-z0-9._-]{16,}/gi },
+    re: /\bauthorization["']?\s*[:=]\s*["']?bearer\s+[A-Za-z0-9._-]{16,1000}/gi },
   { id: "refresh_token_field", label: "refresh_token field", confidence: "medium",
-    re: /"refresh_token"\s*:\s*"[^"\s]{20,}"/gi },
+    re: /"refresh_token"\s*:\s*"[^"\s]{20,4000}"/gi },
   { id: "access_token_field", label: "access_token field", confidence: "medium",
-    re: /"access_token"\s*:\s*"[^"\s]{20,}"/gi },
+    re: /"access_token"\s*:\s*"[^"\s]{20,4000}"/gi },
 
   // ── AI / LLM providers (added: competitive gap-close, see project history) ─
   // Every regex body below was checked against a production, field-tested
@@ -102,7 +102,7 @@ const PATTERNS = [
   // "pplx-" + a >=40-char body — consistent across independent sources even
   // without one canonical spec page.
   { id: "perplexity_key", label: "Perplexity API key", confidence: "high",
-    re: /\bpplx-[A-Za-z0-9]{40,}\b/g },
+    re: /\bpplx-[A-Za-z0-9]{40,200}\b/g },
   { id: "replicate_token", label: "Replicate API token", confidence: "high",
     re: /\br8_[0-9A-Za-z_-]{37}\b/g },
 
@@ -121,7 +121,7 @@ const PATTERNS = [
     // Confirmed against 1Password's own developer docs (developer.1password.com
     // -> 1password.dev/service-accounts/security): the token is "ops_" plus a
     // base64-encoded JWT, so it always continues "eyJ" (base64 of `{"`).
-    re: /\bops_eyJ[A-Za-z0-9+/=_-]{40,}\b/g },
+    re: /\bops_eyJ[A-Za-z0-9+/=_-]{40,2000}\b/g },
 
   // ── Comms / SaaS ───────────────────────────────────────────────────────
   { id: "discord_webhook", label: "Discord webhook URL", confidence: "high",
@@ -138,13 +138,13 @@ const PATTERNS = [
   // but Notion has not published an exact body length for it, so its bound
   // below is a floor, not a verified exact count.
   { id: "notion_token", label: "Notion integration token", confidence: "high",
-    re: /\b(?:secret_[A-Za-z0-9]{43}|ntn_[A-Za-z0-9]{20,})\b/g },
+    re: /\b(?:secret_[A-Za-z0-9]{43}|ntn_[A-Za-z0-9]{20,200})\b/g },
   { id: "linear_key", label: "Linear API key", confidence: "high",
     re: /\blin_api_[0-9A-Za-z]{40}\b/g },
   { id: "sentry_token", label: "Sentry auth token", confidence: "high",
     // Covers both current Sentry token shapes: org-scoped (sntrys_, base64
     // JWT-like body) and user-scoped (sntryu_, hex body).
-    re: /\b(?:sntrys_eyJ[A-Za-z0-9+/=_]{100,}|sntryu_[a-f0-9]{64})\b/g },
+    re: /\b(?:sntrys_eyJ[A-Za-z0-9+/=_]{100,4000}|sntryu_[a-f0-9]{64})\b/g },
 ];
 
 /**
@@ -154,9 +154,9 @@ const PATTERNS = [
  */
 const NOISY_PATTERNS = [
   { id: "generic_password_assignment", label: "password / pwd assignment", confidence: "low",
-    re: /\b(password|passwd|pwd)\s*[:=]\s*["']?[^\s"']{6,}["']?/gi },
+    re: /\b(password|passwd|pwd)\s*[:=]\s*["']?[^\s"']{6,500}["']?/gi },
   { id: "generic_secret_assignment", label: "generic secret / apikey assignment", confidence: "low",
-    re: /\b(api[_-]?key|secret)\s*[:=]\s*["']?[A-Za-z0-9_\-\/+=]{12,}["']?/gi },
+    re: /\b(api[_-]?key|secret)\s*[:=]\s*["']?[A-Za-z0-9_\-\/+=]{12,500}["']?/gi },
 ];
 
 /**

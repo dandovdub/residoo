@@ -412,17 +412,21 @@ async function main() {
     check("prose line: hundreds of short word runs, no findings, nothing flagged",
       proseRes.unreadableFiles.length === 0 && proseRes.findings.length === 0);
 
-    // A vendor prefix followed by a multi-megabyte same-charset run overflows
-    // V8's regex backtrack stack inside a RULE regex (RangeError), a crash
-    // class met on real transcript data. The scan must survive it, keep every
-    // other file's findings, and degrade loudly (per-file flag when the line
-    // could not be matched; suppression if a future engine matches the
-    // zero-entropy run instead) — never a whole-scan loss, never silence.
+    // A vendor prefix followed by a multi-megabyte same-charset run used to
+    // overflow V8's regex backtrack stack inside a RULE regex (RangeError), a
+    // crash class met on real transcript data — every rule's every
+    // open-ended {n,} quantifier is now bounded (see patterns.js) precisely
+    // so this can no longer throw. The scan must survive it, keep every other
+    // file's findings, and — the regression that actually matters — a REAL
+    // secret sitting on the SAME line right after the adversarial run must
+    // still be found. The old shared-try/catch behavior silently dropped
+    // that: one throw mid-rule-array skipped every rule after it, and both
+    // the decode and boundary passes, for the whole line.
     const evilDir = fs.mkdtempSync(path.join(tmp, "evil-"));
     fs.writeFileSync(path.join(evilDir, "good.jsonl"),
       JSON.stringify({ message: { content: "real one " + plantedAwsKey + " kept" } }) + "\n");
     fs.writeFileSync(path.join(evilDir, "evil.jsonl"),
-      JSON.stringify({ message: { content: "sk-" + "a".repeat(8 * 1024 * 1024) } }) + "\n");
+      JSON.stringify({ message: { content: "sk-" + "a".repeat(8 * 1024 * 1024) + " " + plantedAwsKey } }) + "\n");
     const evilSrc = {
       id: () => "smoke", label: () => "Smoke", available: () => true,
       *files() {
@@ -437,9 +441,10 @@ async function main() {
     const evilRes = await scan({ sources: [evilSrc] });
     check("huge prefixed line: scan survives and the other file's finding is kept",
       evilRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.relFile === "good.jsonl"));
-    check("huge prefixed line: degradation is loud, never silent",
-      evilRes.unreadableFiles.some((u) => u.file === "evil.jsonl" && u.reason === "some lines could not be matched") ||
-      evilRes.suppressedCount > 0);
+    check("huge prefixed line: a real secret AFTER the adversarial run on the same line is still found",
+      evilRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.relFile === "evil.jsonl"));
+    check("huge prefixed line: bounded quantifiers mean no crash, so no degradation is needed at all",
+      evilRes.unreadableFiles.length === 0);
   }
 
   // ── cursor source: synthetic sqlite fixture ────────────────────────────

@@ -45,8 +45,19 @@ just asserted. See the git history for the actual commands run:
 - **Not vulnerable to regex denial-of-service.** Every pattern checked
   against the nested-quantifier shape behind real, dated CVEs in adjacent
   tooling (e.g. CVE-2026-0621, a ReDoS in Anthropic's own MCP SDK from
-  catastrophic backtracking on an exploded template pattern). Also stress-
-  tested directly against multi-megabyte adversarial inputs.
+  catastrophic backtracking on an exploded template pattern). A second,
+  distinct failure mode was found and fixed during a pre-launch audit: an
+  open-ended quantifier (`{n,}`) matching a multi-megabyte same-charset run
+  can overflow V8's regex engine on stack depth alone, independent of
+  catastrophic backtracking. The raw-match, base64-decode, and split-line
+  passes shared one try/catch at the time, so a crash partway through the
+  rule list could silently skip every rule after it for that line. Every
+  rule's quantifier is now explicitly bounded to its format's real maximum
+  length (a credential shape has a knowable ceiling), each of the three
+  passes has its own try/catch as a second, independent layer, and a
+  regression test asserts a real secret placed immediately after a
+  multi-megabyte adversarial run is still found. Stress-tested directly
+  against multi-megabyte adversarial inputs, including that exact shape.
 - **No supply-chain surface.** Zero runtime dependencies, zero
   pre/post-install lifecycle scripts. Check `package.json` yourself;
   there's nothing to hide behind a `postinstall` hook.

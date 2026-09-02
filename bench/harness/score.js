@@ -620,7 +620,11 @@ function main() {
 
   console.log(renderText(scores, manifest));
   const jsonPath = path.join(args.resultsDir, "scoreboard.json");
-  const board = { generatedAt: new Date().toISOString(), fixtureRoot: args.fixtureRoot, manifestSeed: manifest.seed, scores };
+  // Relative to the repo root, never the absolute filesystem path: this file
+  // is committed and public, and an absolute path can carry the machine's
+  // username (caught in a pre-launch audit: a prior run had leaked
+  // /Users/<realname>/... here).
+  const board = { generatedAt: new Date().toISOString(), fixtureRoot: path.relative(lib.REPO_ROOT, args.fixtureRoot), manifestSeed: manifest.seed, scores };
   if (unattachedEgressObservations.length) board.unattachedEgressObservations = unattachedEgressObservations;
   fs.writeFileSync(jsonPath, JSON.stringify(board, null, 2) + "\n");
   console.log(`scoreboard.json written to ${jsonPath}`);

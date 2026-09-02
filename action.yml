@@ -6,8 +6,8 @@
 # Version pinning design: the CLI is fetched with "npx --yes residoo@VERSION"
 # rather than run from the checked-out action tree, so the workflow runs the
 # exact bits published to npm, the same command a developer runs locally. The
-# action tag and the CLI version move together: dandovdub/residoo@v0.3.0
-# defaults to residoo 0.3.0 on npm. Override the version input only if you
+# action tag and the CLI version move together: dandovdub/residoo@v0.3.3
+# defaults to residoo 0.3.3 on npm. Override the version input only if you
 # need to split them.
 #
 # The npm fetch is distribution, not scanning: the scan itself makes zero
@@ -41,7 +41,7 @@ inputs:
       residoo version to fetch from npm. Defaults to the release this action
       tag ships with; the tag and the CLI version move together.
     required: false
-    default: "0.3.0"
+    default: "0.3.3"
 
 runs:
   using: composite

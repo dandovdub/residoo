@@ -290,19 +290,36 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       // Per-file degradation flag, surfaced at most once so a pathological
       // file produces one visible entry, not thousands.
       let lineMatchFailed = false;
+      // Each pass gets its own try/catch: every rule quantifier is bounded
+      // (see patterns.js) so none of these should throw on adversarial input
+      // any more, but this is the second, independent layer against that
+      // failure mode — a throw in one pass must never suppress the other
+      // two for the same line. Without this, a bug reintroduced in any one
+      // pass silently blinds the other two for that line rather than
+      // degrading loudly on its own. One unmatched line must degrade to a
+      // visible per-file flag, never abort the scan and discard every
+      // finding already collected (same contract as the readLines catch
+      // above).
+      const flagFailed = () => {
+        if (!lineMatchFailed) {
+          lineMatchFailed = true;
+          unreadableFiles.push({ file: safeName(file), reason: "some lines could not be matched" });
+        }
+      };
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (line) {
-          // A rule regex itself can throw on adversarial input: V8's
-          // backtrack stack overflows (RangeError) when an open-ended
-          // quantifier meets a prefix followed by a multi-megabyte
-          // same-charset run — real transcripts contain such lines. One
-          // unmatched line must degrade to a visible per-file flag, never
-          // abort the scan and discard every finding already collected
-          // (same contract as the readLines catch above).
           try {
             matchLine(line, file, relFile, i + 1, mtimeMs);
+          } catch (err) {
+            flagFailed();
+          }
+          try {
             decodeLine(line, file, relFile, i + 1, mtimeMs);
+          } catch (err) {
+            flagFailed();
+          }
+          try {
             const content = contentProjection(line);
             // Boundary join with the previous line (2-way splits only; see
             // decode.js). Both lines must be non-empty so a blank separator
@@ -312,10 +329,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
             }
             prevContent = content;
           } catch (err) {
-            if (!lineMatchFailed) {
-              lineMatchFailed = true;
-              unreadableFiles.push({ file: safeName(file), reason: "some lines could not be matched" });
-            }
+            flagFailed();
             prevContent = null;
           }
         } else {
