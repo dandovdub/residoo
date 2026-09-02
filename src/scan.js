@@ -17,6 +17,51 @@ const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("
 const SUPPRESS_CONTEXT_RE = /(placeholder|example|sample|dummy|<REDACTED>|xxxxxxxx|your[_-]?(api[_-]?)?key|EXAMPLE)/i;
 const CONTEXT_WINDOW = 40;
 
+/**
+ * Exact literals that vendors publish in their own documentation as example
+ * credentials. These pass every shape check by construction (they ARE the
+ * documented shape), and the context heuristic above can't be relied on to
+ * catch them: it only looks at the 40 characters BEFORE a match, so "the
+ * docs show AKIAIOSFODNN7EXAMPLE as the placeholder" sails straight through.
+ * The value itself is the signal here. Same policy as the context heuristic:
+ * suppressed by default, counted, re-includable with --include-suppressed.
+ * gitleaks and other production scanners filter the AWS pair the same way.
+ *
+ * Every literal below was verified against the vendor's own published docs
+ * (2026-09), not copied from another scanner's allowlist:
+ *   - AWS's two documented example access key ids, used across the IAM and
+ *     STS docs (e.g. the GetAccessKeyInfo API reference).
+ *   - GitHub's documented example tokens from docs.github.com: the REST API
+ *     getting-started guide's PAT, and the OAuth-apps guide's access +
+ *     refresh token pair (the same body appears under ghp_ and gho_).
+ *   - jwt.io's default demo token (header {"alg":"HS256","typ":"JWT"},
+ *     payload sub 1234567890 / John Doe), the canonical example JWT quoted
+ *     in tutorials everywhere.
+ */
+/**
+ * A trailing run of 12+ identical characters inside a matched value. No
+ * vendor issues credentials with a repeated-character body — key material is
+ * random, and 12 identical characters in a row in a real random body is a
+ * ~62^-11 event — but placeholder keys built as prefix + XXXX.../0000... are
+ * everywhere in docs and templates, and they match the shape rules by
+ * construction. This is a property of the VALUE, so unlike the context
+ * heuristic it also works where no surrounding text exists: a placeholder
+ * that arrives base64-encoded or split across lines is still zero-entropy
+ * after decoding/joining. gitleaks ships equivalent repeated-character
+ * allowlists. Same policy as every suppression: counted, re-includable
+ * with --include-suppressed, never silently dropped.
+ */
+const ZERO_ENTROPY_BODY_RE = /(.)\1{11,}/;
+
+const VENDOR_EXAMPLE_VALUES = new Set([
+  "AKIAIOSFODNN7EXAMPLE",
+  "AKIAI44QH8DHBEXAMPLE",
+  "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
+  "gho_16C7e42F292c6912E7710c838347Ae178B4a",
+  "ghr_1B4a2e77838347a7E420ce178F2E7c6912E169246c34E1ccbF66C46812d16D5B1A9Dc86A1498",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+]);
+
 /** Matches every finding's own `relFile` convention — never the full path. See SECURITY.md. */
 function safeName(file) { return path.basename(file); }
 
@@ -79,20 +124,35 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     });
   };
 
+  // One suppression policy for all three passes (raw, decoded, boundary).
+  // The value-based checks run first: they are exact properties of the match
+  // itself, so they apply identically to a value found raw, decoded out of
+  // base64, or reconstructed across a line boundary — a decoded vendor
+  // example is the same non-secret as a plain one. The context heuristic is
+  // last and only where surrounding text exists (`before` is null for the
+  // decode and boundary passes, whose transforms have no stable "40 chars
+  // before" in the original line).
+  const suppressionReason = (value, before) => {
+    if (VENDOR_EXAMPLE_VALUES.has(value)) return "vendor-documented example value";
+    if (ZERO_ENTROPY_BODY_RE.test(value)) return "zero-entropy body";
+    if (before !== null && SUPPRESS_CONTEXT_RE.test(before)) return "placeholder-like context";
+    return null;
+  };
+
   const matchLine = (line, file, relFile, lineNo, mtimeMs) => {
     for (const rule of rules) {
       rule.re.lastIndex = 0; // rules are reused across files; reset global regex state
       let m;
       while ((m = rule.re.exec(line)) !== null) {
         const before = line.slice(Math.max(0, m.index - CONTEXT_WINDOW), m.index);
-        const looksLikePlaceholder = SUPPRESS_CONTEXT_RE.test(before);
-        if (looksLikePlaceholder && !includeSuppressed) {
+        const suppressedReason = suppressionReason(m[0], before);
+        if (suppressedReason && !includeSuppressed) {
           suppressedCount++;
         } else {
           record(rule, m[0], relFile, file, lineNo,
             mtimeMs,
-            looksLikePlaceholder ? "low" : rule.confidence,
-            looksLikePlaceholder ? "placeholder-like context" : null);
+            suppressedReason ? "low" : rule.confidence,
+            suppressedReason);
         }
         if (m.index === rule.re.lastIndex) rule.re.lastIndex++; // guard zero-width matches
       }
@@ -106,8 +166,13 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // "base64-wrapped".
   const decodeLine = (line, file, relFile, lineNo, mtimeMs) => {
     for (const d of findDecodedMatches(line, highRules)) {
+      const suppressedReason = suppressionReason(d.value, null);
+      if (suppressedReason && !includeSuppressed) {
+        suppressedCount++;
+        continue;
+      }
       record({ id: d.ruleId, label: d.label }, d.value, relFile, file, lineNo,
-        mtimeMs, "high", null, { encoding: d.encoding });
+        mtimeMs, suppressedReason ? "low" : "high", suppressedReason, { encoding: d.encoding });
     }
   };
 
@@ -119,9 +184,17 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // caller and reused across both of a line's pairs.
   const boundaryPair = (contentA, contentB, file, relFile, lineNoA, mtimeMs) => {
     for (const b of findBoundaryMatches(contentA, contentB, rules)) {
+      const suppressedReason = suppressionReason(b.value, null);
+      if (suppressedReason && !includeSuppressed) {
+        // One straddling match is one suppressed match, even though an
+        // unsuppressed one records against both contributing lines.
+        suppressedCount++;
+        continue;
+      }
       const span = [lineNoA, lineNoA + 1];
-      record({ id: b.ruleId, label: b.label }, b.value, relFile, file, lineNoA, mtimeMs, b.confidence, null, { spanLines: span });
-      record({ id: b.ruleId, label: b.label }, b.value, relFile, file, lineNoA + 1, mtimeMs, b.confidence, null, { spanLines: span });
+      const conf = suppressedReason ? "low" : b.confidence;
+      record({ id: b.ruleId, label: b.label }, b.value, relFile, file, lineNoA, mtimeMs, conf, suppressedReason, { spanLines: span });
+      record({ id: b.ruleId, label: b.label }, b.value, relFile, file, lineNoA + 1, mtimeMs, conf, suppressedReason, { spanLines: span });
     }
   };
 
@@ -221,4 +294,7 @@ function emptyResult() {
   };
 }
 
-module.exports = { scan, emptyResult };
+// VENDOR_EXAMPLE_VALUES is exported for the smoke tests, which assert every
+// literal in it is still matched IN FULL by some detection rule — a literal
+// no rule can produce as a whole match is dead weight that suppresses nothing.
+module.exports = { scan, emptyResult, VENDOR_EXAMPLE_VALUES };

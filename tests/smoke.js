@@ -2,8 +2,12 @@
 
 /**
  * Smoke tests — self-contained, zero dependencies, synthetic data only.
- * Run with `npm test`. Every fixture below is deliberately fake: the one
- * key-shaped string is AWS's officially documented example key id.
+ * Run with `npm test`. Every fixture below is deliberately fake. Two AWS
+ * key-shaped strings appear: AWS's officially documented example key id
+ * (docExampleKey), which scan() suppresses by default as a vendor-doc
+ * example value, and a pattern-true fake in the CredData style
+ * (plantedAwsKey) — right prefix, charset, and length, never a real
+ * credential — used for every plant that must actually be FOUND.
  *
  * These are the automated floor under the deeper manual passes recorded in
  * SECURITY.md, not a replacement for them.
@@ -24,7 +28,8 @@ async function main() {
 
   // ── patterns: detection + mutual exclusivity + redaction ──────────────────
   const { PATTERNS, redact } = require("../src/patterns");
-  const docExampleKey = "AKIA" + "IOSFODNN7EXAMPLE"; // AWS's documented example id
+  const docExampleKey = "AKIA" + "IOSFODNN7EXAMPLE"; // AWS's documented example id — scan() suppresses it by default
+  const plantedAwsKey = "AKIA" + "SM0KETESTFAKEKEY"; // pattern-true fake, findable: not on any suppression list
   const aws = PATTERNS.find((p) => p.id === "aws_access_key_id");
   aws.re.lastIndex = 0;
   check("AWS key shape detected", aws.re.test("x " + docExampleKey + " y"));
@@ -38,6 +43,16 @@ async function main() {
   const red = redact(docExampleKey);
   check("redact hides the middle", !red.includes("IOSFODNN") && red.includes("AKIA"));
   check("redact strips control chars", !redact("\x1b[2Jabcdefghijklmnop\x1b[0m").includes("\x1b"));
+
+  // Every vendor-example literal must still be producible as a WHOLE match by
+  // some detection rule — the suppression check compares the full match
+  // against the set, so a literal no rule matches in full (a typo, or a rule
+  // whose bounds drifted) would silently stop suppressing anything.
+  const { VENDOR_EXAMPLE_VALUES } = require("../src/scan");
+  check("every vendor-example literal is a full match of some detection rule",
+    VENDOR_EXAMPLE_VALUES.size >= 2 && [...VENDOR_EXAMPLE_VALUES].every((v) =>
+      PATTERNS.some((p) => { p.re.lastIndex = 0; const m = p.re.exec(v); return m && m[0] === v; })));
+  check("the findable planted key is NOT on the vendor-example list", !VENDOR_EXAMPLE_VALUES.has(plantedAwsKey));
 
   // ── new vendor patterns: shape match + no cross-rule collision ────────────
   // Fixtures are synthetic ("a" repeated to the vendor's documented length),
@@ -107,7 +122,16 @@ async function main() {
   const fakeSourceDir = path.join(tmp, "transcripts");
   fs.mkdirSync(fakeSourceDir);
   fs.writeFileSync(path.join(fakeSourceDir, "a.jsonl"),
-    JSON.stringify({ message: { content: "found " + docExampleKey + " in output" } }) + "\n" +
+    JSON.stringify({ message: { content: "found " + plantedAwsKey + " in output" } }) + "\n" +
+    // Line 2: the giveaway word sits AFTER the match, so the before-context
+    // heuristic can't catch this one — only the vendor-literal list can.
+    // Exactly the shape that used to ship as a high-confidence finding.
+    JSON.stringify({ message: { content: "the docs show " + docExampleKey + " as the placeholder" } }) + "\n" +
+    // Line 3: same findable key, but placeholder-ish context BEFORE it — the
+    // context heuristic's own case, kept here so both layers stay covered.
+    JSON.stringify({ message: { content: 'set the field placeholder="' + plantedAwsKey + '" in the form' } }) + "\n" +
+    // Line 4: AWS's other documented example id, straight literal match.
+    JSON.stringify({ message: { content: "some docs use " + "AKIA" + "I44QH8DHBEXAMPLE" + " instead" } }) + "\n" +
     JSON.stringify({ message: { content: "nothing here" } }) + "\n");
   const fakeSource = {
     id: () => "smoke", label: () => "Smoke", available: () => true,
@@ -123,15 +147,34 @@ async function main() {
     },
   };
   const result = await scan({ sources: [fakeSource] });
-  check("scan finds the planted key", result.findings.some((f) => f.ruleId === "aws_access_key_id"));
-  check("scan output is redacted", !JSON.stringify(result.findings).includes("IOSFODNN7EXAMPLE"));
+  check("scan finds the planted key at full confidence",
+    result.findings.some((f) => f.ruleId === "aws_access_key_id" && f.line === 1 && f.confidence === "high"));
+  check("scan output is redacted", !JSON.stringify(result.findings).includes("SM0KETESTFAKEKEY"));
   check("filesScanned counted", result.filesScanned === 1);
+  check("both vendor-doc example ids and the placeholder-context match are suppressed by default",
+    result.findings.filter((f) => f.ruleId === "aws_access_key_id").length === 1 &&
+    result.suppressedCount === 3);
+
+  const withSup = await scan({ sources: [fakeSource], includeSuppressed: true });
+  const vendorHit = withSup.findings.find((f) => f.line === 2);
+  const contextHit = withSup.findings.find((f) => f.line === 3);
+  check("--include-suppressed re-includes the vendor-doc example as low confidence with the vendor reason",
+    !!vendorHit && vendorHit.confidence === "low" &&
+    vendorHit.suppressedReason === "vendor-documented example value");
+  check("--include-suppressed re-includes the placeholder-context match with the context reason",
+    !!contextHit && contextHit.confidence === "low" &&
+    contextHit.suppressedReason === "placeholder-like context");
+  check("--include-suppressed reports everything as findings, nothing left in the suppressed count",
+    withSup.suppressedCount === 0 &&
+    withSup.findings.filter((f) => f.ruleId === "aws_access_key_id").length === 4);
 
   // ── scan: base64 decode-then-rescan + split-line boundary join ─────────────
   // Both engine features exercised through the real scan() path. Every fixture
-  // is synthetic; the one key-shaped string is AWS's documented example id.
+  // is synthetic: the findable key is the pattern-true smoke fake, and AWS's
+  // documented example id appears only in the suppression-interaction cases
+  // (where being suppressed is exactly the point).
   // A tiny helper that scans one in-memory JSONL file's worth of lines.
-  const scanOneFile = async (name, body) => {
+  const scanOneFile = async (name, body, opts) => {
     const dir = fs.mkdtempSync(path.join(tmp, "decode-"));
     const file = path.join(dir, name);
     fs.writeFileSync(file, body);
@@ -140,42 +183,42 @@ async function main() {
       *files() { const st = fs.statSync(file); yield { file, mtimeMs: st.mtimeMs, sizeBytes: st.size, broken: false }; },
       async readLines(f) { return { lines: fs.readFileSync(f, "utf-8").split("\n"), status: "complete", bytesRead: fs.statSync(f).size }; },
     };
-    return scan({ sources: [src] });
+    return scan({ sources: [src], ...(opts || {}) });
   };
 
   {
-    // Feature 1a: a documented-example AWS key present ONLY base64-encoded, and
+    // Feature 1a: a findable AWS-shaped key present ONLY base64-encoded, and
     // wrapped at 76 columns so the key straddles a wrap boundary — the decoder
     // must reassemble the wrapped chunks (whose newlines survive as JSON \n
     // escapes) before decoding. Found, marked base64-wrapped, redacted, and
     // the encoded form must never leak.
-    const plain = "# provisioning env dump\nAWS_ACCESS_KEY_ID=" + docExampleKey + "\n";
+    const plain = "# provisioning env dump\nAWS_ACCESS_KEY_ID=" + plantedAwsKey + "\n";
     const wrapped = (Buffer.from(plain).toString("base64").match(/.{1,76}/g) || []).join("\n");
     const b64Line = JSON.stringify({ message: { content: "$ base64 -i service.env\n" + wrapped } });
     const firstChunk = wrapped.split("\n")[0];
     check("wrap sanity: the base64 is wrapped across chunks and the key is only in the plaintext",
-      wrapped.includes("\n") && plain.includes(docExampleKey) && !wrapped.includes(docExampleKey));
+      wrapped.includes("\n") && plain.includes(plantedAwsKey) && !wrapped.includes(plantedAwsKey));
     const b64res = await scanOneFile("b64.jsonl", b64Line + "\n");
     const b64find = b64res.findings.find((f) => f.ruleId === "aws_access_key_id");
-    check("b64: wrapped documented-example AWS key found via decode", !!b64find);
+    check("b64: wrapped AWS-shaped key found via decode", !!b64find);
     check("b64: finding carries the base64 encoding marker", !!b64find && b64find.encoding === "base64");
-    check("b64: decoded value is redacted (middle hidden)", !!b64find && b64find.preview.includes("AKIA") && !b64find.preview.includes("IOSFODNN"));
+    check("b64: decoded value is redacted (middle hidden)", !!b64find && b64find.preview.includes("AKIA") && !b64find.preview.includes("SM0KETESTFAKE"));
     const b64json = JSON.stringify(b64res.findings);
-    check("b64: raw decoded secret never appears in findings", !b64json.includes("IOSFODNN7EXAMPLE"));
+    check("b64: raw decoded secret never appears in findings", !b64json.includes("SM0KETESTFAKEKEY"));
     check("b64: encoded form (the base64 run) never appears in findings",
       !b64json.includes(firstChunk) && !b64json.includes(wrapped.replace(/\n/g, "")));
 
     // Feature 1b: base64url variant (URL-safe alphabet, no padding). The
     // payload is engineered to contain '+'/'/' in standard base64 so its
     // base64url form genuinely uses '-'/'_', exercising the url branch.
-    const urlPlain = "AWS_ACCESS_KEY_ID=" + docExampleKey + "\n#>>>???<<<\n";
+    const urlPlain = "AWS_ACCESS_KEY_ID=" + plantedAwsKey + "\n#>>>???<<<\n";
     const b64u = Buffer.from(urlPlain).toString("base64url");
     check("base64url sanity: payload is url-distinct", /[-_]/.test(b64u));
     const urlRes = await scanOneFile("b64url.jsonl",
       JSON.stringify({ message: { content: "decoded blob: " + b64u } }) + "\n");
     const urlFind = urlRes.findings.find((f) => f.ruleId === "aws_access_key_id");
     check("base64url: key found and marked base64url", !!urlFind && urlFind.encoding === "base64url");
-    check("base64url: output redacted, no raw secret", !JSON.stringify(urlRes.findings).includes("IOSFODNN7EXAMPLE"));
+    check("base64url: output redacted, no raw secret", !JSON.stringify(urlRes.findings).includes("SM0KETESTFAKEKEY"));
 
     // Feature 1c: junk base64 yields ZERO findings — random bytes decode to
     // non-printable noise (rejected by the printable-ratio gate), and a
@@ -190,7 +233,7 @@ async function main() {
     // contiguously on neither line, reconstructed at the content boundary and
     // marked with its line span. Reported against both contributing lines.
     const cut = 11;
-    const p1 = docExampleKey.slice(0, cut), p2 = docExampleKey.slice(cut);
+    const p1 = plantedAwsKey.slice(0, cut), p2 = plantedAwsKey.slice(cut);
     const recA = JSON.stringify({ type: "assistant", message: { id: "msg_shared",
       content: [{ type: "text", text: "reconstructed start: " + p1 }], usage: { in: 5, out: 200 } },
       requestId: "req_a", cwd: "/Users/x/proj" });
@@ -198,7 +241,7 @@ async function main() {
       content: [{ type: "text", text: p2 + " is the remainder; rotate it now" }], usage: { in: 5, out: 200 } },
       requestId: "req_b", cwd: "/Users/x/proj" });
     check("split sanity: key appears on neither line contiguously",
-      !recA.includes(docExampleKey) && !recB.includes(docExampleKey));
+      !recA.includes(plantedAwsKey) && !recB.includes(plantedAwsKey));
     const splitRes = await scanOneFile("split.jsonl", recA + "\n" + recB + "\n");
     const splitFinds = splitRes.findings.filter((f) => f.ruleId === "aws_access_key_id");
     check("split: reconstructed AWS key found across the boundary", splitFinds.length > 0);
@@ -207,14 +250,14 @@ async function main() {
     check("split: reported against both contributing lines (both exposure sites)",
       splitFinds.some((f) => f.line === 1) && splitFinds.some((f) => f.line === 2));
     check("split: output redacted, reconstructed secret never leaked",
-      !JSON.stringify(splitRes.findings).includes("IOSFODNN7EXAMPLE"));
+      !JSON.stringify(splitRes.findings).includes("SM0KETESTFAKEKEY"));
 
     // Feature 2b: a match that lies WHOLLY within one line must NOT also be
     // reported as a boundary finding — the straddle check prevents double
     // counting. Line A carries a complete key mid-string; the next line is
     // benign. Exactly one finding, from the single-line pass, no span marker.
     const wholeA = JSON.stringify({ type: "assistant", message: {
-      content: [{ type: "text", text: "the key is " + docExampleKey + " somewhere in here" }] } });
+      content: [{ type: "text", text: "the key is " + plantedAwsKey + " somewhere in here" }] } });
     const wholeB = JSON.stringify({ type: "assistant", message: {
       content: [{ type: "text", text: "and that is all for now, nothing more to see here" }] } });
     const wholeRes = await scanOneFile("whole.jsonl", wholeA + "\n" + wholeB + "\n");
@@ -222,6 +265,51 @@ async function main() {
     check("near-split: contiguous key reported exactly once, not double-counted at the boundary",
       wholeFinds.length === 1);
     check("near-split: the single finding carries no split marker", wholeFinds.length === 1 && !wholeFinds[0].spanLines);
+
+    // Interaction: suppression is a property of the VALUE, so it must apply
+    // identically to a value recovered by decoding or boundary joining — a
+    // base64-wrapped vendor-doc example is the same non-secret as a plain one.
+    const supB64 = Buffer.from("AWS_ACCESS_KEY_ID=" + docExampleKey + "\n").toString("base64");
+    const supLine = JSON.stringify({ message: { content: "config dump: " + supB64 } }) + "\n";
+    const supRes = await scanOneFile("b64sup.jsonl", supLine);
+    check("b64+suppress: base64-wrapped vendor-doc example is suppressed, not warned",
+      !supRes.findings.some((f) => f.ruleId === "aws_access_key_id") && supRes.suppressedCount === 1);
+    const supInc = await scanOneFile("b64sup-inc.jsonl", supLine, { includeSuppressed: true });
+    const supFind = supInc.findings.find((f) => f.ruleId === "aws_access_key_id");
+    check("b64+suppress: --include-suppressed re-includes it as low confidence with the vendor reason and the encoding marker",
+      !!supFind && supFind.confidence === "low" &&
+      supFind.suppressedReason === "vendor-documented example value" && supFind.encoding === "base64");
+
+    // Same for a boundary-joined vendor-doc example: split across two records,
+    // reconstructed, and still suppressed.
+    const sCut = 9;
+    const sRecA = JSON.stringify({ type: "assistant", message: { content: [{ type: "text",
+      text: "the docs show the placeholder start " + docExampleKey.slice(0, sCut) }] }, requestId: "req_sa" });
+    const sRecB = JSON.stringify({ type: "assistant", message: { content: [{ type: "text",
+      text: docExampleKey.slice(sCut) + " continues the documented example id" }] }, requestId: "req_sb" });
+    const sRes = await scanOneFile("splitsup.jsonl", sRecA + "\n" + sRecB + "\n");
+    check("split+suppress: boundary-joined vendor-doc example is suppressed, not warned",
+      !sRes.findings.some((f) => f.ruleId === "aws_access_key_id") && sRes.suppressedCount === 1);
+
+    // Zero-entropy body: a placeholder built as prefix + one repeated
+    // character matches the shape rules by construction but is no vendor's
+    // real key material. Suppressed by value, so it also holds with no
+    // helpful surrounding context (and after decode/join, same code path).
+    const zeroLine = JSON.stringify({ message: { content: "then set sk_test_" + "X".repeat(24) + " and restart" } }) + "\n";
+    const zeroRes = await scanOneFile("zero.jsonl", zeroLine);
+    check("zero-entropy: repeated-character stripe test placeholder is suppressed by default",
+      zeroRes.findings.length === 0 && zeroRes.suppressedCount === 1);
+    const zeroInc = await scanOneFile("zero-inc.jsonl", zeroLine, { includeSuppressed: true });
+    const zeroFind = zeroInc.findings.find((f) => f.ruleId === "stripe_test_key");
+    check("zero-entropy: --include-suppressed re-includes it as low confidence with the zero-entropy reason",
+      !!zeroFind && zeroFind.confidence === "low" && zeroFind.suppressedReason === "zero-entropy body");
+    // A real-shaped (mixed-character) stripe test key on the same vehicle is
+    // NOT zero-entropy suppressed, and fires only the test-mode rule.
+    const liveShaped = await scanOneFile("stripemix.jsonl",
+      JSON.stringify({ message: { content: "key sk_test_" + "p4Qz".repeat(6) + " in use" } }) + "\n");
+    check("zero-entropy: mixed-body stripe test key still reported, only by the test-mode rule",
+      liveShaped.findings.length === 1 && liveShaped.findings[0].ruleId === "stripe_test_key" &&
+      liveShaped.findings[0].confidence === "high" && liveShaped.suppressedCount === 0);
   }
 
   // ── cursor source: synthetic sqlite fixture ────────────────────────────
@@ -256,8 +344,8 @@ async function main() {
       // research verified real Cursor data looks like: two tables,
       // ItemTable and cursorDiskKV, both `key TEXT UNIQUE, value BLOB`, with
       // chat content living in cursorDiskKV under a `bubbleId:<composerId>:<bubbleId>`
-      // key, value a JSON-encoded string. The planted secret is AWS's
-      // documented example key id — synthetic, never a real credential.
+      // key, value a JSON-encoded string. The planted secret is the
+      // pattern-true fake — synthetic, never a real credential.
       const dbPath = path.join(tmp, "cursor-state.vscdb");
       const seed = new DatabaseSync(dbPath);
       seed.exec("CREATE TABLE ItemTable (key TEXT UNIQUE, value BLOB)");
@@ -268,7 +356,7 @@ async function main() {
         .run("composerData:c1", JSON.stringify({ name: "test session", createdAt: Date.now() }));
       seed.prepare("INSERT INTO cursorDiskKV VALUES (?, ?)")
         .run("bubbleId:c1:b1", JSON.stringify({
-          type: 1, text: "here's my key: " + docExampleKey, tokenCount: 12,
+          type: 1, text: "here's my key: " + plantedAwsKey, tokenCount: 12,
         }));
       seed.close();
 
@@ -279,7 +367,7 @@ async function main() {
       const cursorResult = await cursorSource.readLines(dbPath);
       check("cursor readLines reads the synthetic db as complete", cursorResult.status === "complete");
       check("cursor readLines surfaces the planted key's row as a line",
-        cursorResult.lines.some((l) => l.includes(docExampleKey)));
+        cursorResult.lines.some((l) => l.includes(plantedAwsKey)));
 
       // End-to-end: real cursor.js readLines() feeding real scan.js against
       // the synthetic db, exactly the integration path a live `residoo scan`
@@ -298,7 +386,7 @@ async function main() {
       const cursorScanResult = await scan({ sources: [cursorFakeSource] });
       check("scan finds the planted key via the real cursor.js readLines",
         cursorScanResult.findings.some((f) => f.ruleId === "aws_access_key_id"));
-      check("cursor scan output is redacted", !JSON.stringify(cursorScanResult.findings).includes("IOSFODNN7EXAMPLE"));
+      check("cursor scan output is redacted", !JSON.stringify(cursorScanResult.findings).includes("SM0KETESTFAKEKEY"));
     }
   }
 
@@ -351,13 +439,13 @@ async function main() {
       const seed = new DatabaseSync(dbPath);
       seed.exec("CREATE TABLE agent_conversations (id TEXT, conversation_id TEXT, conversation_data TEXT)");
       seed.prepare("INSERT INTO agent_conversations VALUES (?, ?, ?)")
-        .run("1", "c1", JSON.stringify({ text: "ran with " + docExampleKey }));
+        .run("1", "c1", JSON.stringify({ text: "ran with " + plantedAwsKey }));
       seed.close();
 
       const warpResult = await warpSource.readLines(dbPath);
       check("warp readLines reads the synthetic db as complete", warpResult.status === "complete");
       check("warp readLines surfaces the planted key via generic table discovery",
-        warpResult.lines.some((l) => l.includes(docExampleKey)));
+        warpResult.lines.some((l) => l.includes(plantedAwsKey)));
     }
   }
 
@@ -371,12 +459,12 @@ async function main() {
     const amazonQSource = require("../src/sources/amazon-q");
     const historyFile = path.join(tmp, "chat-history-no-workspace.json");
     fs.writeFileSync(historyFile, JSON.stringify({
-      collections: [{ name: "tabs", data: [{ history: [{ body: "leaked " + docExampleKey }] }] }],
+      collections: [{ name: "tabs", data: [{ history: [{ body: "leaked " + plantedAwsKey }] }] }],
     }));
 
     const aqResult = await amazonQSource.readLines(historyFile);
     check("amazon-q readLines reads the synthetic history file as complete", aqResult.status === "complete");
-    check("amazon-q readLines surfaces the planted key", aqResult.lines.some((l) => l.includes(docExampleKey)));
+    check("amazon-q readLines surfaces the planted key", aqResult.lines.some((l) => l.includes(plantedAwsKey)));
 
     let filesThrew = false;
     try { for (const _ of amazonQSource.files()) { /* drain */ } } catch { filesThrew = true; }
@@ -396,18 +484,18 @@ async function main() {
     const aiderSource = require("../src/sources/aider");
     const chatHistoryFile = path.join(tmp, ".aider.chat.history.md");
     fs.writeFileSync(chatHistoryFile,
-      "# aider chat started at 2026-09-02\n\n#### put this in .env\n\n> " + docExampleKey + "\n");
+      "# aider chat started at 2026-09-02\n\n#### put this in .env\n\n> " + plantedAwsKey + "\n");
     const inputHistoryFile = path.join(tmp, ".aider.input.history");
-    fs.writeFileSync(inputHistoryFile, "# 2026-09-02 10:00:00\n+use " + docExampleKey + " for now\n");
+    fs.writeFileSync(inputHistoryFile, "# 2026-09-02 10:00:00\n+use " + plantedAwsKey + " for now\n");
 
     const chatResult = await aiderSource.readLines(chatHistoryFile);
     check("aider readLines reads the synthetic chat history as complete", chatResult.status === "complete");
     check("aider readLines surfaces the planted key from the chat log",
-      chatResult.lines.some((l) => l.includes(docExampleKey)));
+      chatResult.lines.some((l) => l.includes(plantedAwsKey)));
 
     const inputResult = await aiderSource.readLines(inputHistoryFile);
     check("aider readLines surfaces the planted key through a '+'-prefixed input-history line",
-      inputResult.lines.some((l) => l.includes(docExampleKey)));
+      inputResult.lines.some((l) => l.includes(plantedAwsKey)));
 
     let filesThrew = false;
     try { for (const _ of aiderSource.files()) { /* drain */ } } catch { filesThrew = true; }
@@ -424,13 +512,13 @@ async function main() {
     const agentConfigs = require("../src/sources/agent-configs");
     const cfgFile = path.join(tmp, "settings.local.json");
     fs.writeFileSync(cfgFile, JSON.stringify({
-      permissions: { allow: ["Bash(AWS_ACCESS_KEY_ID=" + docExampleKey + " aws s3 ls:*)"] },
+      permissions: { allow: ["Bash(AWS_ACCESS_KEY_ID=" + plantedAwsKey + " aws s3 ls:*)"] },
     }, null, 2));
 
     const cfgRead = await agentConfigs.readLines(cfgFile);
     check("agent-configs readLines reads the synthetic config as complete", cfgRead.status === "complete");
     check("agent-configs readLines surfaces the planted key from an approved-command line",
-      cfgRead.lines.some((l) => l.includes(docExampleKey)));
+      cfgRead.lines.some((l) => l.includes(plantedAwsKey)));
 
     // Same integration shape as the cursor block above: real readLines(),
     // real scan(), inline files() only because the real files() looks at
@@ -446,7 +534,7 @@ async function main() {
     const cfgScan = await scan({ sources: [cfgFakeSource] });
     check("scan finds the planted key via the real agent-configs readLines",
       cfgScan.findings.some((f) => f.ruleId === "aws_access_key_id"));
-    check("agent-configs scan output is redacted", !JSON.stringify(cfgScan.findings).includes("IOSFODNN7EXAMPLE"));
+    check("agent-configs scan output is redacted", !JSON.stringify(cfgScan.findings).includes("SM0KETESTFAKEKEY"));
 
     let filesThrew = false;
     try { for (const _ of agentConfigs.files()) { /* drain */ } } catch { filesThrew = true; }
@@ -476,7 +564,7 @@ async function main() {
     fs.writeFileSync(path.join(dHome, ".claude.json"),
       JSON.stringify({ numStartups: 3, projects: { [rootA]: { allowedTools: [] } } }, null, 2));
     fs.writeFileSync(path.join(rootA, ".mcp.json"), JSON.stringify({
-      mcpServers: { tracker: { command: "node", args: ["mcp.js"], env: { GITHUB_TOKEN: "ghp_" + "e".repeat(36) } } },
+      mcpServers: { tracker: { command: "node", args: ["mcp.js"], env: { GITHUB_TOKEN: "ghp_" + "eF3a".repeat(9) } } },
     }, null, 2));
 
     // Route 2: root recorded ONLY as a transcript record's cwd, under a home
@@ -487,7 +575,7 @@ async function main() {
     const rootB = path.join(dHome, "work", "beta");
     fs.mkdirSync(path.join(rootB, ".claude"), { recursive: true });
     fs.writeFileSync(path.join(rootB, ".claude", "settings.local.json"),
-      JSON.stringify({ env: { GITLAB_TOKEN: "glpat-" + "f".repeat(20) } }, null, 2));
+      JSON.stringify({ env: { GITLAB_TOKEN: "glpat-" + "f2Xk".repeat(5) } }, null, 2));
     const slugDir = path.join(dHome, ".claude", "projects", "-Users-someoneelse-work-beta");
     fs.mkdirSync(slugDir, { recursive: true });
     fs.writeFileSync(path.join(slugDir, "11111111-2222-4333-8444-555555555555.jsonl"),
@@ -515,7 +603,7 @@ async function main() {
     check("config discovery finds the token in a project settings.local.json via a re-rooted transcript cwd",
       !!pd && pd.findings.some((f) => f.rule === "gitlab_pat" && f.source === "agent-configs" && f.file === "settings.local.json"));
     check("config discovery output never contains the raw planted values",
-      !disc.stdout.includes("e".repeat(36)) && !disc.stdout.includes("f".repeat(20)));
+      !disc.stdout.includes("eF3a".repeat(9)) && !disc.stdout.includes("f2Xk".repeat(5)));
     check("config discovery reports no unreadable files on the clean fixture",
       !!pd && pd.summary.unreadableFiles.length === 0);
   }
@@ -607,8 +695,11 @@ async function main() {
     const eCwd = path.join(tmp, "e2e-cwd");
     fs.mkdirSync(path.join(eHome, ".claude"), { recursive: true });
     fs.mkdirSync(eCwd, { recursive: true });
+    // Two planted keys on separate lines: the findable fake, and AWS's
+    // documented example id, which the default scan must SUPPRESS while
+    // --include-suppressed must re-surface with its reason.
     fs.writeFileSync(path.join(eHome, ".claude", "settings.local.json"),
-      JSON.stringify({ env: { AWS_ACCESS_KEY_ID: docExampleKey } }, null, 2));
+      JSON.stringify({ env: { AWS_ACCESS_KEY_ID: plantedAwsKey, AWS_DOC_KEY_FROM_VENDOR: docExampleKey } }, null, 2));
     fs.writeFileSync(path.join(eHome, ".claude", "settings.json"), JSON.stringify({
       hooks: { SessionStart: [{ hooks: [{ type: "command", command: "node .claude/setup.mjs" }] }] },
     }));
@@ -634,8 +725,21 @@ async function main() {
     check("cli e2e integrity section reports the planted hook as a warning",
       !!parsed && !!parsed.integrity && parsed.integrity.warningCount >= 1 &&
       parsed.integrity.findings.some((f) => f.severity === "warn" && f.kind === "hook"));
-    check("cli e2e output never contains the raw key", !full.stdout.includes("IOSFODNN7EXAMPLE"));
+    check("cli e2e output never contains the raw key",
+      !full.stdout.includes("SM0KETESTFAKEKEY") && !full.stdout.includes("IOSFODNN7EXAMPLE"));
     check("cli e2e without --fail-on-find exits 0", full.status === 0);
+    check("cli e2e suppresses the vendor-doc example key by default and counts it",
+      !!parsed && parsed.summary.suppressedCount === 1 &&
+      parsed.findings.filter((f) => f.rule === "aws_access_key_id").length === 1);
+
+    const withSupCli = runCli(["--include-suppressed"]);
+    let parsedSup = null;
+    try { parsedSup = JSON.parse(withSupCli.stdout); } catch { /* checked below */ }
+    check("cli e2e --include-suppressed re-surfaces the vendor-doc example with its reason, still redacted",
+      !!parsedSup && parsedSup.summary.suppressedCount === 0 &&
+      parsedSup.findings.some((f) => f.rule === "aws_access_key_id" && f.confidence === "low" &&
+        f.suppressedReason === "vendor-documented example value") &&
+      !withSupCli.stdout.includes("IOSFODNN7EXAMPLE"));
 
     const failOn = runCli(["--fail-on-find"]);
     check("cli e2e --fail-on-find exits 1 on findings + integrity warnings", failOn.status === 1);
@@ -751,7 +855,7 @@ async function main() {
     fs.mkdirSync(path.join(rHome, ".claude"), { recursive: true });
     fs.mkdirSync(rCwd, { recursive: true });
     fs.writeFileSync(path.join(rHome, ".claude", "settings.local.json"),
-      JSON.stringify({ env: { AWS_ACCESS_KEY_ID: docExampleKey } }, null, 2));
+      JSON.stringify({ env: { AWS_ACCESS_KEY_ID: plantedAwsKey } }, null, 2));
 
     const runCli = (cliArgs) => spawnSync(process.execPath,
       [path.join(__dirname, "..", "bin", "residoo.js"), ...cliArgs], {
@@ -774,7 +878,7 @@ async function main() {
       !!p1 && !!p1.rotation && p1.rotation.counts.pending >= 1 && p1.rotation.counts.acked === 0);
     check("rotation entries carry guidance and never the raw secret",
       !!p1 && p1.rotation.entries.every((e) => e.guidance && (e.guidance.rotateUrl || e.guidance.consolePath)) &&
-      !first.stdout.includes("IOSFODNN7EXAMPLE"));
+      !first.stdout.includes("SM0KETESTFAKEKEY"));
     check("human report renders the rotation section",
       runCli(["scan", "--no-color"]).stdout.includes("Rotation:"));
     check("rotation advisory does NOT fire without integrity warnings",
@@ -864,10 +968,10 @@ async function main() {
     fs.mkdirSync(path.join(pRoot, "node_modules", "somelib"), { recursive: true });
     // Committed transcript with a planted key.
     fs.writeFileSync(path.join(pRoot, ".claude", "session-1.jsonl"),
-      JSON.stringify({ message: { content: "cat .env printed " + docExampleKey } }) + "\n");
+      JSON.stringify({ message: { content: "cat .env printed " + plantedAwsKey } }) + "\n");
     // Nested agent config (monorepo shape).
     fs.writeFileSync(path.join(pRoot, "packages", "app", ".mcp.json"),
-      JSON.stringify({ mcpServers: { x: { env: { TOKEN: "ghp_" + "b".repeat(40) } } } }));
+      JSON.stringify({ mcpServers: { x: { env: { TOKEN: "ghp_" + "bJ7q".repeat(10) } } } }));
     // TrapDoor-shaped zero-width splice in the repo's .cursorrules.
     fs.writeFileSync(path.join(pRoot, ".cursorrules"), "be\u200bhelpful\u200balways\n");
     // Decoy inside node_modules: even a candidate-named file there must not
@@ -934,7 +1038,7 @@ async function main() {
       !!pp && pp.summary.unreadableFiles.some((u) => u.file === "vendored") &&
       pp.summary.unreadableFiles.some((u) => u.file === "escape.jsonl"));
     check("--project output never contains a raw planted value",
-      !proj.stdout.includes("IOSFODNN7EXAMPLE") && !proj.stdout.includes("b".repeat(40)) &&
+      !proj.stdout.includes("SM0KETESTFAKEKEY") && !proj.stdout.includes("bJ7q".repeat(10)) &&
       !proj.stdout.includes("d".repeat(24)));
     check("--project --fail-on-find exits 1 on the checkout's findings",
       runProj(["scan", "--project", pRoot, "--fail-on-find"]).status === 1);

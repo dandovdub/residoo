@@ -284,6 +284,9 @@ function renderJson(result, integrity = null, rotation = null) {
         ...(f.encoding ? { encoding: f.encoding } : {}),
         ...(f.spanLines ? { spanLines: f.spanLines } : {}),
         fingerprint: fingerprintFinding(f),
+        // Only present on an --include-suppressed run: says WHY this finding
+        // is low-confidence, so a JSON consumer doesn't have to guess.
+        ...(f.suppressedReason ? { suppressedReason: f.suppressedReason } : {}),
       })),
       // orderAdvisory mirrors the human report's ChainDrop ordering warning:
       // remediation order is safety-critical when planted persistence and
