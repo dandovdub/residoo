@@ -64,11 +64,31 @@ const NOISY_PATTERNS = [
     re: /\b(api[_-]?key|secret)\s*[:=]\s*["']?[A-Za-z0-9_\-\/+=]{12,}["']?/gi },
 ];
 
+/**
+ * Strip C0 control characters (0x00-0x1F) and DEL (0x7F) — this is where ANSI
+ * escape sequences live. Two of the rules above (connection strings, the
+ * *_token_field rules) match against a negated character class that excludes
+ * whitespace and quotes but NOT control bytes, so a crafted or malformed
+ * transcript line could otherwise put a raw terminal-control sequence into
+ * this tool's own report output. Verified: an unsanitized preview containing
+ * "\x1b[2J" actually clears the screen when printed. Applied here, at the
+ * one place raw matched text turns into displayable text, rather than left
+ * to every call site to remember.
+ */
+function stripControlChars(s) {
+  let out = "";
+  for (const ch of s) {
+    const code = ch.codePointAt(0);
+    if (code >= 0x20 && code !== 0x7f) out += ch;
+  }
+  return out;
+}
+
 /** Mask a matched value for display: never print secret material to a terminal. */
 function redact(value) {
-  const v = String(value);
-  if (v.length <= 10) return "*".repeat(v.length);
-  return v.slice(0, 4) + "…" + v.slice(-4) + `  (${v.length} chars)`;
+  const v = stripControlChars(String(value));
+  if (v.length <= 10) return "*".repeat(v.length || 1);
+  return v.slice(0, 4) + "…" + v.slice(-4) + `  (${String(value).length} chars)`;
 }
 
 module.exports = { PATTERNS, NOISY_PATTERNS, redact };
