@@ -8,6 +8,12 @@ reproduced their published v1 recall and precision numbers exactly, which is
 the determinism claim demonstrated rather than asserted.
 
 - Date: 2026-09-02 (full 8-tool field; the v1 four first published earlier the same day).
+- Later the same day, after these numbers were published: residoo 0.3.1 was
+  measured in a full fresh rerun (corpus regenerated, positive control
+  re-passed, all 12 invocations re-run; every other tool reproduced its rows
+  exactly). The 0.3.0 rows below are retained unchanged; the before/after is
+  in the section "residoo 0.3.1: post-publication fixes, rerun on the same
+  corpus".
 - residoo version: 0.3.0, run from this repository at commit 16c911f
   (`node bin/residoo.js scan --json`; the working tree's only changes beyond
   that commit are under `bench/` and do not touch residoo's scan code).
@@ -266,6 +272,79 @@ Kingfisher flags the npm placeholder; TruffleHog flags none of the ten.
 ggshield: recall **not scored (requires server account)**, never zero. Observed
 unauthenticated: exit 3, "Error: A GitGuardian API key is needed to use ggshield."
 before any scanning (verbatim in `results/raw/ggshield.txt`).
+
+## residoo 0.3.1: post-publication fixes, rerun on the same corpus (added 2026-09-02)
+
+Order of events, because it is the whole credibility argument: the benchmark
+and every 0.3.0 number above were published first (commits 16c911f and
+18df770), and residoo was improved second, in public, against the classes the
+benchmark showed it losing. The 0.3.0 rows throughout this document are
+retained unchanged; this section is the new measurement. Every fix is a
+general mechanism whose design and limits are documented in the source, none
+is keyed to this corpus's generator, and none reads planted values:
+
+- base64 decode-then-rescan (`src/decode.js`): locate base64/base64url runs
+  per line, wrap-break tolerant (RFC 2045 style wrapping, including wrap
+  newlines serialized as JSON escapes), decode bounded candidates, rescan the
+  decoded text with the vendor-prefixed high-confidence rules only, redact
+  the decoded value. Limits stated in code: one decode level, no blocks
+  spanning physical lines, no hex.
+- split-line boundary join (`src/decode.js`): project each line to its
+  free-text payload (the longest JSON string value, a schema-agnostic
+  property of message-wrapping records), join tail and head windows of
+  adjacent lines, credit only matches that straddle the seam. Limits stated
+  in code: two-way splits only, longest-string assumption.
+- Stripe test-mode keys as their own rule (`src/patterns.js`), with the
+  vendor citations (gitleaks and Stripe's own docs treat `sk_test_` as
+  reportable; TruffleHog's live-only scope is quoted as a scope choice).
+- Project-level agent configs discovered from the agent's own home-level
+  records (`src/sources/agent-configs.js`): project roots come from
+  `~/.claude.json` and transcript `cwd` fields, re-rooted under the current
+  home when recorded under a foreign one; only vendor-fixed per-project
+  config filenames are read.
+- Suppression generalized (`src/scan.js`): vendor-documented example
+  literals by exact match, plus a zero-entropy check (a value ending in a
+  run of 12+ identical characters is no vendor's key material); both are
+  value properties and therefore apply identically to raw, decoded, and
+  boundary-joined findings.
+
+The rerun regenerated the corpus (byte-identical by-family summary),
+re-passed the egress positive control, and re-ran all 12 monitored
+invocations. Every other tool's rows reproduced their published numbers
+exactly, which is the determinism claim demonstrated again on this new day;
+their tables above are simultaneously the retained originals and the fresh
+rerun. residoo 0.3.1, same harness, same rules of scoring:
+
+| class | sites | residoo 0.3.0 (retained above) | residoo 0.3.1 | best other tool |
+|---|---|---|---|---|
+| transcript-plain | 24 | 21/24 (88%) | **23/24 (96%)** | 22/24 AgentSweep |
+| agent-config-plain | 3 | 1/3 (33%) | **3/3 (100%)** | 3/3 (five tools) |
+| transcript-json-nested | 6 | 5/6 (83%) | **6/6 (100%)** | 6/6 AgentSweep |
+| transcript-echo | 12 | 12/12 (100%) | **12/12 (100%)** | 12/12 gitleaks, AgentSweep |
+| transcript-b64 (hard class) | 5 | 0/5 (0%) | **5/5 (100%)** | 5/5 gitleaks |
+| transcript-split (hard class) | 6 | 1/6 (17%) | **6/6 (100%)** | 3/6 detect-secrets |
+| distinct credentials, headline classes only | | 31/37 (84%) | **36/37 (97%)** | 32/34 (94%) AgentSweep |
+| distinct credentials, all claimed classes | | 32/45 (71%) | **44/45 (98%)** | 33/42 (79%) AgentSweep |
+| suppress/placeholder flagged (of 10) | | 3 | **0** | 0 (gitleaks, whatileaked, TruffleHog) |
+| chaff flagged (of 45) | | 0 | **0** | |
+| findings matching nothing planted | | 0 | **0** | |
+| precision including suppress FP | | 93% | **100%** | |
+
+The one remaining miss is the same bearer-header site 0.3.0 missed
+(per-family bearer-header 1/2): an Authorization-header shape residoo's
+bearer rule does not cover. It is left on the table, named, rather than
+patched by a corpus-shaped rule, which is exactly the line this section is
+drawing. Wall time in this rerun's window: residoo 0.3.1 at 0.50s, in the
+same band as gitleaks (0.57s) and Betterleaks (0.54s) under the same load;
+not comparable to the 21-second window's absolute times above. Egress:
+none-observed, both layers armed, positive control re-passed first.
+
+One more thing the corpus could not have taught: the first real-machine run
+of the merged 0.3.1 engine crashed on a 7MB single transcript line (V8's
+regex backtrack stack overflows even on a plain character-class quantifier
+at that scale), so the base64 candidate finder shipped as a hand-rolled
+single-pass character scan instead of a regex. A fix tuned to the corpus
+would never have met that line.
 
 ## Egress during the scan (the second axis)
 
