@@ -19,15 +19,28 @@ const { createInterface } = require("readline/promises");
  * Bitwarden-CLI-hijack write-up, StepSecurity's Nx Console analysis, the
  * keyv/Shai-Hulud reports) name several of the paths below verbatim.
  *
- * SCOPE — home-level only, and that limitation is real, not rhetorical:
- * project-level configs (`.mcp.json`, `.claude/settings.json`,
- * `.cursor/rules/`, `.vscode/tasks.json`, per-repo CLAUDE.md/AGENTS.md —
- * the files Miasma actually planted in cloned repos) live inside arbitrary
- * repositories this tool has no way to enumerate from a home directory.
- * A clean report from this source therefore says nothing about any
- * project's own config files. v1 ships the home-level set because those
- * paths are fixed and verifiable; the project-level gap is stated here
- * rather than papered over.
+ * SCOPE — fixed home-level paths, plus project-level Claude Code configs
+ * reachable through the agent's own breadcrumbs. Project configs live
+ * inside arbitrary repositories that no home-level scanner can enumerate
+ * by walking a directory tree — but the agent itself records every project
+ * root it has been used in, at home level: `~/.claude.json` keeps a
+ * top-level `projects` map keyed by absolute project path (vendor-
+ * documented per-project state), and every transcript under
+ * `~/.claude/projects/<slug>/` carries the project's absolute path in its
+ * records' `cwd` field (vendor JSONL schema). Following those recorded
+ * roots to the vendor-FIXED per-project config filenames (`.mcp.json`,
+ * `.claude/settings.json`, `.claude/settings.local.json` — the exact
+ * files GitGuardian measured 24k secrets in and Lakera found shipped in
+ * npm packages) is a general mechanism, not path guessing: nothing is
+ * discovered by scanning repositories, only by resolving what the agent
+ * already wrote down. Limits, stated: a machine whose agent state was
+ * wiped yields no roots (discovery degrades to absence, the same
+ * information a human reading the state would have); other agents'
+ * project-level configs (`.cursor/rules/`, `.vscode/tasks.json`, per-repo
+ * CLAUDE.md/AGENTS.md — the files Miasma actually planted) stay
+ * uncovered until their home-level state formats are verified to the same
+ * bar; and a clean report still says nothing about repositories the agent
+ * was never pointed at.
  *
  * PER-PATH VERIFICATION (per CONTRIBUTING.md's no-guessed-paths rule —
  * "real install" below means the populated machine this source was built
@@ -96,8 +109,12 @@ const { createInterface } = require("readline/promises");
  *    Bitwarden-CLI target list.
  *
  * DELIBERATELY NOT READ, and why:
- *  - `~/.claude/projects/**` — claude-code.js's territory. Overlapping it
- *    would double-report every finding. (Named side effect: a
+ *  - `~/.claude/projects/**` AS SCAN CONTENT — claude-code.js's territory;
+ *    overlapping it would double-report every finding. The project-root
+ *    discovery below does open transcripts, but only to read the `cwd`
+ *    field out of the first records (a bounded probe, nothing from the
+ *    content is ever reported), which indexes projects without scanning
+ *    a single transcript line here. (Named side effect: a
  *    `projects/<slug>/memory/MEMORY.md` is covered by NEITHER source
  *    today — a real gap that belongs to the transcript source's scope
  *    discussion, recorded here so it isn't mistaken for covered.)
@@ -257,9 +274,176 @@ function* statIfPresent(p) {
   yield { file: p, mtimeMs: lst.mtimeMs, sizeBytes: lst.size, broken: false };
 }
 
-/** Yield { file, mtimeMs, sizeBytes, broken } for every candidate present. */
+// ── project-level config discovery ──────────────────────────────────────────
+//
+// The per-project config filenames are vendor-fixed (Claude Code's own docs:
+// project-scope MCP servers in `.mcp.json`, shared settings in
+// `.claude/settings.json`, local settings in `.claude/settings.local.json`);
+// what varies per machine is only WHERE the project roots are, and the agent
+// records exactly that in home-level state. Two independent record sources,
+// both vendor artifacts, both read best-effort (a failure to discover a root
+// is absence, never an error — see the SCOPE limits in the header):
+//
+//   1. `~/.claude.json`'s top-level `projects` object, keyed by absolute
+//      project path. Already a scan candidate above; parsed here a second
+//      time only for its keys.
+//   2. The `cwd` field in transcript records under
+//      `~/.claude/projects/<slug>/`. The slug itself also encodes the path,
+//      but lossily (path separators and dashes collapse into the same
+//      character), so the record field is the reliable form. Only the first
+//      few records of the first few files per slug directory are probed,
+//      bounded by bytes and line count: every session in a slug directory
+//      shares one project root by construction.
+//
+// A recorded root that no longer exists usually means the project was
+// deleted — except when the WHOLE home tree has been relocated (a mounted
+// backup, a copied disk image, HOME pinned at a snapshot for auditing), in
+// which case every recorded absolute path is stale by the same prefix. That
+// case is detected generally: a missing root whose prefix is shaped like a
+// home directory (macOS /Users/<u>, Linux /home/<u>, Windows
+// <drive>:\Users\<u>) is retried at the same home-relative path under the
+// CURRENT home, and used only if that directory actually exists. Non-default
+// home locations (e.g. /srv/data/<u>) defeat the re-rooting and are a stated
+// limit, not a silent one.
+//
+// Recorded roots are data read from transcripts and state files, which a
+// hostile transcript can influence — so nothing is ever globbed or walked
+// beneath them: only the three fixed basenames are lstat'd, reads stay
+// read-only through the same readLines every candidate gets, and anything
+// matched is redacted by the report layer like every other finding.
+
+const CLAUDE_STATE_JSON = path.join(HOME, ".claude.json");
+const CLAUDE_PROJECTS_DIR = path.join(CLAUDE_DIR, "projects");
+
+const PROJECT_CONFIG_RELPATHS = [
+  ".mcp.json",
+  path.join(".claude", "settings.json"),
+  path.join(".claude", "settings.local.json"),
+];
+
+// Probe bounds: transcript first-records are KB-scale; 256KB and 20 lines is
+// headroom, not a tuned fit. One resolving file per slug directory suffices.
+const CWD_PROBE_BYTES = 256 * 1024;
+const CWD_PROBE_LINES = 20;
+const CWD_PROBE_FILES_PER_DIR = 3;
+
+function rootsFromClaudeState() {
+  let stat;
+  try { stat = fs.statSync(CLAUDE_STATE_JSON); } catch { return []; }
+  if (!stat.isFile() || stat.size > MAX_BYTES) return [];
+  try {
+    const doc = JSON.parse(fs.readFileSync(CLAUDE_STATE_JSON, "utf-8"));
+    if (doc && typeof doc === "object" && doc.projects &&
+        typeof doc.projects === "object" && !Array.isArray(doc.projects)) {
+      return Object.keys(doc.projects).filter((k) => typeof k === "string" && k.length > 0);
+    }
+  } catch {
+    // Unparseable state: discovery loses this index, but the file itself is
+    // still scanned line-by-line as a fixed candidate above, so no content
+    // goes unexamined because of a parse failure here.
+  }
+  return [];
+}
+
+/** First string `cwd` in the leading records of one transcript, or null. */
+function firstCwdIn(file) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, "r");
+    const buf = Buffer.alloc(CWD_PROBE_BYTES);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    // A line truncated at the probe boundary simply fails JSON.parse and is
+    // skipped — the bound costs recall on that one record, never a crash.
+    const lines = buf.toString("utf-8", 0, n).split("\n", CWD_PROBE_LINES);
+    for (const line of lines) {
+      try {
+        const rec = JSON.parse(line);
+        if (rec && typeof rec === "object" && typeof rec.cwd === "string" && rec.cwd) return rec.cwd;
+      } catch { /* meta/summary records and non-JSON lines: keep looking */ }
+    }
+  } catch {
+    // Unreadable transcript: claude-code.js owns surfacing that; a root
+    // index probe must not duplicate its error reporting.
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch { /* already closed */ } }
+  }
+  return null;
+}
+
+function rootsFromTranscriptDirs() {
+  let dirs;
+  try { dirs = fs.readdirSync(CLAUDE_PROJECTS_DIR, { withFileTypes: true }); }
+  catch { return []; }
+  const roots = [];
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue;
+    const dir = path.join(CLAUDE_PROJECTS_DIR, d.name);
+    let entries;
+    // An unlistable slug directory is not silently swallowed overall:
+    // claude-code.js's own files() walk reports that same directory as
+    // broken; this index probe just loses one root.
+    try { entries = fs.readdirSync(dir); } catch { continue; }
+    const sessions = entries.filter((n) => n.endsWith(".jsonl")).sort();
+    for (const name of sessions.slice(0, CWD_PROBE_FILES_PER_DIR)) {
+      const cwd = firstCwdIn(path.join(dir, name));
+      if (cwd) { roots.push(cwd); break; }
+    }
+  }
+  return roots;
+}
+
+// Default home-directory shapes for the three platforms Claude Code ships
+// on. Anchored and existence-checked, never a rewrite of arbitrary paths.
+const HOME_SHAPED_PREFIX = /^(?:\/(?:Users|home)\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)(?=[\\/]|$)/;
+
+/** Resolve one recorded project root to an existing directory, or null. */
+function resolveRecordedRoot(recorded) {
+  try { if (fs.statSync(recorded).isDirectory()) return recorded; } catch { /* fall through to re-rooting */ }
+  const m = HOME_SHAPED_PREFIX.exec(recorded);
+  if (!m) return null;
+  const rest = recorded.slice(m[0].length).split(/[\\/]+/).filter(Boolean);
+  const rehomed = rest.length === 0 ? HOME : path.join(HOME, ...rest);
+  try { if (fs.statSync(rehomed).isDirectory()) return rehomed; } catch { /* relocated copy absent too */ }
+  return null;
+}
+
+/**
+ * Yield candidate entries for every discovered project root's fixed config
+ * filenames, deduplicated against paths already yielded (a recorded root
+ * that resolves to the home directory itself would otherwise re-yield
+ * `~/.claude/settings.json`). Sorted for deterministic output across runs —
+ * readdir order is not.
+ */
+function* projectConfigCandidates(seenResolved) {
+  const recorded = new Set([...rootsFromClaudeState(), ...rootsFromTranscriptDirs()]);
+  const resolved = new Set();
+  for (const r of recorded) {
+    const root = resolveRecordedRoot(r);
+    if (root) resolved.add(path.resolve(root));
+  }
+  for (const root of [...resolved].sort()) {
+    for (const rel of PROJECT_CONFIG_RELPATHS) {
+      const p = path.join(root, rel);
+      const key = path.resolve(p);
+      if (seenResolved.has(key)) continue;
+      seenResolved.add(key);
+      yield* statIfPresent(p);
+    }
+  }
+}
+
+/**
+ * Yield { file, mtimeMs, sizeBytes, broken } for every candidate present:
+ * the fixed home-level paths first, then per-project configs at the roots
+ * the agent's own state records (see the discovery block above).
+ */
 function* files() {
-  for (const p of CANDIDATES) yield* statIfPresent(p);
+  const seen = new Set();
+  for (const p of CANDIDATES) {
+    seen.add(path.resolve(p));
+    yield* statIfPresent(p);
+  }
+  yield* projectConfigCandidates(seen);
 }
 
 /**

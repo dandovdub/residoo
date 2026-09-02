@@ -26,8 +26,26 @@ const PATTERNS = [
     re: /\bglpat-[A-Za-z0-9_-]{20,}\b/g },
   { id: "slack_token", label: "Slack token", confidence: "high",
     re: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g },
-  { id: "stripe_key", label: "Stripe API key", confidence: "high",
+  { id: "stripe_key", label: "Stripe API key (live mode)", confidence: "high",
     re: /\b(sk|rk)_live_[A-Za-z0-9]{20,}\b/g },
+  // The sandbox-mode twin of the rule above, same body charset and the same
+  // 20-char floor. Format verified against two production detectors plus the
+  // vendor (2026-09-02): gitleaks' stripe-access-token rule matches
+  // (sk|rk)_(test|live|prod)_[a-zA-Z0-9]{10,99}; trufflehog's Stripe
+  // detector is [rs]k_live_[a-zA-Z0-9]{20,247} with an explicit
+  // "doesn't include test keys" comment (a scope choice, not a format
+  // claim); and Stripe's own docs (docs.stripe.com/keys) name sk_test_ and
+  // rk_test_ as the sandbox secret/restricted prefixes. A separate rule
+  // rather than a widened live regex so a report can say WHICH mode leaked
+  // and rotation guidance can differ. A test key in a transcript is a real
+  // finding, not noise: the prefix is vendor-unique, the key grants full
+  // API access to the sandbox account (Stripe's docs: a secret key has
+  // unrestricted permissions on all Stripe APIs in its mode, and sandbox
+  // mode exposes ALL of the account's keys to whoever can call it), and a
+  // transcript that pastes sk_test today is the same workflow that will
+  // paste sk_live at go-live.
+  { id: "stripe_test_key", label: "Stripe API key (test mode)", confidence: "high",
+    re: /\b(sk|rk)_test_[A-Za-z0-9]{20,}\b/g },
   // The negative lookahead keeps this rule mutually exclusive with anthropic_key
   // and openrouter_key below — without it, "sk-ant-..." or "sk-or-v1-..." match
   // BOTH this pattern and the more specific one, and get reported twice under

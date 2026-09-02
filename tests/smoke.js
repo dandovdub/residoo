@@ -66,6 +66,11 @@ async function main() {
   check("Notion token matched, only by notion_token", matchesOnly("notion_token", "secret_" + "a".repeat(43)));
   check("Linear key matched, only by linear_key", matchesOnly("linear_key", "lin_api_" + "a".repeat(40)));
   check("Sentry token matched, only by sentry_token", matchesOnly("sentry_token", "sntryu_" + "a".repeat(64)));
+  // Stripe live vs test are separate rules on purpose (reports must say
+  // which mode leaked), so each key kind must match exactly its own rule.
+  check("Stripe live key matched, only by stripe_key", matchesOnly("stripe_key", "sk_live_" + "a".repeat(24)));
+  check("Stripe test secret key matched, only by stripe_test_key", matchesOnly("stripe_test_key", "sk_test_" + "a".repeat(24)));
+  check("Stripe test restricted key matched, only by stripe_test_key", matchesOnly("stripe_test_key", "rk_test_" + "a".repeat(24)));
 
   // ── sealcrypto: round-trip, wrong passphrase, tamper ──────────────────────
   const { sealFile, unsealFile, sealBuffer, unsealBuffer } = require("../src/sealcrypto");
@@ -349,6 +354,73 @@ async function main() {
     let filesThrew = false;
     try { for (const _ of agentConfigs.files()) { /* drain */ } } catch { filesThrew = true; }
     check("agent-configs files() does not throw when walked", !filesThrew);
+  }
+
+  // ── agent-configs: project-level config discovery end to end ──────────────
+  // The general mechanism under test: project roots are discovered from the
+  // agent's OWN home-level records (the `projects` map in ~/.claude.json,
+  // and the `cwd` field in transcript records), then only the vendor-fixed
+  // per-project config filenames beneath them are scanned. Two roots, one
+  // per discovery route, and the re-rooting route uses a FOREIGN home
+  // prefix to prove the relocated-home resolution (a mounted backup or a
+  // HOME pinned at a copied tree) rather than depending on recorded paths
+  // existing verbatim. Values are synthetic and shaped like the general
+  // leak (a token in a config env block), nothing more specific.
+  {
+    const { spawnSync } = require("child_process");
+    const dHome = path.join(tmp, "cfgdisc-home");
+    const dCwd = path.join(tmp, "cfgdisc-cwd");
+    fs.mkdirSync(dCwd, { recursive: true });
+
+    // Route 1: root recorded in ~/.claude.json's projects map, path exists
+    // verbatim. Config shape: project .mcp.json MCP server env block.
+    const rootA = path.join(dHome, "work", "alpha");
+    fs.mkdirSync(rootA, { recursive: true });
+    fs.writeFileSync(path.join(dHome, ".claude.json"),
+      JSON.stringify({ numStartups: 3, projects: { [rootA]: { allowedTools: [] } } }, null, 2));
+    fs.writeFileSync(path.join(rootA, ".mcp.json"), JSON.stringify({
+      mcpServers: { tracker: { command: "node", args: ["mcp.js"], env: { GITHUB_TOKEN: "ghp_" + "e".repeat(36) } } },
+    }, null, 2));
+
+    // Route 2: root recorded ONLY as a transcript record's cwd, under a home
+    // prefix that does not exist on this machine — must resolve via
+    // re-rooting to the same home-relative path under the pinned HOME.
+    // Config shape: project .claude/settings.local.json env block (the
+    // Lakera leak shape).
+    const rootB = path.join(dHome, "work", "beta");
+    fs.mkdirSync(path.join(rootB, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(rootB, ".claude", "settings.local.json"),
+      JSON.stringify({ env: { GITLAB_TOKEN: "glpat-" + "f".repeat(20) } }, null, 2));
+    const slugDir = path.join(dHome, ".claude", "projects", "-Users-someoneelse-work-beta");
+    fs.mkdirSync(slugDir, { recursive: true });
+    fs.writeFileSync(path.join(slugDir, "11111111-2222-4333-8444-555555555555.jsonl"),
+      // First line is a cwd-less meta record on purpose: the probe must
+      // keep reading past it, not give up on the first record.
+      JSON.stringify({ type: "summary", summary: "clean up the beta service" }) + "\n" +
+      JSON.stringify({ type: "user", cwd: "/Users/someoneelse/work/beta", message: { content: "run the tests" } }) + "\n");
+
+    const disc = spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--json"], {
+        cwd: dCwd,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          HOME: dHome, USERPROFILE: dHome,
+          XDG_CONFIG_HOME: path.join(dHome, ".config"), XDG_DATA_HOME: path.join(dHome, ".local", "share"),
+          GEMINI_CLI_HOME: dHome, CODEX_HOME: path.join(dHome, ".codex"),
+        },
+      });
+    let pd = null;
+    try { pd = JSON.parse(disc.stdout); } catch { /* checked below */ }
+    check("config discovery e2e emits valid JSON", pd !== null);
+    check("config discovery finds the token in a project .mcp.json via the state-recorded root",
+      !!pd && pd.findings.some((f) => f.rule === "github_pat" && f.source === "agent-configs" && f.file === ".mcp.json"));
+    check("config discovery finds the token in a project settings.local.json via a re-rooted transcript cwd",
+      !!pd && pd.findings.some((f) => f.rule === "gitlab_pat" && f.source === "agent-configs" && f.file === "settings.local.json"));
+    check("config discovery output never contains the raw planted values",
+      !disc.stdout.includes("e".repeat(36)) && !disc.stdout.includes("f".repeat(20)));
+    check("config discovery reports no unreadable files on the clean fixture",
+      !!pd && pd.summary.unreadableFiles.length === 0);
   }
 
   // ── integrity: campaign-signature detection on a synthetic HOME/CWD ───────
