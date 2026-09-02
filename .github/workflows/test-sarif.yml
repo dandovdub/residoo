@@ -28,6 +28,18 @@ jobs:
       - name: Plant a synthetic, pattern-true finding (never committed)
         run: |
           echo 'AWS_ACCESS_KEY_ID=AKIASARIFTESTFAKEKEY' > .env.sarif-test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: DEBUG diagnose npx failure
+        run: |
+          echo "node: $(node --version)"
+          echo "npm: $(npm --version)"
+          which node npm npx
+          echo "--- npm config list ---"
+          npm config list
+          echo "--- direct npx attempt, verbose ---"
+          NPM_CONFIG_LOGLEVEL=verbose npx --yes "residoo@0.3.5" scan --project . 2>&1 || echo "exit code: $?"
       - name: Run residoo with SARIF enabled
         uses: dandovdub/residoo@v0.3.5
         with:
