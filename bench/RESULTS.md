@@ -278,10 +278,18 @@ before any scanning (verbatim in `results/raw/ggshield.txt`).
 Order of events, because it is the whole credibility argument: the benchmark
 and every 0.3.0 number above were published first (commits 16c911f and
 18df770), and residoo was improved second, in public, against the classes the
-benchmark showed it losing. The 0.3.0 rows throughout this document are
-retained unchanged; this section is the new measurement. Every fix is a
-general mechanism whose design and limits are documented in the source, none
-is keyed to this corpus's generator, and none reads planted values:
+benchmark showed it losing. One dated exception, on the record because a
+`git log --all` shows it anyway: the vendor-example suppression layer
+(commit 4fc76f0) was written alongside the benchmark, before v1 was
+committed; every other 0.3.1 mechanism postdates publication. The 0.3.1 code
+this rerun measures is commits e382476, cc19835, 4fc76f0, 1f8e921, and
+9e64f6f (the last being post-review hardening: a greedy-extension guard on
+the boundary join, per-line crash containment, and base64 candidate
+splitting at padding), pinned here the way the 0.3.0 run was pinned to
+16c911f. The 0.3.0 rows throughout this document are retained unchanged;
+this section is the new measurement. Every fix is a general mechanism whose
+design and limits are documented in the source, none is keyed to this
+corpus's generator, and none reads planted values:
 
 - base64 decode-then-rescan (`src/decode.js`): locate base64/base64url runs
   per line, wrap-break tolerant (RFC 2045 style wrapping, including wrap
@@ -292,8 +300,14 @@ is keyed to this corpus's generator, and none reads planted values:
 - split-line boundary join (`src/decode.js`): project each line to its
   free-text payload (the longest JSON string value, a schema-agnostic
   property of message-wrapping records), join tail and head windows of
-  adjacent lines, credit only matches that straddle the seam. Limits stated
-  in code: two-way splits only, longest-string assumption.
+  adjacent lines, credit only matches that straddle the seam, and drop a
+  straddling match that merely extends a complete match ending flush at the
+  seam (the greedy-extension guard: without it, any open-ended rule
+  fabricates token-plus-neighbor chimera values on real transcripts, which
+  is exactly what the first real-machine run of the unguarded join did).
+  Limits stated in code: two-way splits only, longest-string assumption,
+  and a split whose first fragment is by itself a complete match of the
+  same rule is reported as that fragment rather than reconstructed.
 - Stripe test-mode keys as their own rule (`src/patterns.js`), with the
   vendor citations (gitleaks and Stripe's own docs treat `sk_test_` as
   reportable; TruffleHog's live-only scope is quoted as a scope choice).
@@ -303,17 +317,21 @@ is keyed to this corpus's generator, and none reads planted values:
   home when recorded under a foreign one; only vendor-fixed per-project
   config filenames are read.
 - Suppression generalized (`src/scan.js`): vendor-documented example
-  literals by exact match, plus a zero-entropy check (a value ending in a
-  run of 12+ identical characters is no vendor's key material); both are
-  value properties and therefore apply identically to raw, decoded, and
-  boundary-joined findings.
+  literals by exact match (now including Stripe's two published sample test
+  keys, verified against Stripe's own docs and repositories), plus a
+  zero-entropy check (a value ending in a run of 12+ identical characters
+  is no vendor's key material); both are value properties and therefore
+  apply identically to raw, decoded, and boundary-joined findings.
 
 The rerun regenerated the corpus (byte-identical by-family summary),
 re-passed the egress positive control, and re-ran all 12 monitored
-invocations. Every other tool's rows reproduced their published numbers
-exactly, which is the determinism claim demonstrated again on this new day;
-their tables above are simultaneously the retained originals and the fresh
-rerun. residoo 0.3.1, same harness, same rules of scoring:
+invocations. Every other tool's recall and precision rows reproduced their
+published numbers cell for cell, which is the determinism claim
+demonstrated again; their tables above are simultaneously the retained
+originals and the fresh rerun. (Single-run wall times and TruffleHog's
+default-mode verification attempt count, 48 in this window against the 50
+above, vary run to run and are labeled as indicative wherever they
+appear.) residoo 0.3.1, same harness, same rules of scoring:
 
 | class | sites | residoo 0.3.0 (retained above) | residoo 0.3.1 | best other tool |
 |---|---|---|---|---|
@@ -322,7 +340,7 @@ rerun. residoo 0.3.1, same harness, same rules of scoring:
 | transcript-json-nested | 6 | 5/6 (83%) | **6/6 (100%)** | 6/6 AgentSweep |
 | transcript-echo | 12 | 12/12 (100%) | **12/12 (100%)** | 12/12 gitleaks, AgentSweep |
 | transcript-b64 (hard class) | 5 | 0/5 (0%) | **5/5 (100%)** | 5/5 gitleaks |
-| transcript-split (hard class) | 6 | 1/6 (17%) | **6/6 (100%)** | 3/6 detect-secrets |
+| transcript-split (hard class) | 6 | 1/6 (17%) | **5/6 (83%, values 3/3)** | 3/6 detect-secrets |
 | distinct credentials, headline classes only | | 31/37 (84%) | **36/37 (97%)** | 32/34 (94%) AgentSweep |
 | distinct credentials, all claimed classes | | 32/45 (71%) | **44/45 (98%)** | 33/42 (79%) AgentSweep |
 | suppress/placeholder flagged (of 10) | | 3 | **0** | 0 (gitleaks, whatileaked, TruffleHog) |
@@ -330,21 +348,37 @@ rerun. residoo 0.3.1, same harness, same rules of scoring:
 | findings matching nothing planted | | 0 | **0** | |
 | precision including suppress FP | | 93% | **100%** | |
 
-The one remaining miss is the same bearer-header site 0.3.0 missed
-(per-family bearer-header 1/2): an Authorization-header shape residoo's
-bearer rule does not cover. It is left on the table, named, rather than
-patched by a corpus-shaped rule, which is exactly the line this section is
-drawing. Wall time in this rerun's window: residoo 0.3.1 at 0.50s, in the
-same band as gitleaks (0.57s) and Betterleaks (0.54s) under the same load;
-not comparable to the 21-second window's absolute times above. Egress:
-none-observed, both layers armed, positive control re-passed first.
+The one remaining distinct-credential miss is the same bearer-header site
+0.3.0 missed (per-family bearer-header 1/2): an Authorization-header shape
+residoo's bearer rule does not cover. It is left on the table, named,
+rather than patched by a corpus-shaped rule, which is exactly the line this
+section is drawing. The split row's 5/6 is the greedy-extension guard's
+stated cost paid in the open: one split site's first fragment is by itself
+a complete match of its rule, so the raw pass reports the fragment on its
+own line and the guard refuses the straddle (the value is still found and
+counted; the second exposure site is not credited). The guard is kept
+because its absence is far worse than one uncredited site, per the next
+paragraph. Wall time in this rerun's window: residoo 0.3.1 at 0.41s, in
+the same band as gitleaks (0.59s) and Betterleaks (0.58s) under the same
+load; not comparable to the 21-second window's absolute times above.
+Egress: none-observed, both layers armed, positive control re-passed first.
 
-One more thing the corpus could not have taught: the first real-machine run
-of the merged 0.3.1 engine crashed on a 7MB single transcript line (V8's
-regex backtrack stack overflows even on a plain character-class quantifier
-at that scale), so the base64 candidate finder shipped as a hand-rolled
-single-pass character scan instead of a regex. A fix tuned to the corpus
-would never have met that line.
+Three more things the corpus could not have taught, all met on real
+machines and none visible in a 45/45-style score: (1) the first
+real-machine run of the merged 0.3.1 engine crashed on a 7MB single
+transcript line (V8's regex backtrack stack overflows even on a plain
+character-class quantifier at that scale), so the base64 candidate finder
+shipped as a hand-rolled single-pass character scan instead of a regex;
+(2) the unguarded boundary join scored 6/6 on this corpus's split class
+while fabricating 32 chimera findings (complete tokens greedily extended
+into the next line's text) on the first real machine it touched; the
+greedy-extension guard above exists because review caught that on real
+data, and this rerun's 5/6 is the honest post-guard number; (3) the same
+backtrack overflow lives in rule regexes themselves when a vendor prefix
+precedes a multi-megabyte same-charset run, so one unmatched line now
+degrades to a visible per-file flag instead of aborting the scan and
+discarding every finding already collected. A fix tuned to the corpus
+would never have met any of the three.
 
 ## Egress during the scan (the second axis)
 
