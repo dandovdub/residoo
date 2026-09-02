@@ -45,17 +45,22 @@
 //    than half-done.
 //  - One decode level only: we do not recursively decode base64-in-base64.
 
-// Characters that can appear in a base64 or base64url run.
-const B64_CHARS = "A-Za-z0-9+/=_\\-";
-// Wrap separators between chunks of one logical blob are line breaks (CR, LF,
+// A run is made of characters that can appear in base64 or base64url:
+// A-Z a-z 0-9 + / = _ - (see isB64Code). Wrap separators between chunks of one logical blob are line breaks (CR, LF,
 // TAB) — the wrap whitespace that base64 line-wrapping uses. Spaces are NOT a
 // separator: base64 wrapping never uses them, and merging on spaces would
 // splice ordinary prose words together. When wrapped base64 is embedded in a
 // JSON string the line breaks arrive as the escape sequences \n \r \t (two
 // chars, backslash+letter); normalizeEscapes() turns those into real line
 // breaks first, so the escape's letter can never leak into a run.
-const B64_CHUNK = "[" + B64_CHARS + "]{4,}";
-const B64_CANDIDATE = new RegExp(B64_CHUNK + "(?:[\\r\\n\\t]+" + B64_CHUNK + ")*", "g");
+// Candidate runs are located by a hand-rolled single-pass character scan,
+// NOT a regex. The obvious regex forms both fail on real data: a repeated
+// group (chunk (sep chunk)*) recurses per repetition, and even a plain
+// character-class quantifier pushes a backtrack frame per matched character
+// in V8 — either one overflows the call stack on the multi-megabyte single
+// lines that real transcripts contain (observed on a 7MB tool_result line).
+// A char-code loop is O(n) with O(1) stack, whatever the line looks like.
+const B64_MIN_CHUNK = 4;
 
 const B64_MIN_CHARS = 24;          // fewer chars cannot hide a real credential
 const B64_MAX_ENCODED = 90000;     // ~64KB decoded ceiling; skip bigger runs
@@ -67,9 +72,53 @@ function normalizeEscapes(line) {
   return line.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "\t");
 }
 
-/** Strip the line-break separators from a wrapped candidate. */
-function cleanCandidate(raw) {
-  return raw.replace(/[\r\n\t]+/g, "");
+/**
+ * Chunk runs merged into logical candidates: consecutive chunks whose gap
+ * consists solely of wrap line breaks are one wrapped blob (its separators
+ * dropped, exactly as any base64 decoder ignores whitespace); any other gap
+ * (a space, prose, punctuation) ends the candidate. Iterative on purpose —
+ * see the note above B64_CHUNK_RE.
+ */
+function isB64Code(c) {
+  return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) ||
+    c === 43 || c === 47 || c === 61 || c === 95 || c === 45; // + / = _ -
+}
+
+function b64Candidates(norm) {
+  const out = [];
+  let current = null;   // accumulated candidate (chunks joined, separators dropped)
+  let runStart = -1;    // start of the b64 run in progress, -1 when not in one
+  let gapClean = true;  // gap since the last chunk held only \r \n \t
+  const n = norm.length;
+  for (let i = 0; i <= n; i++) {
+    const c = i < n ? norm.charCodeAt(i) : -1; // one virtual terminator flushes the last run
+    if (c !== -1 && isB64Code(c)) {
+      if (runStart < 0) runStart = i;
+      continue;
+    }
+    if (runStart >= 0) {
+      const chunk = norm.slice(runStart, i);
+      runStart = -1;
+      if (chunk.length >= B64_MIN_CHUNK) {
+        if (current !== null && gapClean) current += chunk;
+        else {
+          if (current !== null) {
+            out.push(current);
+            if (out.length >= B64_MAX_CANDIDATES) return out; // pathological line stays bounded
+          }
+          current = chunk;
+        }
+        gapClean = true;
+      } else {
+        // A sub-minimum run is gap content, not a chunk: it breaks the wrap.
+        gapClean = false;
+      }
+    }
+    // Line breaks (CR, LF, TAB) keep a wrap gap clean; anything else dirties it.
+    if (c !== -1 && c !== 10 && c !== 13 && c !== 9) gapClean = false;
+  }
+  if (current !== null) out.push(current);
+  return out;
 }
 
 /**
@@ -120,13 +169,8 @@ function findDecodedMatches(line, rules) {
   const out = [];
   const seen = new Set();
   const norm = normalizeEscapes(line);
-  let cand;
-  let count = 0;
-  B64_CANDIDATE.lastIndex = 0;
-  while ((cand = B64_CANDIDATE.exec(norm)) !== null) {
-    if (cand.index === B64_CANDIDATE.lastIndex) B64_CANDIDATE.lastIndex++;
-    if (++count > B64_MAX_CANDIDATES) break;
-    const decoded = decodeToText(cleanCandidate(cand[0]));
+  for (const cand of b64Candidates(norm)) {
+    const decoded = decodeToText(cand);
     if (!decoded) continue;
     for (const rule of rules) {
       rule.re.lastIndex = 0;

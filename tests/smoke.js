@@ -266,6 +266,19 @@ async function main() {
       wholeFinds.length === 1);
     check("near-split: the single finding carries no split marker", wholeFinds.length === 1 && !wholeFinds[0].spanLines);
 
+    // Robustness: a multi-megabyte single line containing an enormous
+    // base64-alphabet run. The first shipped candidate finder was a regex and
+    // overflowed the engine's backtrack stack on exactly this shape from a
+    // real transcript (a 7MB tool_result line); the character-scan finder
+    // must survive it AND still decode a normal-sized planted blob on the
+    // same line.
+    const hugeRun = "A".repeat(3 * 1000 * 1000); // far over B64_MAX_ENCODED, skipped as a candidate
+    const hugeB64 = Buffer.from("AWS_ACCESS_KEY_ID=" + plantedAwsKey + "\n").toString("base64");
+    const hugeRes = await scanOneFile("huge.jsonl",
+      JSON.stringify({ message: { content: "big blob " + hugeRun + " then " + hugeB64 + " end" } }) + "\n");
+    check("huge-line: multi-megabyte base64 run does not crash and the normal blob still decodes",
+      hugeRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.encoding === "base64"));
+
     // Interaction: suppression is a property of the VALUE, so it must apply
     // identically to a value recovered by decoding or boundary joining — a
     // base64-wrapped vendor-doc example is the same non-secret as a plain one.

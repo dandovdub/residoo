@@ -48,10 +48,14 @@ const CONTEXT_WINDOW = 40;
  * heuristic it also works where no surrounding text exists: a placeholder
  * that arrives base64-encoded or split across lines is still zero-entropy
  * after decoding/joining. gitleaks ships equivalent repeated-character
- * allowlists. Same policy as every suppression: counted, re-includable
- * with --include-suppressed, never silently dropped.
+ * allowlists. Anchored to the END of the value on purpose: an INTERIOR run
+ * can occur inside a real token (base64 of a zero-byte run is a run of
+ * "A"s, so a genuine JWT payload can contain one), but real key material
+ * never ends in one, and prefix+XXXX placeholders always do. Same policy
+ * as every suppression: counted, re-includable with --include-suppressed,
+ * never silently dropped.
  */
-const ZERO_ENTROPY_BODY_RE = /(.)\1{11,}/;
+const ZERO_ENTROPY_BODY_RE = /(.)\1{11,}$/;
 
 const VENDOR_EXAMPLE_VALUES = new Set([
   "AKIAIOSFODNN7EXAMPLE",
