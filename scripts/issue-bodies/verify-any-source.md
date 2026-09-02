@@ -1,0 +1,3 @@
+41 of residoo's 43 sources are "multi-source-corroborated-but-unverified" (see README.md's "Sources supported today" for the full list and `src/sources/index.js` for the registry). Only Claude Code and the Claude-family config paths have been checked against a real, populated installation.
+
+If you use any tool on that list, whether or not there's already an open issue naming it, a real-install report is welcome. Run the scanner from this repo, confirm the file counts and findings look right for what's actually on your disk, and comment here or open a new issue with your findings. See CONTRIBUTING.md for the exact bar.
