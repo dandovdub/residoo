@@ -28,29 +28,8 @@ jobs:
       - name: Plant a synthetic, pattern-true finding (never committed)
         run: |
           echo 'AWS_ACCESS_KEY_ID=AKIASARIFTESTFAKEKEY' > .env.sarif-test
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: DEBUG diagnose npx failure
-        run: |
-          echo "node: $(node --version)"
-          echo "npm: $(npm --version)"
-          which node npm npx
-          echo "--- registry connectivity ---"
-          curl -sI https://registry.npmjs.org/residoo | head -5 || echo "curl failed: $?"
-          echo "--- npm view (no install) ---"
-          npm view residoo@0.3.5 version dist.tarball 2>&1 || echo "npm view failed: $?"
-          echo "--- npx with NO --yes, non-interactive stdin ---"
-          npx "residoo@0.3.5" scan --project . < /dev/null 2>&1 || echo "exit code: $?"
-          echo "--- npm install -g then run directly ---"
-          npm install -g "residoo@0.3.5" 2>&1 || echo "install failed: $?"
-          which residoo 2>&1 || echo "not on PATH after global install"
-          residoo --help 2>&1 | head -3 || echo "direct run failed: $?"
-          npm uninstall -g residoo 2>&1 || true
-          echo "--- npx --yes, one more time, silly loglevel ---"
-          NPM_CONFIG_LOGLEVEL=silly npx --yes "residoo@0.3.5" scan --project . 2>&1 | tail -60 || echo "exit code: $?"
-      - name: Run residoo with SARIF enabled
-        uses: dandovdub/residoo@v0.3.5
+      - name: Run residoo with SARIF enabled (testing the npm-install-g fix on main, not yet a tagged release)
+        uses: dandovdub/residoo@main
         with:
           fail-on-find: "false"
           sarif: "true"

@@ -78,7 +78,7 @@ The scan itself still runs and still gates on `fail-on-find` exactly as without 
 
 ## Plain workflow, no action
 
-If you prefer not to depend on the action, the whole integration is one command:
+If you prefer not to depend on the action, the whole integration is two commands:
 
 ```yaml
 name: residoo
@@ -95,5 +95,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npx --yes residoo@0.3.5 scan --project . --fail-on-find
+      - run: npm install -g residoo@0.3.5 && residoo scan --project . --fail-on-find
 ```

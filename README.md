@@ -330,7 +330,10 @@ repos:
       - id: residoo
 ```
 
-Or with no integration at all: `npx --yes residoo scan --project . --fail-on-find`.
+Or with no integration at all: `npm install -g residoo && residoo scan --project . --fail-on-find`
+(more reliable in CI than `npx --yes`, which failed consistently in real
+GitHub Actions runs while working fine locally; see the design note at the
+top of `action.yml`).
 Exit codes, inputs, and exactly what project mode does and does not see are
 documented in [docs/ci.md](docs/ci.md).
 

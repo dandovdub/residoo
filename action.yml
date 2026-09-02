@@ -3,12 +3,24 @@
 # (composite actions: name/description/runs required, every run step needs an
 # explicit shell, inputs are read via the inputs context).
 #
-# Version pinning design: the CLI is fetched with "npx --yes residoo@VERSION"
-# rather than run from the checked-out action tree, so the workflow runs the
-# exact bits published to npm, the same command a developer runs locally. The
-# action tag and the CLI version move together: dandovdub/residoo@v0.3.5
-# defaults to residoo 0.3.5 on npm. Override the version input only if you
-# need to split them.
+# Version pinning design: the CLI is fetched with "npm install -g
+# residoo@VERSION" rather than run from the checked-out action tree, so the
+# workflow runs the exact bits published to npm, the same command a
+# developer runs locally. The action tag and the CLI version move together:
+# dandovdub/residoo@v0.3.5 defaults to residoo 0.3.5 on npm. Override the
+# version input only if you need to split them.
+#
+# "npm install -g", not "npx --yes": verified directly in a real GitHub
+# Actions run (ubuntu-latest, actions/setup-node@v4's Node 20, npm 10.8.2)
+# that "npx --yes residoo@VERSION ..." fails there with "residoo: not
+# found" (exit 127), even though the registry is fully reachable (npm view
+# succeeds) and "npm install -g residoo@VERSION" followed by a direct
+# invocation works every time. npm exec's install-then-run resolution did
+# not trigger the install in that environment; the cause was not narrowed
+# further because "npm install -g" is unconditionally reliable and needs no
+# further chase. Confirmed as a real, reproducible failure of npx itself,
+# not a transient network blip: it failed identically across three separate
+# live runs before this fix.
 #
 # The npm fetch is distribution, not scanning: the scan itself makes zero
 # network calls and modifies nothing on disk.
@@ -60,6 +72,11 @@ runs:
     - uses: actions/setup-node@v4
       with:
         node-version: "20"
+    - name: Install residoo
+      shell: bash
+      env:
+        RESIDOO_VERSION: ${{ inputs.version }}
+      run: npm install -g "residoo@$RESIDOO_VERSION"
     - name: Run residoo project scan
       id: residoo
       shell: bash
@@ -73,7 +90,6 @@ runs:
       # interpolated into the script body, so a hostile value in a caller's
       # workflow expression cannot inject shell syntax into this run block.
       env:
-        RESIDOO_VERSION: ${{ inputs.version }}
         RESIDOO_PROJECT_DIR: ${{ inputs.project-dir }}
         RESIDOO_FAIL_ON_FIND: ${{ inputs.fail-on-find }}
       run: |
@@ -82,17 +98,16 @@ runs:
         if [ "$RESIDOO_FAIL_ON_FIND" = "true" ]; then
           args+=(--fail-on-find)
         fi
-        npx --yes "residoo@$RESIDOO_VERSION" "${args[@]}"
+        residoo "${args[@]}"
         echo "exit_code=$?" >> "$GITHUB_OUTPUT"
     - name: Produce SARIF
       if: inputs.sarif == 'true'
       shell: bash
       env:
-        RESIDOO_VERSION: ${{ inputs.version }}
         RESIDOO_PROJECT_DIR: ${{ inputs.project-dir }}
       run: |
         set -euo pipefail
-        npx --yes "residoo@$RESIDOO_VERSION" scan --project "$RESIDOO_PROJECT_DIR" --sarif > residoo-results.sarif
+        residoo scan --project "$RESIDOO_PROJECT_DIR" --sarif > residoo-results.sarif
     - name: Upload SARIF to GitHub code scanning
       if: inputs.sarif == 'true'
       uses: github/codeql-action/upload-sarif@v3
