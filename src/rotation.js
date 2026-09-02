@@ -76,7 +76,7 @@ const ROTATION_ORDER_ADVISORY =
 // ── rotation guidance map ───────────────────────────────────────────────────
 
 /**
- * One entry per rule id in src/patterns.js (all 35 of PATTERNS, plus the two
+ * One entry per rule id in src/patterns.js (all 36 of PATTERNS, plus the two
  * NOISY_PATTERNS ids so an --include-noisy run still renders guidance).
  * Shape: { label, rotateUrl?, consolePath?, steps: [1..3 strings],
  * revokeNote, generic? }. `generic: true` marks entries that cannot name a
@@ -173,6 +173,20 @@ const ROTATION_GUIDANCE = {
       "Update your servers with the replacement value",
     ],
     revokeNote: "Rotating with expiration Now kills the old key immediately; a scheduled rotation keeps both valid for up to 7 days for zero-downtime migration.",
+  },
+  // Same URL as stripe_key, and the same fetch check covers it (2026-09-02):
+  // docs.stripe.com/keys documents the Rotate key flow for both modes, the
+  // API keys page's sandbox/live toggle, and that sandbox mode exposes all
+  // of the account's keys to anyone who can open it.
+  stripe_test_key: {
+    label: "Stripe API key (test mode)",
+    rotateUrl: "https://docs.stripe.com/keys",
+    steps: [
+      "Dashboard > Developers > API keys, toggled to sandbox (test) mode",
+      "Overflow menu on the key > Rotate key; choose expiration Now for a compromised key",
+      "Check how the key leaked: test and live keys usually travel the same channel, so verify no live key was exposed alongside it",
+    ],
+    revokeNote: "Test mode is not harmless: the key grants full API access to the sandbox account, and its leak marks a workflow that will handle live keys the same way.",
   },
   // help.openai.com articles 5112595 and 8304786 exist (surfaced by search)
   // but the help center serves HTTP 403 to this project's fetcher, so no URL

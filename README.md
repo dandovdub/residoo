@@ -231,7 +231,7 @@ it" leaves all of that untouched. So every finding in a residoo report comes
 with the way out:
 
 - **A rotation hint per finding**, from a per-rule guidance map covering all
-  35 detection rules (plus the opt-in noisy ones). Where a rotation URL is
+  36 detection rules (plus the opt-in noisy ones). Where a rotation URL is
   shown, that exact URL was fetched and confirmed to document rotating or
   revoking that credential type; where a vendor's docs are login-walled or
   unfetchable, the report gives the console path in words instead of a link
