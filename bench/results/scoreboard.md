@@ -208,9 +208,9 @@ Per-family site recall (claimed secret classes):
 | bearer-header | 0/2 |
 | jwt | 2/2 |
 
-## residoo (residoo 0.3.2)
+## residoo (residoo 0.3.6)
 
-- wall time: 1545ms
+- wall time: 406ms
 - egress (scan-time only): **none-observed** no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window
 
 | class | kind | sites found | site recall | distinct values | value recall | false positives |
