@@ -30,6 +30,10 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
+      # OIDC trusted publishing needs npm 11.5+; Node 20 ships npm 10.x,
+      # which fails auth silently-tokenless. Pin the major, not @latest.
+      - run: npm install -g npm@11
+
       # Zero dependencies means there's nothing to install, but `npm ci`
       # still validates package.json/lockfile integrity before we publish.
       - run: npm ci
