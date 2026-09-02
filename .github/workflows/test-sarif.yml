@@ -1,0 +1,38 @@
+# Manual verification for action.yml's SARIF path (the "sarif" input and the
+# github/codeql-action/upload-sarif wiring): not exercised by ci.yml, and not
+# something to fully trust from source review and YAML validation alone.
+#
+# workflow_dispatch only, never on push/PR: this creates a real (synthetic,
+# clearly-labeled) code-scanning alert on this repo's Security tab, which is
+# a visible side effect worth keeping to an explicit, manual trigger rather
+# than running it on every commit.
+#
+# The planted finding is written to disk at runtime, never committed: a
+# fake-but-pattern-true AKIA key in a tracked file would trip GitHub's own
+# push protection on the push that added it, and shouldn't be sitting in git
+# history regardless.
+name: Test SARIF integration (manual)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  test-sarif:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Plant a synthetic, pattern-true finding (never committed)
+        run: |
+          echo 'AWS_ACCESS_KEY_ID=AKIASARIFTESTFAKEKEY' > .env.sarif-test
+      - name: Run residoo with SARIF enabled
+        uses: dandovdub/residoo@v0.3.5
+        with:
+          fail-on-find: "false"
+          sarif: "true"
+      - name: Remove the synthetic fixture
+        if: always()
+        run: rm -f .env.sarif-test
