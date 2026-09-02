@@ -122,6 +122,103 @@ async function main() {
   check("scan output is redacted", !JSON.stringify(result.findings).includes("IOSFODNN7EXAMPLE"));
   check("filesScanned counted", result.filesScanned === 1);
 
+  // ── scan: base64 decode-then-rescan + split-line boundary join ─────────────
+  // Both engine features exercised through the real scan() path. Every fixture
+  // is synthetic; the one key-shaped string is AWS's documented example id.
+  // A tiny helper that scans one in-memory JSONL file's worth of lines.
+  const scanOneFile = async (name, body) => {
+    const dir = fs.mkdtempSync(path.join(tmp, "decode-"));
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, body);
+    const src = {
+      id: () => "smoke", label: () => "Smoke", available: () => true,
+      *files() { const st = fs.statSync(file); yield { file, mtimeMs: st.mtimeMs, sizeBytes: st.size, broken: false }; },
+      async readLines(f) { return { lines: fs.readFileSync(f, "utf-8").split("\n"), status: "complete", bytesRead: fs.statSync(f).size }; },
+    };
+    return scan({ sources: [src] });
+  };
+
+  {
+    // Feature 1a: a documented-example AWS key present ONLY base64-encoded, and
+    // wrapped at 76 columns so the key straddles a wrap boundary — the decoder
+    // must reassemble the wrapped chunks (whose newlines survive as JSON \n
+    // escapes) before decoding. Found, marked base64-wrapped, redacted, and
+    // the encoded form must never leak.
+    const plain = "# provisioning env dump\nAWS_ACCESS_KEY_ID=" + docExampleKey + "\n";
+    const wrapped = (Buffer.from(plain).toString("base64").match(/.{1,76}/g) || []).join("\n");
+    const b64Line = JSON.stringify({ message: { content: "$ base64 -i service.env\n" + wrapped } });
+    const firstChunk = wrapped.split("\n")[0];
+    check("wrap sanity: the base64 is wrapped across chunks and the key is only in the plaintext",
+      wrapped.includes("\n") && plain.includes(docExampleKey) && !wrapped.includes(docExampleKey));
+    const b64res = await scanOneFile("b64.jsonl", b64Line + "\n");
+    const b64find = b64res.findings.find((f) => f.ruleId === "aws_access_key_id");
+    check("b64: wrapped documented-example AWS key found via decode", !!b64find);
+    check("b64: finding carries the base64 encoding marker", !!b64find && b64find.encoding === "base64");
+    check("b64: decoded value is redacted (middle hidden)", !!b64find && b64find.preview.includes("AKIA") && !b64find.preview.includes("IOSFODNN"));
+    const b64json = JSON.stringify(b64res.findings);
+    check("b64: raw decoded secret never appears in findings", !b64json.includes("IOSFODNN7EXAMPLE"));
+    check("b64: encoded form (the base64 run) never appears in findings",
+      !b64json.includes(firstChunk) && !b64json.includes(wrapped.replace(/\n/g, "")));
+
+    // Feature 1b: base64url variant (URL-safe alphabet, no padding). The
+    // payload is engineered to contain '+'/'/' in standard base64 so its
+    // base64url form genuinely uses '-'/'_', exercising the url branch.
+    const urlPlain = "AWS_ACCESS_KEY_ID=" + docExampleKey + "\n#>>>???<<<\n";
+    const b64u = Buffer.from(urlPlain).toString("base64url");
+    check("base64url sanity: payload is url-distinct", /[-_]/.test(b64u));
+    const urlRes = await scanOneFile("b64url.jsonl",
+      JSON.stringify({ message: { content: "decoded blob: " + b64u } }) + "\n");
+    const urlFind = urlRes.findings.find((f) => f.ruleId === "aws_access_key_id");
+    check("base64url: key found and marked base64url", !!urlFind && urlFind.encoding === "base64url");
+    check("base64url: output redacted, no raw secret", !JSON.stringify(urlRes.findings).includes("IOSFODNN7EXAMPLE"));
+
+    // Feature 1c: junk base64 yields ZERO findings — random bytes decode to
+    // non-printable noise (rejected by the printable-ratio gate), and a
+    // base64 blob of ordinary text carries no vendor-prefixed secret.
+    const junkBinary = crypto.randomBytes(48).toString("base64");
+    const junkText = Buffer.from("just some ordinary log text, nothing secret at all here").toString("base64");
+    const junkRes = await scanOneFile("junk.jsonl",
+      JSON.stringify({ message: { content: "blob1 " + junkBinary + " blob2 " + junkText } }) + "\n");
+    check("junk-base64: decoding produces zero findings", junkRes.findings.length === 0);
+
+    // Feature 2a: an AWS key split across two adjacent JSONL records, present
+    // contiguously on neither line, reconstructed at the content boundary and
+    // marked with its line span. Reported against both contributing lines.
+    const cut = 11;
+    const p1 = docExampleKey.slice(0, cut), p2 = docExampleKey.slice(cut);
+    const recA = JSON.stringify({ type: "assistant", message: { id: "msg_shared",
+      content: [{ type: "text", text: "reconstructed start: " + p1 }], usage: { in: 5, out: 200 } },
+      requestId: "req_a", cwd: "/Users/x/proj" });
+    const recB = JSON.stringify({ type: "assistant", message: { id: "msg_shared",
+      content: [{ type: "text", text: p2 + " is the remainder; rotate it now" }], usage: { in: 5, out: 200 } },
+      requestId: "req_b", cwd: "/Users/x/proj" });
+    check("split sanity: key appears on neither line contiguously",
+      !recA.includes(docExampleKey) && !recB.includes(docExampleKey));
+    const splitRes = await scanOneFile("split.jsonl", recA + "\n" + recB + "\n");
+    const splitFinds = splitRes.findings.filter((f) => f.ruleId === "aws_access_key_id");
+    check("split: reconstructed AWS key found across the boundary", splitFinds.length > 0);
+    check("split: finding carries the spanLines marker for the adjacent pair",
+      splitFinds.every((f) => Array.isArray(f.spanLines) && f.spanLines[0] === 1 && f.spanLines[1] === 2));
+    check("split: reported against both contributing lines (both exposure sites)",
+      splitFinds.some((f) => f.line === 1) && splitFinds.some((f) => f.line === 2));
+    check("split: output redacted, reconstructed secret never leaked",
+      !JSON.stringify(splitRes.findings).includes("IOSFODNN7EXAMPLE"));
+
+    // Feature 2b: a match that lies WHOLLY within one line must NOT also be
+    // reported as a boundary finding — the straddle check prevents double
+    // counting. Line A carries a complete key mid-string; the next line is
+    // benign. Exactly one finding, from the single-line pass, no span marker.
+    const wholeA = JSON.stringify({ type: "assistant", message: {
+      content: [{ type: "text", text: "the key is " + docExampleKey + " somewhere in here" }] } });
+    const wholeB = JSON.stringify({ type: "assistant", message: {
+      content: [{ type: "text", text: "and that is all for now, nothing more to see here" }] } });
+    const wholeRes = await scanOneFile("whole.jsonl", wholeA + "\n" + wholeB + "\n");
+    const wholeFinds = wholeRes.findings.filter((f) => f.ruleId === "aws_access_key_id");
+    check("near-split: contiguous key reported exactly once, not double-counted at the boundary",
+      wholeFinds.length === 1);
+    check("near-split: the single finding carries no split marker", wholeFinds.length === 1 && !wholeFinds[0].spanLines);
+  }
+
   // ── cursor source: synthetic sqlite fixture ────────────────────────────
   // node:sqlite only exists on Node 22.5+ — CI runs this file on 18/20/22
   // (see CONTRIBUTING.md), so this whole block is feature-detected exactly
