@@ -1,9 +1,11 @@
 "use strict";
 
 const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
 const { availableSources, ALL_SOURCES } = require("./sources");
 const { scan, emptyResult } = require("./scan");
-const { render, renderIntegrity, renderJson } = require("./report");
+const { render, renderIntegrity, renderJson, renderSarif } = require("./report");
 const { checkIntegrity } = require("./integrity");
 const {
   ROTATION_GUIDANCE, guidanceFor, loadAcks, ackFinding, renderRotation,
@@ -62,6 +64,10 @@ Usage:
 
 Scan options:
   --json                  machine-readable output (full detail, still redacted)
+  --sarif                 SARIF 2.1.0 output (secret findings only), for
+                          GitHub code scanning's Security tab and inline PR
+                          annotations. Use --json for the full picture
+                          (findings + integrity + rotation) instead.
   --project [dir]         scan a repository checkout instead of this machine
                           (default dir: current directory). Covers committed
                           agent transcripts, agent config/rules files, and
@@ -101,6 +107,14 @@ Seal options (used with scan):
   --seal                  after scanning, encrypt every transcript that carried a
                           finding into a local vault directory (AES-256-GCM,
                           passphrase-derived key; originals are left untouched)
+  --keychain              with --seal (or unseal): use a truly random key stored
+                          in the OS keychain instead of a typed passphrase.
+                          Nothing to remember, and the key's strength no longer
+                          depends on passphrase choice. macOS today; Linux when
+                          secret-tool (libsecret) is installed. TRADEOFF: a
+                          keychain-backed vault lives on THIS machine/account
+                          only, unlike a passphrase, it is not portable to
+                          another machine.
   --vault-dir <dir>       where to create the vault (default: ./residoo-vault-<stamp>)
   --upload-cloudroam      ALSO upload the sealed vault to CloudRoam. This is the
                           only residoo feature that touches the network, it is
@@ -116,6 +130,10 @@ Unseal:
                                                   restore one entry, verified
                                                   byte-identical via its
                                                   recorded SHA-256
+  --keychain              add to either unseal form above: retrieve the vault
+                          key from the OS keychain instead of prompting for a
+                          passphrase. Only works for a vault that was sealed
+                          with --keychain on this same machine/account.
 
 The passphrase is read from RESIDOO_PASSPHRASE, or prompted (hidden) on a TTY.
 
@@ -138,6 +156,52 @@ async function getPassphrase({ confirmNew }) {
   return p1;
 }
 
+/**
+ * The sealing secret for `scan --seal`: a keychain-generated random key (see
+ * keychain.js), or a typed passphrase. `vaultId` is null in passphrase mode;
+ * in keychain mode the caller writes it to `.keychain-id` inside the vault
+ * once sealFindings has created the directory, so unseal can find it again.
+ * The generated secret is passed straight through to the SAME
+ * sealFindings/deriveKey path a typed passphrase would use — scrypt on a
+ * full 256-bit-entropy input is harmless extra defense, and reusing that
+ * already-tested path means no change to sealcrypto.js/sealvault.js at all.
+ */
+async function resolveSealSecret(args) {
+  if (!args.includes("--keychain")) {
+    return { passphrase: await getPassphrase({ confirmNew: true }), vaultId: null };
+  }
+  const keychain = require("./keychain");
+  if (!keychain.isSupported()) throw new Error(`--keychain: ${keychain.unsupportedReason()}`);
+  const vaultId = crypto.randomUUID();
+  const passphrase = crypto.randomBytes(32).toString("base64");
+  keychain.store(vaultId, passphrase);
+  return { passphrase, vaultId };
+}
+
+/** The unsealing secret for `unseal`: a keychain-retrieved key, or a typed passphrase. */
+async function resolveUnsealSecret(args, vaultDir) {
+  if (!args.includes("--keychain")) return getPassphrase({ confirmNew: false });
+  const keychain = require("./keychain");
+  if (!keychain.isSupported()) throw new Error(`--keychain: ${keychain.unsupportedReason()}`);
+  const idPath = path.join(vaultDir, ".keychain-id");
+  if (!fs.existsSync(idPath)) {
+    throw new Error(
+      `No .keychain-id marker in ${vaultDir}: this vault was not sealed with --keychain, ` +
+      `or the marker file was moved separately from the vault. Try unsealing without --keychain.`
+    );
+  }
+  const vaultId = fs.readFileSync(idPath, "utf-8").trim();
+  try {
+    return keychain.retrieve(vaultId);
+  } catch {
+    throw new Error(
+      "Could not retrieve this vault's key from the OS keychain. It may have been removed, " +
+      "or this may be a different machine/account than the one that sealed it: a keychain-backed " +
+      "vault is not portable across machines."
+    );
+  }
+}
+
 async function runSeal(result, args) {
   const { sealFindings, uploadVaultToCloudRoam } = require("./sealvault");
 
@@ -149,21 +213,27 @@ async function runSeal(result, args) {
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const vaultDir = argValue(args, "--vault-dir") || path.resolve(`residoo-vault-${stamp}`);
-  const passphrase = await getPassphrase({ confirmNew: true });
+  const { passphrase, vaultId } = await resolveSealSecret(args);
 
   process.stdout.write(`\nSealing ${filesWithFindings.length} file(s) with findings into ${vaultDir}\n`);
   const { entries } = await sealFindings({
     files: filesWithFindings, vaultDir, passphrase,
     log: (s) => process.stdout.write(s + "\n"),
   });
+  // Written only after sealFindings has created vaultDir. Plaintext, but
+  // holds nothing sensitive: a random id with no meaning outside this
+  // keychain lookup, never the key itself and never anything about what the
+  // vault contains.
+  if (vaultId) fs.writeFileSync(path.join(vaultDir, ".keychain-id"), vaultId, { mode: 0o600 });
   const totalPlain = entries.reduce((s, e) => s + e.plainBytes, 0);
   const totalSealed = entries.reduce((s, e) => s + e.sealedBytes, 0);
   process.stdout.write(
     `\nSealed ${entries.length} file(s): ${(totalPlain / 1024 / 1024).toFixed(1)}MB plain -> ` +
     `${(totalSealed / 1024 / 1024).toFixed(1)}MB encrypted.\n` +
     `Originals were NOT touched. Once you've verified a restore works\n` +
-    `(residoo unseal ${path.basename(vaultDir)} --restore 0001.sealed --out /tmp/check), removing the\n` +
-    `plaintext originals is your call; residoo never deletes anything itself.\n`
+    `(residoo unseal ${path.basename(vaultDir)}${vaultId ? " --keychain" : ""} --restore 0001.sealed --out /tmp/check), removing the\n` +
+    `plaintext originals is your call; residoo never deletes anything itself.\n` +
+    (vaultId ? `The vault key is stored in the OS keychain, never typed, never written in plaintext to disk.\n` : "")
   );
 
   if (args.includes("--upload-cloudroam")) {
@@ -192,7 +262,7 @@ async function runUnseal(args) {
   const vaultDir = args[1];
   if (!vaultDir) { process.stderr.write("usage: residoo unseal <vault-dir> [--restore <n> --out <path>]\n"); return 2; }
 
-  const passphrase = await getPassphrase({ confirmNew: false });
+  const passphrase = await resolveUnsealSecret(args, vaultDir);
   let manifest;
   try {
     manifest = openManifest(vaultDir, passphrase);
@@ -314,6 +384,7 @@ async function main(argv) {
   }
 
   const wantsJson = args.includes("--json");
+  const wantsSarif = args.includes("--sarif");
   const includeNoisy = args.includes("--include-noisy");
   const includeSuppressed = args.includes("--include-suppressed");
   const failOnFind = args.includes("--fail-on-find");
@@ -402,7 +473,11 @@ async function main(argv) {
   if (sources.length === 0) {
     const empty = emptyResult();
     const integrity = wantsIntegrity ? runIntegrity() : null;
-    if (wantsJson) {
+    if (wantsSarif) {
+      // Same contract as --json below: a CI step consuming SARIF must
+      // always get a valid SARIF document, even with nothing to scan.
+      process.stdout.write(renderSarif(empty) + "\n");
+    } else if (wantsJson) {
       // A --json caller (CI, a script piping into jq) must always get valid JSON
       // on stdout, even on the "nothing to scan" path — a plain-text message on
       // stderr with exit 0 silently breaks that contract.
@@ -422,9 +497,11 @@ async function main(argv) {
   const result = await scan({ sources, includeNoisy, includeSuppressed });
   const integrity = wantsIntegrity ? runIntegrity() : null;
   const rotation = renderRotation(result.findings, acks);
-  process.stdout.write((wantsJson
-    ? renderJson(result, integrity, rotation)
-    : render(result, { noColor, integrity, rotation })) + "\n");
+  process.stdout.write((wantsSarif
+    ? renderSarif(result)
+    : wantsJson
+      ? renderJson(result, integrity, rotation)
+      : render(result, { noColor, integrity, rotation })) + "\n");
 
   if (args.includes("--seal")) {
     const sealExit = await runSeal(result, args);

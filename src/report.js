@@ -318,4 +318,75 @@ function renderJson(result, integrity = null, rotation = null) {
   );
 }
 
-module.exports = { render, renderIntegrity, renderRotationSection, renderJson };
+// confidence -> SARIF level. "high"/"medium" map to the two levels GitHub's
+// code-scanning UI treats as real alerts ("error" surfaces most
+// prominently); "low" only ever appears with --include-suppressed (a
+// placeholder/example match) and maps to "note", SARIF's own tier for
+// exactly that: worth showing, not worth alarming over.
+const SARIF_LEVEL = { high: "error", medium: "warning", low: "note" };
+
+/**
+ * SARIF 2.1.0 output (--sarif): the format GitHub's code-scanning Security
+ * tab, and inline pull-request annotations, both consume. residoo already
+ * ships a GitHub Action and a pre-commit hook, so not emitting the one
+ * format that plugs a scan straight into GitHub's native UI was a real gap
+ * for exactly the CI audience those two things target.
+ *
+ * Scoped to secret findings only (result.findings), not the separate
+ * integrity checks (planted hooks, droppers): those don't share the same
+ * per-line, per-file location shape, and forcing them into one schema badly
+ * would be worse than a stated, honest scope limit. --json remains the
+ * format that carries everything (findings, integrity, rotation) together.
+ *
+ * partialFingerprints carries residoo's own stable fingerprint
+ * (fingerprintFinding, already proven stable across line-number and
+ * directory changes, see tests/smoke.js) under a versioned key, so GitHub's
+ * own alert-dedup logic can track one finding across reruns without
+ * depending on line numbers moving, exactly the property SARIF's
+ * fingerprinting is designed around.
+ */
+function renderSarif(result) {
+  const { version } = require("../package.json");
+  const rules = new Map();
+  const results = result.findings.map((f) => {
+    if (!rules.has(f.ruleId)) {
+      rules.set(f.ruleId, {
+        id: f.ruleId,
+        name: f.label,
+        shortDescription: { text: f.label },
+        properties: { "security-severity": f.confidence === "high" ? "9.0" : f.confidence === "medium" ? "6.0" : "3.0" },
+      });
+    }
+    return {
+      ruleId: f.ruleId,
+      level: SARIF_LEVEL[f.confidence] || "warning",
+      message: { text: `${f.label} (redacted: ${f.preview})` },
+      locations: [{
+        physicalLocation: {
+          artifactLocation: { uri: f.relFile },
+          ...(Number.isInteger(f.line) ? { region: { startLine: f.line } } : {}),
+        },
+      }],
+      partialFingerprints: { "residooFingerprint/v1": fingerprintFinding(f) },
+      properties: { source: f.source, confidence: f.confidence },
+    };
+  });
+
+  return JSON.stringify({
+    $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+    version: "2.1.0",
+    runs: [{
+      tool: {
+        driver: {
+          name: "residoo",
+          version,
+          informationUri: "https://github.com/dandovdub/residoo",
+          rules: [...rules.values()],
+        },
+      },
+      results,
+    }],
+  }, null, 2);
+}
+
+module.exports = { render, renderIntegrity, renderRotationSection, renderJson, renderSarif };

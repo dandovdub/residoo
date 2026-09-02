@@ -1007,6 +1007,140 @@ async function main() {
       !!parsedWarns && parsedWarns.summary.findingCount === 0 &&
       !!parsedWarns.integrity && parsedWarns.integrity.warningCount >= 1);
     check("cli e2e --fail-on-find exits 1 on integrity warnings alone", warnsOnly.status === 1);
+
+    // ── --sarif (see src/report.js's renderSarif) ──────────────────────────
+    const sarifRes = spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--sarif", "--no-integrity"], {
+        cwd: eCwd, encoding: "utf-8",
+        env: {
+          ...process.env,
+          HOME: eHome, USERPROFILE: eHome,
+          XDG_CONFIG_HOME: path.join(eHome, ".config"), XDG_DATA_HOME: path.join(eHome, ".local", "share"),
+          GEMINI_CLI_HOME: eHome, CODEX_HOME: path.join(eHome, ".codex"),
+        },
+      });
+    let sarif = null;
+    try { sarif = JSON.parse(sarifRes.stdout); } catch { /* checked below */ }
+    check("sarif: valid JSON, exit 0, correct schema/version",
+      sarif !== null && sarifRes.status === 0 &&
+      sarif.version === "2.1.0" && sarif.$schema.includes("sarif-schema-2.1.0"));
+    check("sarif: one run, driver name/version present, rules list covers the finding's rule",
+      !!sarif && sarif.runs.length === 1 && sarif.runs[0].tool.driver.name === "residoo" &&
+      typeof sarif.runs[0].tool.driver.version === "string" &&
+      sarif.runs[0].tool.driver.rules.some((r) => r.id === "aws_access_key_id"));
+    const sarifResult = sarif && sarif.runs[0].results.find((r) => r.ruleId === "aws_access_key_id");
+    check("sarif: the AWS finding is a result at level error, with a redacted message and a fingerprint",
+      !!sarifResult && sarifResult.level === "error" &&
+      !sarifResult.message.text.includes("SM0KETESTFAKEKEY") &&
+      typeof sarifResult.partialFingerprints["residooFingerprint/v1"] === "string");
+    check("sarif: location uses the basename only, never an absolute path",
+      !!sarifResult && sarifResult.locations[0].physicalLocation.artifactLocation.uri === "settings.local.json" &&
+      !sarifResult.locations[0].physicalLocation.artifactLocation.uri.includes(path.sep + "settings.local.json"));
+    check("sarif: never contains the raw planted key anywhere in the document",
+      !sarifRes.stdout.includes("SM0KETESTFAKEKEY"));
+
+    const sarifEmptyRes = spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--sarif", "--no-integrity", "--project", eCwd], {
+        cwd: eCwd, encoding: "utf-8", env: process.env,
+      });
+    let sarifEmpty = null;
+    try { sarifEmpty = JSON.parse(sarifEmptyRes.stdout); } catch { /* checked below */ }
+    check("sarif: a scan with nothing to report still emits a valid, empty SARIF document (not plain text)",
+      !!sarifEmpty && Array.isArray(sarifEmpty.runs[0].results) && sarifEmpty.runs[0].results.length === 0);
+  }
+
+  // ── keychain: --seal --keychain / unseal --keychain (see src/keychain.js) ──
+  // CI runs on ubuntu-latest without secret-tool installed, so this feature-
+  // detects exactly like the sqlite-backed sources above rather than
+  // assuming the OS keychain is present. Wherever the real mechanism DOES
+  // run (macOS today), it is scoped to a throwaway keychain FILE created
+  // and destroyed by this block — never the machine's real default
+  // keychain. That isolation is not optional: a security tool's own test
+  // suite touching, prompting about, or depending on a developer's actual
+  // keychain on every `npm test` would be exactly the kind of side effect
+  // this project holds other tools to a higher standard than.
+  {
+    const keychain = require("../src/keychain");
+    check("keychain: isSupported() and unsupportedReason() never disagree",
+      keychain.isSupported() ? keychain.unsupportedReason() === null : typeof keychain.unsupportedReason() === "string");
+
+    const { spawnSync } = require("child_process");
+    const kcHome = path.join(tmp, "keychain-home");
+    const kcCwd = path.join(tmp, "keychain-cwd");
+    fs.mkdirSync(path.join(kcHome, ".claude"), { recursive: true });
+    fs.mkdirSync(kcCwd, { recursive: true });
+    fs.writeFileSync(path.join(kcHome, ".claude", "settings.local.json"),
+      JSON.stringify({ env: { AWS_ACCESS_KEY_ID: plantedAwsKey } }, null, 2));
+    const kcEnv = {
+      ...process.env,
+      HOME: kcHome, USERPROFILE: kcHome,
+      XDG_CONFIG_HOME: path.join(kcHome, ".config"), XDG_DATA_HOME: path.join(kcHome, ".local", "share"),
+      GEMINI_CLI_HOME: kcHome, CODEX_HOME: path.join(kcHome, ".codex"),
+    };
+    delete kcEnv.RESIDOO_PASSPHRASE; // keychain mode must never need this
+
+    if (!keychain.isSupported()) {
+      const vaultDir = path.join(tmp, "keychain-vault-unsupported");
+      const res = spawnSync(process.execPath,
+        [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--no-integrity", "--seal", "--keychain", "--vault-dir", vaultDir],
+        { cwd: kcCwd, encoding: "utf-8", env: kcEnv });
+      check("keychain: unsupported platform fails cleanly, no vault created",
+        res.status !== 0 && !fs.existsSync(vaultDir) && /keychain/i.test(res.stderr + res.stdout));
+    } else if (process.platform === "darwin") {
+      // The real store/retrieve/remove mechanism is only exercised here on
+      // macOS: secret-tool has no equivalent "separate file" isolation
+      // mechanism, so a genuinely isolated Linux round trip would need its
+      // own throwaway Secret Service collection, meaningfully more
+      // plumbing for a combination (Linux with secret-tool installed) that
+      // neither CI (ubuntu-latest, no secret-tool) nor this project's own
+      // dev machine actually exercises. The unsupported-path branch above
+      // still covers Linux without secret-tool, which is what CI runs.
+      //
+      // A brand-new keychain FILE, created and destroyed entirely within
+      // this block, never the default login keychain. RESIDOO_TEST_KEYCHAIN_FILE
+      // (keychain.js) scopes every "security" call, in this process and in
+      // the spawned CLI child below, to this file alone.
+      const testKcFile = path.join(tmp, "residoo-smoke-test.keychain-db");
+      const { execFileSync } = require("child_process");
+      let kcCreated = false;
+      try {
+        execFileSync("security", ["create-keychain", "-p", crypto.randomBytes(16).toString("hex"), testKcFile], { stdio: "ignore" });
+        kcCreated = true;
+
+        check("keychain: module-level store/retrieve/remove round trip on the isolated test keychain",
+          (() => {
+            const acct = "smoke-test-" + crypto.randomBytes(4).toString("hex");
+            const secret = "smoke-test-secret-" + crypto.randomBytes(8).toString("hex");
+            keychain.store(acct, secret, testKcFile);
+            const got = keychain.retrieve(acct, testKcFile);
+            keychain.remove(acct, testKcFile);
+            let stillThere = true;
+            try { keychain.retrieve(acct, testKcFile); stillThere = true; } catch { stillThere = false; }
+            return got === secret && !stillThere;
+          })());
+
+        const kcEnvIsolated = { ...kcEnv, RESIDOO_TEST_KEYCHAIN_FILE: testKcFile };
+        const vaultDir = path.join(tmp, "keychain-vault");
+        const sealRes = spawnSync(process.execPath,
+          [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--no-integrity", "--seal", "--keychain", "--vault-dir", vaultDir],
+          { cwd: kcCwd, encoding: "utf-8", env: kcEnvIsolated });
+        check("keychain: --seal --keychain exits 0 and writes a .keychain-id marker, never a passphrase prompt",
+          sealRes.status === 0 && fs.existsSync(path.join(vaultDir, ".keychain-id")));
+
+        const outFile = path.join(tmp, "keychain-restored.jsonl");
+        const unsealRes = spawnSync(process.execPath,
+          [path.join(__dirname, "..", "bin", "residoo.js"), "unseal", vaultDir, "--keychain", "--restore", "0001.sealed", "--out", outFile],
+          { cwd: kcCwd, encoding: "utf-8", env: kcEnvIsolated });
+        check("keychain: unseal --keychain restores the sealed file with no passphrase prompt, verified byte-identical",
+          unsealRes.status === 0 && /verified byte-identical/.test(unsealRes.stdout) &&
+          fs.existsSync(outFile) && fs.readFileSync(outFile, "utf-8").includes(plantedAwsKey));
+      } finally {
+        // Always torn down, whether the checks above passed or not: the
+        // throwaway file must never linger, and it never touched the real
+        // keychain in the first place.
+        if (kcCreated) { try { execFileSync("security", ["delete-keychain", testKcFile], { stdio: "ignore" }); } catch { /* best-effort */ } }
+      }
+    }
   }
 
   // ── rotation: guidance coverage, fingerprints, ack round-trip (module) ────

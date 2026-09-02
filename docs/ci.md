@@ -23,7 +23,7 @@ Add to `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.3.0
+    rev: v0.3.5
     hooks:
       - id: residoo
 ```
@@ -32,7 +32,7 @@ The pre-commit framework installs this repo with npm in its own isolated environ
 
 ## GitHub Action
 
-The repository doubles as a composite action. The action tag and the CLI version move together: `@v0.3.0` runs residoo 0.3.0 from npm.
+The repository doubles as a composite action. The action tag and the CLI version move together: `@v0.3.5` runs residoo 0.3.5 from npm.
 
 ```yaml
 name: residoo
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dandovdub/residoo@v0.3.0
+      - uses: dandovdub/residoo@v0.3.5
 ```
 
 Inputs, all optional:
@@ -56,6 +56,25 @@ Inputs, all optional:
 | `fail-on-find` | `true` | Fail the job on any secret finding or integrity warning. Set to `false` to report without failing. |
 | `project-dir` | `.` | Directory to scan, relative to the workspace. |
 | `version` | the CLI release matching the action tag | residoo version fetched from npm. Override only if you need the action tag and CLI version to differ. |
+| `sarif` | `false` | Also produce SARIF and upload it to GitHub code scanning's Security tab (native alerts, inline PR annotations), via `github/codeql-action/upload-sarif`. Needs `permissions: security-events: write` on the calling job; see below. |
+
+### SARIF and GitHub code scanning
+
+```yaml
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # required for the SARIF upload step
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dandovdub/residoo@v0.3.5
+        with:
+          sarif: "true"
+```
+
+The scan itself still runs and still gates on `fail-on-find` exactly as without `sarif`; the SARIF file is produced and uploaded first, so a finding lands on the Security tab even on the run that fails the job because of it. Without `security-events: write`, the upload step fails with a permissions error, everything else (the scan, the fail-on-find gate) still works normally.
 
 ## Plain workflow, no action
 
@@ -76,5 +95,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npx --yes residoo@0.3.0 scan --project . --fail-on-find
+      - run: npx --yes residoo@0.3.5 scan --project . --fail-on-find
 ```

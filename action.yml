@@ -6,8 +6,8 @@
 # Version pinning design: the CLI is fetched with "npx --yes residoo@VERSION"
 # rather than run from the checked-out action tree, so the workflow runs the
 # exact bits published to npm, the same command a developer runs locally. The
-# action tag and the CLI version move together: dandovdub/residoo@v0.3.4
-# defaults to residoo 0.3.4 on npm. Override the version input only if you
+# action tag and the CLI version move together: dandovdub/residoo@v0.3.5
+# defaults to residoo 0.3.5 on npm. Override the version input only if you
 # need to split them.
 #
 # The npm fetch is distribution, not scanning: the scan itself makes zero
@@ -41,7 +41,18 @@ inputs:
       residoo version to fetch from npm. Defaults to the release this action
       tag ships with; the tag and the CLI version move together.
     required: false
-    default: "0.3.4"
+    default: "0.3.5"
+  sarif:
+    description: >-
+      Also produce SARIF output and upload it to GitHub code scanning's
+      Security tab via github/codeql-action/upload-sarif, so findings show
+      up as native code-scanning alerts and inline PR annotations. Off by
+      default: the calling workflow's job needs "permissions:
+      security-events: write" for the upload step to succeed (residoo's own
+      scan itself needs no permissions and makes no network calls beyond
+      fetching the npm package), so this is opt in rather than assumed.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -50,7 +61,14 @@ runs:
       with:
         node-version: "20"
     - name: Run residoo project scan
+      id: residoo
       shell: bash
+      # continue-on-error, not "set -e" straight through to the job: a
+      # --fail-on-find exit must still fail the JOB (see the final step
+      # below, which re-applies the captured code), but it must not skip
+      # the SARIF upload steps that follow it — a finding is exactly the
+      # case where seeing it land on the Security tab matters most.
+      continue-on-error: true
       # Inputs cross into the step as environment variables instead of being
       # interpolated into the script body, so a hostile value in a caller's
       # workflow expression cannot inject shell syntax into this run block.
@@ -59,9 +77,30 @@ runs:
         RESIDOO_PROJECT_DIR: ${{ inputs.project-dir }}
         RESIDOO_FAIL_ON_FIND: ${{ inputs.fail-on-find }}
       run: |
-        set -euo pipefail
+        set -uo pipefail
         args=(scan --project "$RESIDOO_PROJECT_DIR")
         if [ "$RESIDOO_FAIL_ON_FIND" = "true" ]; then
           args+=(--fail-on-find)
         fi
         npx --yes "residoo@$RESIDOO_VERSION" "${args[@]}"
+        echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+    - name: Produce SARIF
+      if: inputs.sarif == 'true'
+      shell: bash
+      env:
+        RESIDOO_VERSION: ${{ inputs.version }}
+        RESIDOO_PROJECT_DIR: ${{ inputs.project-dir }}
+      run: |
+        set -euo pipefail
+        npx --yes "residoo@$RESIDOO_VERSION" scan --project "$RESIDOO_PROJECT_DIR" --sarif > residoo-results.sarif
+    - name: Upload SARIF to GitHub code scanning
+      if: inputs.sarif == 'true'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: residoo-results.sarif
+    - name: Apply scan result
+      shell: bash
+      # Deferred to here, after the SARIF upload above, so --fail-on-find
+      # still fails the job exactly as before, just not before the
+      # findings had a chance to reach the Security tab.
+      run: exit "${{ steps.residoo.outputs.exit_code }}"

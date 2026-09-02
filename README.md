@@ -58,11 +58,13 @@ precise about rather than lumping together:
   do nothing for the months of transcripts already sitting on disk, or for
   any session run without the hook active. residoo scans **retroactively, at
   rest**: every file already there, from every past session.
-- **agentsweep** is a genuine, welcome peer covering similar ground. Broader,
-  in fact: 31 agent sources and 209 detection rules to residoo's smaller set,
-  plus in-place redaction, SARIF output, and a pre-commit hook. The tradeoffs
-  are worth naming precisely rather than either dismissing it or copying it
-  blindly. It needs Python 3.11+ and three pip packages (all clean ones, on
+- **agentsweep** is a genuine, welcome peer covering similar ground. Broader
+  on detection rules (209 to residoo's smaller, deliberately high-confidence
+  set) and it does in-place redaction, where residoo's `--seal` makes an
+  encrypted copy instead. residoo has more agent sources (43 to 31), and
+  both now ship SARIF output and a pre-commit hook. The tradeoffs are worth
+  naming precisely rather than either dismissing it or copying it blindly.
+  It needs Python 3.11+ and three pip packages (all clean ones, on
   inspection; no known CVEs), where residoo needs nothing beyond Node. Its
   own README documents that its in-place redaction leaves the pre-redaction
   original sitting in a **plaintext** `.bak` file, and its issue tracker shows
@@ -119,6 +121,17 @@ won't be built into the tool that writes it.
 - Redacts everything in its own output. You get a shape and a first/last-4
   preview, never the real value, including in `--json` mode. A decoded or
   rejoined secret is redacted exactly like a plain one.
+- `--sarif` emits SARIF 2.1.0 for GitHub code scanning's Security tab and
+  inline pull-request annotations, the same format gitleaks/trufflehog/
+  agentsweep already speak, so residoo's own Action and pre-commit hook plug
+  straight into GitHub's native UI. `--json` remains the format for the full
+  picture (findings, integrity, rotation) together.
+- `--seal --keychain` stores the vault key in the OS's own secure credential
+  store (macOS today, Linux with `secret-tool` installed) instead of a typed
+  passphrase: nothing to remember, and a truly random key instead of one
+  whose strength depends on what you typed. Tradeoff stated plainly: a
+  keychain-backed vault lives on that machine/account only, a passphrase
+  travels, a keychain-backed key does not. See `src/keychain.js`.
 - Tells you how many **distinct** secrets it found versus how many times one
   got echoed back across tool calls, so the headline number reflects real
   exposure, not repetition.
@@ -304,7 +317,7 @@ As a GitHub Action (this repository doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.3.4
+  - uses: dandovdub/residoo@v0.3.5
 ```
 
 As a pre-commit hook:
@@ -312,7 +325,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.3.4
+    rev: v0.3.5
     hooks:
       - id: residoo
 ```
