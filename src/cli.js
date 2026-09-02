@@ -28,7 +28,7 @@ Options:
 Sources checked on this machine: ${ALL_SOURCES.map((s) => s.label()).join(", ")}
 `;
 
-function main(argv) {
+async function main(argv) {
   const args = argv.slice(2);
   if (args.includes("-h") || args.includes("--help") || args.length === 0) {
     process.stdout.write(HELP);
@@ -45,17 +45,28 @@ function main(argv) {
   const includeNoisy = args.includes("--include-noisy");
   const includeSuppressed = args.includes("--include-suppressed");
   const failOnFind = args.includes("--fail-on-find");
+  // --no-color was documented but never actually read — report.js already respects
+  // NO_COLOR, so forwarding the flag onto that env var is the whole fix.
+  if (args.includes("--no-color")) process.env.NO_COLOR = "1";
 
   const sources = availableSources();
   if (sources.length === 0) {
-    process.stderr.write(
-      "No known transcript sources found on this machine.\n" +
-      `Checked: ${ALL_SOURCES.map((s) => s.label()).join(", ")}.\n`
-    );
+    const empty = { findings: [], filesScanned: 0, sourcesScanned: [], bytesScanned: 0, suppressedCount: 0 };
+    if (wantsJson) {
+      // A --json caller (CI, a script piping into jq) must always get valid JSON
+      // on stdout, even on the "nothing to scan" path — a plain-text message on
+      // stderr with exit 0 silently breaks that contract.
+      process.stdout.write(renderJson(empty) + "\n");
+    } else {
+      process.stderr.write(
+        "No known transcript sources found on this machine.\n" +
+        `Checked: ${ALL_SOURCES.map((s) => s.label()).join(", ")}.\n`
+      );
+    }
     return 0;
   }
 
-  const result = scan({ sources, includeNoisy, includeSuppressed });
+  const result = await scan({ sources, includeNoisy, includeSuppressed });
   process.stdout.write((wantsJson ? renderJson(result) : render(result)) + "\n");
 
   return failOnFind && result.findings.length > 0 ? 1 : 0;

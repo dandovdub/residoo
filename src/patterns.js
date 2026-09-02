@@ -28,8 +28,12 @@ const PATTERNS = [
     re: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g },
   { id: "stripe_key", label: "Stripe API key", confidence: "high",
     re: /\b(sk|rk)_live_[A-Za-z0-9]{20,}\b/g },
+  // The negative lookahead keeps this rule and anthropic_key mutually exclusive —
+  // without it, "sk-ant-..." matches BOTH patterns and gets reported twice under
+  // two different (one wrong) provider labels. Verified: both regexes independently
+  // matched a synthetic sk-ant- key before this fix.
   { id: "openai_key", label: "OpenAI API key", confidence: "high",
-    re: /\bsk-(proj-)?[A-Za-z0-9_-]{20,}\b/g },
+    re: /\bsk-(?!ant-)(proj-)?[A-Za-z0-9_-]{20,}\b/g },
   { id: "anthropic_key", label: "Anthropic API key", confidence: "high",
     re: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g },
   { id: "google_api_key", label: "Google / Firebase API key", confidence: "high",
@@ -87,8 +91,14 @@ function stripControlChars(s) {
 /** Mask a matched value for display: never print secret material to a terminal. */
 function redact(value) {
   const v = stripControlChars(String(value));
-  if (v.length <= 10) return "*".repeat(v.length || 1);
-  return v.slice(0, 4) + "…" + v.slice(-4) + `  (${String(value).length} chars)`;
+  // Split by code point (spread, not .slice/.length) — several rules match via
+  // negated character classes that don't exclude non-ASCII, so a matched value
+  // CAN contain an astral character (surrogate pair) straddling a UTF-16 cut
+  // point. .slice(0,4) on the raw string can then return one half of a pair,
+  // rendering as a broken glyph. Array.from(v) counts code points, not units.
+  const cps = Array.from(v);
+  if (cps.length <= 10) return "*".repeat(cps.length || 1);
+  return cps.slice(0, 4).join("") + "…" + cps.slice(-4).join("") + `  (${String(value).length} chars)`;
 }
 
 module.exports = { PATTERNS, NOISY_PATTERNS, redact };

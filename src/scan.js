@@ -30,13 +30,14 @@ const CONTEXT_WINDOW = 40;
  * preview — because a security tool's own report output is itself a place
  * secrets could leak from (a screenshot, a copied terminal log, a CI artifact).
  */
-function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null } = {}) {
+async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
   const findings = [];
   let suppressedCount = 0;
   let filesScanned = 0;
   let bytesScanned = 0;
   const sourcesScanned = [];
+  const unreadableFiles = [];
   // Raw values live ONLY in this in-process Set, for counting how many
   // DISTINCT secrets exist vs. how many times one got echoed back across
   // tool calls (a token re-surfacing in every screenshot/read_page during a
@@ -48,11 +49,18 @@ function scan({ sources, includeNoisy = false, includeSuppressed = false, onProg
     let touchedThisSource = false;
     for (const { file, mtimeMs, sizeBytes } of source.files()) {
       touchedThisSource = true;
-      filesScanned++;
-      bytesScanned += sizeBytes || 0;
       if (onProgress) onProgress({ source: source.id(), file });
 
-      const lines = source.readLines(file);
+      // readLines() returns null (distinct from a genuinely empty []) if the
+      // file could not be read — e.g. deleted or permissions-changed between
+      // the directory walk and this call. Counting that as "scanned" would
+      // report a false clean bill of health for content that was never
+      // actually looked at; a null .length would also crash the loop below.
+      const lines = await source.readLines(file);
+      if (lines === null) { unreadableFiles.push(file); continue; }
+
+      filesScanned++;
+      bytesScanned += sizeBytes || 0;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (!line) continue;
@@ -90,7 +98,7 @@ function scan({ sources, includeNoisy = false, includeSuppressed = false, onProg
 
   const distinctCounts = {};
   for (const [ruleId, set] of distinctByRule) distinctCounts[ruleId] = set.size;
-  return { findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount, distinctCounts };
+  return { findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount, distinctCounts, unreadableFiles };
 }
 
 module.exports = { scan };
