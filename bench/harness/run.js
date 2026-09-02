@@ -321,6 +321,11 @@ async function main() {
     claimedClasses: adapter.claimedClasses,
     claimsNote: adapter.claimsNote,
     notScoredForRecall: adapter.notScoredForRecall || null,
+    // Dual-mode companion runs (the dual-mode rule): an adapter that only
+    // observes a tool's default-mode egress declares egressOnly, and the
+    // scorer attaches its egress record to the named tool's row as a second
+    // labeled mode line instead of scoring it as a separate tool.
+    egressOnly: adapter.egressOnly || null,
     findings: parsed.findings,
     parseNotes: parsed.notes || [],
     egress: egressRecord,

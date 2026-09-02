@@ -81,7 +81,24 @@ live outside the scanned fixture home so they can never contaminate a scan.
    every scan: any file a scanner creates, modifies, or deletes inside the scanned
    tree is reported loudly in the raw record. The committed corpus therefore always
    equals generator output, byte for byte.
-9. **Suppress-class design order, disclosed.** The smoke tests that produced
+9. **Dual-mode tools are scored offline, observed in both modes.** Some scanners
+   verify candidate secrets against provider APIs during the scan by default and
+   document an offline switch (TruffleHog `--no-verification`, Kingfisher
+   `--no-validate`, detect-secrets `-n`). Recall is scored ONLY in the documented
+   offline mode, because scoring recall in a mode that phones out would conflate
+   the recall axis with the egress axis. Egress is then observed in BOTH modes:
+   the offline run must show none-observed, and the default mode is executed
+   against the same corpus under the same monitor, with its observed connection
+   attempts reported factually (destinations listed) next to a citation of the
+   vendor's own documentation describing verification. Neither mode's conduct is
+   editorialized: verification is a documented feature, and the report states
+   what was observed and what the vendor's docs say. Because every planted
+   credential is a pattern-true fake no provider ever issued, a default-mode
+   verification attempt sends only fake values at worst, and the refuse-and-log
+   proxy trap refuses the connections anyway, so no verification request can
+   leave the machine; both facts are stated so nobody can claim the benchmark
+   transmitted secrets.
+10. **Suppress-class design order, disclosed.** The smoke tests that produced
    `tools/VERSIONS.md` established which tools report the AWS documented example key
    BEFORE the suppress class was finalized. The class was kept because
    vendor-documented placeholders are a real precision hazard in transcripts, and the
@@ -100,9 +117,19 @@ and unscored), then from the repository root:
 ```
 node bench/corpus/generate.js && node bench/corpus/make-manifest.js
 node bench/harness/selftest-egress.js
-for t in residoo gitleaks agentsweep whatileaked ggshield; do node bench/harness/run.js "$t"; done
+for t in residoo gitleaks agentsweep whatileaked detect-secrets ggshield \
+         trufflehog betterleaks kingfisher \
+         detect-secrets-default-verification trufflehog-default-verification \
+         kingfisher-default-verification; do
+  node bench/harness/run.js "$t"
+done
 node bench/harness/score.js --md
 ```
+
+The `<tool>-default-verification` runs are the dual-mode egress observations (fairness rule
+9): they execute each dual-mode tool's default (verification-enabled) mode
+under the same monitor and are never scored for recall; `run.js --list` shows
+which adapters are available on this machine.
 
 The corpus is byte-identical on every regeneration, and the runner verifies after
 every scan that no tool mutated it. Raw scanner output, exact commands, and env pins

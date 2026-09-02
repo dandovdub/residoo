@@ -136,13 +136,30 @@ const FAMILY_TABLE = [
   [/discord/i, "discord"],
   [/heroku/i, "heroku"],
   [/private[-_ ]?key|\bpem\b|\brsa\b|\bssh\b/i, "private-key"],
-  [/\bjwt\b/i, "jwt"],
+  // detect-secrets names its JWT plugin's finding type "JSON Web Token".
+  [/\bjwt\b|json[-_ ]?web[-_ ]?token/i, "jwt"],
+  // Nothing azure is planted; the row exists so azure-family rules from any
+  // tool normalize to one coarse family instead of per-tool raw strings.
+  [/azure/i, "azure"],
   // Planted families that some tools report under composite rule names.
   // These MUST come before the generic bucket: a rule like
   // "db-url-with-password" would otherwise normalize to "generic" and the
   // family tier could never match a connection-string plant, double-charging
   // the tool with a miss AND an unplanted false positive.
-  [/connection[-_ ]?string|conn[-_ ]?str|db[-_ ]?url|database[-_ ]?url|postgres|mysql|mongodb|amqp|jdbc/i, "connection-string"],
+  // "Basic Auth Credentials" (detect-secrets' BasicAuthDetector) is included
+  // here because that rule's mechanism is the ://user:password@ userinfo form
+  // inside a URL, which is exactly how the corpus's connection-string plants
+  // (db URLs with embedded passwords) present. Mapping it to this family lets
+  // the file+family tier credit such findings instead of charging the tool a
+  // miss AND an unplanted false positive for a correct detection.
+  // credential-uri and \buri\b are here for the same reason, verified against
+  // real rule names from sample runs: betterleaks 1.8.1 and kingfisher 2.1.0
+  // report connection-string plants under "generic-credential-uri" /
+  // "betterleaks.generic-credential-uri" (which would otherwise fall into the
+  // generic bucket), and trufflehog 3.97.2 uses structured detector names
+  // ("Postgres", covered below) plus a generic "URI" detector for
+  // credentials embedded in URLs.
+  [/connection[-_ ]?string|conn[-_ ]?str|db[-_ ]?url|database[-_ ]?url|credential[-_ ]?uri|\buri\b|postgres|mysql|mongodb|amqp|jdbc|basic[-_ ]?auth/i, "connection-string"],
   [/bearer|authorization[-_ ]?header/i, "bearer-header"],
   [/generic|entropy|password|secret|api[-_ ]?key/i, "generic"],
 ];

@@ -73,10 +73,16 @@ async function testLsofPoll() {
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const port = server.address().port;
 
+  // The hold must outlast at least one full poll tick. A tick is not the
+  // 150ms cadence alone: each tick shells out to ps and then lsof, and on a
+  // loaded machine those two together were measured at ~850ms. 4 seconds
+  // gives the poller several ticks; a longer hold only strengthens the
+  // positive control (real scans run for seconds, and the known-limits note
+  // in README.md already states that sub-tick sockets can be missed).
   const child = spawn(process.execPath, ["-e", `
     const net = require("net");
     const s = net.connect(${port}, "127.0.0.1", () => {
-      setTimeout(() => { s.destroy(); process.exit(0); }, 800);
+      setTimeout(() => { s.destroy(); process.exit(0); }, 4000);
     });
     s.on("error", () => process.exit(0));
   `]);

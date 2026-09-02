@@ -67,6 +67,23 @@
  * column reads "not scored (requires server account)", never zero, with the
  * citation printed. Its egress verdict and observed behavior are reported
  * like every other tool's.
+ *
+ * DUAL-MODE TOOLS (optional live verification, e.g. TruffleHog, Kingfisher,
+ * detect-secrets): recall is scored ONLY from the tool's documented offline
+ * mode (its own flag, e.g. trufflehog --no-verification, kingfisher
+ * --no-validate, detect-secrets -n), because scoring recall in a mode that
+ * phones out would conflate the recall axis with the egress axis. Egress is
+ * then observed in BOTH modes: the offline run's egress record travels with
+ * the scored results as usual, and a companion egress-observation run
+ * (adapter id <tool>-default-verification, marked egressOnly with forTool
+ * naming the scored adapter) executes the tool's default mode against the
+ * same corpus
+ * under the same monitor. The scorer attaches that record to the tool's row
+ * as a second, clearly labeled mode line (egressModes in scoreboard.json)
+ * with the observed connection attempts and their CONNECT destinations
+ * reported factually, plus the adapter's citation of the vendor's own
+ * verification documentation. Companion records are never scored for recall
+ * or precision and never appear as separate tools.
  */
 
 const fs = require("fs");
@@ -161,6 +178,38 @@ function attribute(findings, planted, fixtureRoot) {
 function pct(n, d) {
   if (d === 0) return "n/a";
   return ((100 * n) / d).toFixed(0) + "%";
+}
+
+/** Distinct CONNECT destinations from a raw egress observed record. */
+function connectTargets(observed) {
+  const targets = [];
+  const seen = new Set();
+  for (const a of (observed && observed.proxyConnectAttempts) || []) {
+    const m = a.firstLine && String(a.firstLine).match(/^CONNECT\s+(\S+)/i);
+    const t = m ? m[1] : (a.firstLine ? String(a.firstLine).slice(0, 80) : "(connection with no readable request line)");
+    if (!seen.has(t)) { seen.add(t); targets.push(t); }
+  }
+  return targets;
+}
+
+/**
+ * One labeled egress-mode entry for a tool's egressModes list, built from a
+ * raw run record (run.js output). Counts plus the factual CONNECT
+ * destinations; verdict wording stays the monitor's own.
+ */
+function egressModeEntry(record, modeLabel, extra) {
+  const eg = record.egress || {};
+  const obs = eg.observed || {};
+  return {
+    mode: modeLabel,
+    verdict: eg.verdict || "unknown",
+    detail: eg.detail || eg.citation || null,
+    proxyConnectAttempts: (obs.proxyConnectAttempts || []).length,
+    nonProxySockets: (obs.nonProxySockets || []).length,
+    connectTargets: connectTargets(obs),
+    wallMs: record.wallMs,
+    ...(extra || {}),
+  };
 }
 
 function scoreTool(record, manifest, fixtureRoot) {
@@ -310,8 +359,19 @@ function renderText(scores, manifest) {
   out.push("");
   for (const s of scores) {
     out.push(`== ${s.displayName} (${s.version}) ==`);
-    out.push(`   wall: ${s.wallMs}ms   egress: ${s.egressVerdict}`);
-    if (s.egressDetail) out.push(`   egress detail: ${s.egressDetail}`);
+    if (s.egressModes) {
+      // Dual-mode tool: one clearly labeled egress line per mode.
+      out.push(`   wall: ${s.wallMs}ms (offline mode)`);
+      for (const m of s.egressModes) {
+        const targets = m.connectTargets && m.connectTargets.length ? `; CONNECT targets: ${m.connectTargets.join(", ")}` : "";
+        out.push(`   egress, ${m.mode}: ${m.verdict} (${m.proxyConnectAttempts} proxy CONNECT attempt(s), ${m.nonProxySockets} non-proxy socket(s)${targets})`);
+        if (m.citation) out.push(`     citation: ${m.citation}`);
+        if (m.fakeValuesNote) out.push(`     note: ${m.fakeValuesNote}`);
+      }
+    } else {
+      out.push(`   wall: ${s.wallMs}ms   egress: ${s.egressVerdict}`);
+      if (s.egressDetail) out.push(`   egress detail: ${s.egressDetail}`);
+    }
     if (s.unexpectedExit) out.push("   WARNING: a scan invocation exited outside the tool's documented codes; inspect results/raw/");
     if (s.notScoredForRecall) {
       out.push(`   recall: ${s.notScoredForRecall.reason}`);
@@ -355,21 +415,74 @@ function renderText(scores, manifest) {
   out.push("Scoring notes:");
   out.push("- classes a tool never claimed (per its own docs, quoted in its adapter) are reported as out of claimed scope, never as zero");
   out.push("- egress verdicts cover SCAN time only; install-time package fetches are expected and unscored");
+  out.push("- dual-mode tools (optional live verification) are scored for recall in their documented offline mode only; their default mode's observed egress is the second labeled line, and the corpus contains only pattern-true fake values");
   out.push("- matching tiers and the pro-competitor ambiguity rule are documented at the top of bench/harness/score.js");
   return out.join("\n");
 }
 
-function renderMarkdown(scores) {
+/**
+ * Compact cross-tool matrix so scoreboard.md stays readable as the field
+ * grows: per-tool detail keeps its own section below (columns never widen
+ * with the tool count there), and this matrix gives the at-a-glance
+ * comparison with one short cell per tool. Cells: sites found for secret
+ * classes, FP counts for chaff/suppress, "oos" out of claimed scope, "n/s"
+ * not scored for recall (reason in the tool's section).
+ */
+function renderSummaryMatrix(scores, manifest) {
+  const out = [];
+  const classIds = Object.keys(manifest.classes).filter((cid) => scores.some((s) => s.perClass[cid]));
+  if (!classIds.length || scores.length < 2) return out;
+  out.push("## Cross-tool summary");
+  out.push("");
+  out.push("Site recall per class (sites found / planted sites). Full per-tool detail, value recall, precision, and notes are in the sections below. oos = out of the tool's claimed scope (not scored, never zero); n/s = recall not scored (reason in the tool's section); FP = flagged instances of a non-secret class (false positives).");
+  out.push("");
+  out.push("| class | " + scores.map((s) => s.tool).join(" | ") + " |");
+  out.push("|---|" + scores.map(() => "---").join("|") + "|");
+  for (const cid of classIds) {
+    const cells = scores.map((s) => {
+      if (s.notScoredForRecall) return "n/s";
+      const row = s.perClass[cid];
+      if (!row) return "";
+      if (row.status) return "oos";
+      if (row.kind === "secret") return `${row.sitesFound}/${row.sites}`;
+      return `${row.falsePositives}/${row.instances} FP`;
+    });
+    const cdef = manifest.classes[cid];
+    const tag = cdef.kind !== "secret" ? ` (${cdef.kind})` : (cdef.hard ? " (hard class)" : "");
+    out.push(`| ${cid}${tag} | ${cells.join(" | ")} |`);
+  }
+  const distinct = scores.map((s) => (s.notScoredForRecall ? "n/s" : `${s.overallDistinctCredentials.found}/${s.overallDistinctCredentials.total}`));
+  out.push(`| distinct credentials, all claimed classes | ${distinct.join(" | ")} |`);
+  const prec = scores.map((s) => (s.notScoredForRecall ? "n/s" : s.precision.precision));
+  out.push(`| precision (suppress FP included) | ${prec.join(" | ")} |`);
+  const egress = scores.map((s) => (s.egressModes ? s.egressModes.map((m) => m.verdict).join(" / ") : s.egressVerdict));
+  out.push(`| egress verdict (offline / default where dual-mode) | ${egress.join(" | ")} |`);
+  out.push("");
+  return out;
+}
+
+function renderMarkdown(scores, manifest, unattachedEgressObservations) {
   const out = [];
   out.push("# Scoreboard");
   out.push("");
   out.push("Per-class scores. There is no blended headline number by design: a blend would hide the class differences the benchmark exists to show.");
   out.push("");
+  out.push(...renderSummaryMatrix(scores, manifest));
   for (const s of scores) {
     out.push(`## ${s.displayName} (${s.version})`);
     out.push("");
-    out.push(`- wall time: ${s.wallMs}ms`);
-    out.push(`- egress (scan-time only): **${s.egressVerdict}**${s.egressDetail ? " " + s.egressDetail : ""}`);
+    if (s.egressModes) {
+      out.push(`- wall time: ${s.wallMs}ms (offline mode)`);
+      for (const m of s.egressModes) {
+        const targets = m.connectTargets && m.connectTargets.length ? `; CONNECT targets: ${m.connectTargets.join(", ")}` : "";
+        out.push(`- egress (scan-time only), ${m.mode}: **${m.verdict}** (${m.proxyConnectAttempts} proxy CONNECT attempt(s), ${m.nonProxySockets} non-proxy socket(s)${targets})`);
+        if (m.citation) out.push(`  - citation: ${m.citation}`);
+        if (m.fakeValuesNote) out.push(`  - note: ${m.fakeValuesNote}`);
+      }
+    } else {
+      out.push(`- wall time: ${s.wallMs}ms`);
+      out.push(`- egress (scan-time only): **${s.egressVerdict}**${s.egressDetail ? " " + s.egressDetail : ""}`);
+    }
     if (s.notScoredForRecall) {
       out.push(`- recall: **${s.notScoredForRecall.reason}**`);
       out.push(`- citation: ${s.notScoredForRecall.citation}`);
@@ -405,6 +518,16 @@ function renderMarkdown(scores) {
       out.push("");
       out.push(`WARNING: this tool mutated the scanned fixture (${s.fixtureMutations.length} change(s)); see results/raw/.`);
     }
+    out.push("");
+  }
+  for (const u of unattachedEgressObservations || []) {
+    out.push(`## ${u.recordTool} (egress observation, unattached)`);
+    out.push("");
+    out.push(`This default-mode egress observation names forTool=${u.forTool}, which has no scored results in this scoreboard; rerun the scored (offline-mode) adapter to attach it.`);
+    out.push("");
+    out.push(`- egress (scan-time only), ${u.mode}: **${u.verdict}** (${u.proxyConnectAttempts} proxy CONNECT attempt(s), ${u.nonProxySockets} non-proxy socket(s)${u.connectTargets && u.connectTargets.length ? "; CONNECT targets: " + u.connectTargets.join(", ") : ""})`);
+    if (u.citation) out.push(`  - citation: ${u.citation}`);
+    if (u.fakeValuesNote) out.push(`  - note: ${u.fakeValuesNote}`);
     out.push("");
   }
   return out.join("\n") + "\n";
@@ -445,6 +568,8 @@ function main() {
   }
 
   const scores = [];
+  const rawRecords = {}; // tool id -> raw run record, for egress-mode assembly
+  const companions = []; // egressOnly records (dual-mode default runs)
   for (const f of toolFiles) {
     if (!fs.existsSync(f)) {
       console.error(`missing results file: ${f} (skipped)`);
@@ -455,6 +580,13 @@ function main() {
       console.error(`skipping ${record.tool}: its results were produced against ${record.fixtureRoot}, not ${args.fixtureRoot}; rerun run.js against the right fixture`);
       continue;
     }
+    if (record.egressOnly && record.egressOnly.forTool) {
+      // Dual-mode companion (default-mode egress observation): attached to
+      // its tool's row below, never scored as a separate tool.
+      companions.push(record);
+      continue;
+    }
+    rawRecords[record.tool] = record;
     scores.push(scoreTool(record, manifest, args.fixtureRoot));
   }
   if (!scores.length) {
@@ -462,13 +594,39 @@ function main() {
     process.exit(2);
   }
 
+  // Attach dual-mode egress lines: the scored (offline) run's egress first,
+  // then the default-mode observation, both clearly labeled.
+  const unattachedEgressObservations = [];
+  for (const rec of companions) {
+    const main = scores.find((s) => s.tool === rec.egressOnly.forTool);
+    const entry = egressModeEntry(rec, rec.egressOnly.modeLabel || "default mode", {
+      citation: rec.egressOnly.citation || null,
+      fakeValuesNote: rec.egressOnly.fakeValuesNote || null,
+      version: rec.version,
+    });
+    if (!main) {
+      console.error(`egress-only record ${rec.tool} names forTool=${rec.egressOnly.forTool}, which has no scored results here; reported unattached`);
+      unattachedEgressObservations.push({ recordTool: rec.tool, forTool: rec.egressOnly.forTool, ...entry });
+      continue;
+    }
+    if (!main.egressModes) {
+      const mainRecord = rawRecords[main.tool];
+      main.egressModes = [
+        egressModeEntry(mainRecord, rec.egressOnly.primaryModeLabel || "offline mode (scored for recall)"),
+      ];
+    }
+    main.egressModes.push(entry);
+  }
+
   console.log(renderText(scores, manifest));
   const jsonPath = path.join(args.resultsDir, "scoreboard.json");
-  fs.writeFileSync(jsonPath, JSON.stringify({ generatedAt: new Date().toISOString(), fixtureRoot: args.fixtureRoot, manifestSeed: manifest.seed, scores }, null, 2) + "\n");
+  const board = { generatedAt: new Date().toISOString(), fixtureRoot: args.fixtureRoot, manifestSeed: manifest.seed, scores };
+  if (unattachedEgressObservations.length) board.unattachedEgressObservations = unattachedEgressObservations;
+  fs.writeFileSync(jsonPath, JSON.stringify(board, null, 2) + "\n");
   console.log(`scoreboard.json written to ${jsonPath}`);
   if (args.md) {
     const mdPath = path.join(args.resultsDir, "scoreboard.md");
-    fs.writeFileSync(mdPath, renderMarkdown(scores));
+    fs.writeFileSync(mdPath, renderMarkdown(scores, manifest, unattachedEgressObservations));
     console.log(`scoreboard.md written to ${mdPath}`);
   }
 }
