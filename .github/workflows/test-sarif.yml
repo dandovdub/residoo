@@ -28,8 +28,8 @@ jobs:
       - name: Plant a synthetic, pattern-true finding (never committed)
         run: |
           echo 'AWS_ACCESS_KEY_ID=AKIASARIFTESTFAKEKEY' > .env.sarif-test
-      - name: Run residoo with SARIF enabled (testing the npm-install-g fix on main, not yet a tagged release)
-        uses: dandovdub/residoo@main
+      - name: Run residoo with SARIF enabled
+        uses: dandovdub/residoo@v0.3.6
         with:
           fail-on-find: "false"
           sarif: "true"
