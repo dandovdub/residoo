@@ -1,6 +1,22 @@
-# residoo
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/logo-light.svg">
+  <img src="docs/logo-light.svg" alt="residoo" width="280">
+</picture>
 
 **Find secrets leaking through your AI coding agent's session history.**
+
+[![npm version](https://img.shields.io/npm/v/residoo)](https://www.npmjs.com/package/residoo)
+[![CI](https://github.com/dandovdub/residoo/actions/workflows/ci.yml/badge.svg)](https://github.com/dandovdub/residoo/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![node >=18](https://img.shields.io/badge/node-%3E%3D18-339933)](package.json)
+[![runtime dependencies: 0](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)](package.json)
+
+<img src="docs/demo.svg" alt="residoo scan terminal output: 17 potential secrets found across 3 files, 87 files scanned (1.2 GB), values redacted to first/last 4 characters, no network calls" width="760">
+
+</div>
 
 Every time Claude Code, Cursor, or a similar tool reads a file, runs a command, or
 browses a page on your behalf, it writes a transcript of the whole session to disk —
@@ -83,6 +99,21 @@ won't be built into the tool that writes it.
 - Flags likely placeholder/example matches (an HTML form's
   `placeholder="AKIA..."` hint, a doc's example key) separately from real
   findings, rather than either hiding them or inflating the count with them.
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph machine["Your machine — no network calls"]
+        A["Discover transcripts<br/>42 sources"] --> B["Stream + pattern-match<br/>35 high-confidence rules"]
+        B --> C["Redacted report<br/>first/last 4 chars only"]
+        B -.->|"--seal (optional)"| D["AES-256-GCM vault<br/>scrypt key, encrypted manifest"]
+        D --> E["unseal --restore<br/>SHA-256-verified"]
+    end
+    D -.->|"--upload-cloudroam<br/>optional, explicit flag,<br/>ciphertext only"| F["CloudRoam<br/>encrypted copy"]
+```
+
+The dotted legs never run unless you pass their flag.
 
 ## Sealing what it finds
 

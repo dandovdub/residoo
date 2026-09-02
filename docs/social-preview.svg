@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="residoo — Find secrets leaking through your AI coding agent's session history.">
+  <!-- 1280x640 social preview card. GitHub's Settings -> Social preview upload
+       wants PNG/JPG, so convert this file to PNG (macOS Preview or any
+       SVG-to-PNG converter) before uploading. -->
+  <defs>
+    <mask id="knockout">
+      <rect x="0" y="0" width="224" height="88" fill="#ffffff"/>
+      <circle cx="167" cy="46" r="10" fill="#000000"/>
+      <circle cx="167" cy="46" r="5" fill="#ffffff"/>
+      <circle cx="199" cy="46" r="10" fill="#000000"/>
+      <circle cx="199" cy="46" r="5" fill="#ffffff"/>
+    </mask>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="640" fill="#0d1117"/>
+
+  <!-- wordmark, scaled 3x and centered (logo art is 224x88, text spans x=10..212) -->
+  <g transform="translate(307,126) scale(3)">
+    <text x="10" y="58" textLength="140" lengthAdjust="spacingAndGlyphs"
+          font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace"
+          font-size="46" font-weight="600" fill="#e6edf3">resid</text>
+    <g mask="url(#knockout)">
+      <rect x="154" y="22" width="26" height="44" rx="4" fill="#f0a52e"/>
+      <rect x="186" y="22" width="26" height="44" rx="4" fill="#f0a52e"/>
+    </g>
+  </g>
+
+  <text x="640" y="452" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="34" fill="#e6edf3">Find secrets leaking through your AI coding agent's session history.</text>
+
+  <text x="640" y="524" text-anchor="middle"
+        font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace"
+        font-size="21" fill="#8b949e">zero runtime dependencies &#183; no network calls unless you explicitly ask &#183; Node 18+ &#183; MIT</text>
+</svg>

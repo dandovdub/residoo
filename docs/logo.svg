@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 224 88" width="224" height="88" role="img" aria-label="residoo">
+  <!-- residoo wordmark, self-adapting variant: follows prefers-color-scheme.
+       The README uses the explicit light/dark pair via <picture>; this file is
+       the canonical single-file logo for contexts that respect the media query. -->
+  <style>
+    .wordmark { fill: #1f2328; }
+    .block { fill: #b45309; }
+    @media (prefers-color-scheme: dark) {
+      .wordmark { fill: #e6edf3; }
+      .block { fill: #f0a52e; }
+    }
+  </style>
+  <defs>
+    <mask id="knockout">
+      <rect x="0" y="0" width="224" height="88" fill="#ffffff"/>
+      <circle cx="167" cy="46" r="10" fill="#000000"/>
+      <circle cx="167" cy="46" r="5" fill="#ffffff"/>
+      <circle cx="199" cy="46" r="10" fill="#000000"/>
+      <circle cx="199" cy="46" r="5" fill="#ffffff"/>
+    </mask>
+  </defs>
+  <text x="10" y="58" textLength="140" lengthAdjust="spacingAndGlyphs" class="wordmark"
+        font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace"
+        font-size="46" font-weight="600">resid</text>
+  <g mask="url(#knockout)">
+    <rect x="154" y="22" width="26" height="44" rx="4" class="block"/>
+    <rect x="186" y="22" width="26" height="44" rx="4" class="block"/>
+  </g>
+</svg>

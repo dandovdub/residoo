@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 356" width="800" height="356" role="img" aria-label="Terminal output of residoo scan: 17 potential secrets found across 3 files; 87 files scanned (1.2 GB); values redacted; no network calls.">
+  <!-- Hand-authored terminal rendering of the exact example output shown in
+       the README's code block. Numbers are the real ones from a real scan,
+       not invented for this image. -->
+  <defs>
+    <style>
+      text {
+        font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+        font-size: 13px;
+        white-space: pre;
+      }
+      .t   { fill: #e6edf3; }
+      .dim { fill: #8b949e; }
+      .warn{ fill: #f0a52e; font-weight: 600; }
+      .hi  { fill: #f85149; }
+      .ok  { fill: #7ee787; }
+    </style>
+  </defs>
+
+  <!-- window -->
+  <rect x="1" y="1" width="798" height="354" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+
+  <!-- title bar -->
+  <circle cx="28" cy="28" r="6.5" fill="#ff5f57"/>
+  <circle cx="52" cy="28" r="6.5" fill="#febc2e"/>
+  <circle cx="76" cy="28" r="6.5" fill="#28c840"/>
+  <text x="400" y="33" text-anchor="middle" class="dim">residoo scan</text>
+  <line x1="1" y1="52" x2="799" y2="52" stroke="#21262d" stroke-width="1"/>
+
+  <!-- session -->
+  <text x="28" y="88"  xml:space="preserve"><tspan class="ok">$</tspan><tspan class="t"> residoo scan</tspan></text>
+
+  <text x="28" y="132" xml:space="preserve" class="warn">&#9888;  17 potential secrets found across 3 files</text>
+  <text x="28" y="154" xml:space="preserve" class="dim">   87 files scanned (1.2 GB) &#183; sources: claude-code</text>
+  <text x="28" y="176" xml:space="preserve" class="dim">   oldest match ~8d old &#183; most recent ~0d old</text>
+
+  <text x="28" y="220" xml:space="preserve"><tspan class="t">    16  </tspan><tspan class="hi">[high]</tspan><tspan class="t">  AWS Access Key ID   </tspan><tspan class="dim">(1 distinct value, re-exposed 15&#215; across tool output)</tspan></text>
+  <text x="28" y="242" xml:space="preserve"><tspan class="t">     1  </tspan><tspan class="hi">[high]</tspan><tspan class="t">  Private key block</tspan></text>
+
+  <text x="28" y="286" xml:space="preserve" class="dim">Values are redacted in this report &#8212; first/last 4 characters only. Nothing scanned</text>
+  <text x="28" y="308" xml:space="preserve" class="dim">here left your machine; residoo makes no network calls.</text>
+</svg>
