@@ -16,6 +16,36 @@ const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
 const SUPPRESS_CONTEXT_RE = /(placeholder|example|sample|dummy|<REDACTED>|xxxxxxxx|your[_-]?(api[_-]?)?key|EXAMPLE)/i;
 const CONTEXT_WINDOW = 40;
 
+/**
+ * Exact literals that vendors publish in their own documentation as example
+ * credentials. These pass every shape check by construction (they ARE the
+ * documented shape), and the context heuristic above can't be relied on to
+ * catch them: it only looks at the 40 characters BEFORE a match, so "the
+ * docs show AKIAIOSFODNN7EXAMPLE as the placeholder" sails straight through.
+ * The value itself is the signal here. Same policy as the context heuristic:
+ * suppressed by default, counted, re-includable with --include-suppressed.
+ * gitleaks and other production scanners filter the AWS pair the same way.
+ *
+ * Every literal below was verified against the vendor's own published docs
+ * (2026-09), not copied from another scanner's allowlist:
+ *   - AWS's two documented example access key ids, used across the IAM and
+ *     STS docs (e.g. the GetAccessKeyInfo API reference).
+ *   - GitHub's documented example tokens from docs.github.com: the REST API
+ *     getting-started guide's PAT, and the OAuth-apps guide's access +
+ *     refresh token pair (the same body appears under ghp_ and gho_).
+ *   - jwt.io's default demo token (header {"alg":"HS256","typ":"JWT"},
+ *     payload sub 1234567890 / John Doe), the canonical example JWT quoted
+ *     in tutorials everywhere.
+ */
+const VENDOR_EXAMPLE_VALUES = new Set([
+  "AKIAIOSFODNN7EXAMPLE",
+  "AKIAI44QH8DHBEXAMPLE",
+  "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
+  "gho_16C7e42F292c6912E7710c838347Ae178B4a",
+  "ghr_1B4a2e77838347a7E420ce178F2E7c6912E169246c34E1ccbF66C46812d16D5B1A9Dc86A1498",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+]);
+
 /** Matches every finding's own `relFile` convention — never the full path. See SECURITY.md. */
 function safeName(file) { return path.basename(file); }
 
@@ -58,8 +88,15 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       let m;
       while ((m = rule.re.exec(line)) !== null) {
         const before = line.slice(Math.max(0, m.index - CONTEXT_WINDOW), m.index);
-        const looksLikePlaceholder = SUPPRESS_CONTEXT_RE.test(before);
-        if (looksLikePlaceholder && !includeSuppressed) {
+        // The literal check runs first: it's exact, while the context window
+        // is a heuristic — a vendor-doc example is suppressed no matter what
+        // text happens to sit before it.
+        const suppressedReason = VENDOR_EXAMPLE_VALUES.has(m[0])
+          ? "vendor-documented example value"
+          : SUPPRESS_CONTEXT_RE.test(before)
+            ? "placeholder-like context"
+            : null;
+        if (suppressedReason && !includeSuppressed) {
           suppressedCount++;
         } else {
           if (!distinctByRule.has(rule.id)) distinctByRule.set(rule.id, new Set());
@@ -67,8 +104,8 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           findings.push({
             ruleId: rule.id,
             label: rule.label,
-            confidence: looksLikePlaceholder ? "low" : rule.confidence,
-            suppressedReason: looksLikePlaceholder ? "placeholder-like context" : null,
+            confidence: suppressedReason ? "low" : rule.confidence,
+            suppressedReason,
             source: relFile.source,
             file, relFile: relFile.name,
             line: lineNo,
@@ -160,4 +197,7 @@ function emptyResult() {
   };
 }
 
-module.exports = { scan, emptyResult };
+// VENDOR_EXAMPLE_VALUES is exported for the smoke tests, which assert every
+// literal in it is still matched IN FULL by some detection rule — a literal
+// no rule can produce as a whole match is dead weight that suppresses nothing.
+module.exports = { scan, emptyResult, VENDOR_EXAMPLE_VALUES };

@@ -454,10 +454,14 @@ submitting. See the note above on why that matters here specifically.
 
 Shape-based detection can't tell a real secret from a realistic-looking
 example in a fetched web page or a piece of documentation your agent read
-aloud back to you. The `--include-suppressed`/placeholder-context heuristic
-catches the common UI-hint case, not every case. Treat every finding as a
-lead to check, not a certainty. The same is true of every tool in this
-category, including the well-established ones.
+aloud back to you. Two suppression layers narrow the gap: known
+vendor-documented example values (AWS's `AKIAIOSFODNN7EXAMPLE` and its
+siblings, GitHub's docs tokens, jwt.io's demo token) are suppressed by
+exact match, and placeholder-looking context around a match catches the
+common UI-hint case. Neither catches every case, and both are re-includable
+with `--include-suppressed`. Treat every finding as a lead to check, not a
+certainty. The same is true of every tool in this category, including the
+well-established ones.
 
 ## License
 
