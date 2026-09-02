@@ -137,7 +137,11 @@ packages, because Claude Code's approved-command cache quietly accumulates
 tokens and no packaging tool ignores `.claude/` by default. So as of v0.2.0,
 `residoo scan` includes an **agent config source** covering the home-level
 config files of Claude Code, Claude Desktop, Cursor, Gemini CLI, Codex, and
-Kiro. Every path is verified against a real install or published sources (one
+Kiro. As of v0.3.1 it also reaches project-level Claude Code configs
+(`.mcp.json`, `.claude/settings.json`, `.claude/settings.local.json`) by
+resolving the project roots the agent itself recorded at home level
+(`~/.claude.json` and transcript `cwd` fields) rather than by walking or
+guessing directories; only those vendor-fixed per-project filenames are read. Every path is verified against a real install or published sources (one
 disclosed exception, a stealer-target path backed by a single published
 list, argued openly in the source header), with the full verification trail
 written into `src/sources/agent-configs.js`.

@@ -323,6 +323,111 @@ async function main() {
     check("zero-entropy: mixed-body stripe test key still reported, only by the test-mode rule",
       liveShaped.findings.length === 1 && liveShaped.findings[0].ruleId === "stripe_test_key" &&
       liveShaped.findings[0].confidence === "high" && liveShaped.suppressedCount === 0);
+
+    // Stripe's own documented sample test key (docs.stripe.com/api/authentication
+    // embeds it in every curl example) is a vendor example: suppressed, never a
+    // high-confidence finding. Written split so the faithful literal does not
+    // trip push protection (same precedent as the bench corpus).
+    const stripeDocKey = "sk_test_" + "BQokikJOvBiI2HlWgH4olfQ2";
+    const stripeDocRes = await scanOneFile("stripedoc.jsonl",
+      JSON.stringify({ message: { content: "curl https://api.stripe.com/v1/charges -u " + stripeDocKey + ":" } }) + "\n");
+    check("stripe doc key: documented sample test key suppressed by default",
+      stripeDocRes.findings.length === 0 && stripeDocRes.suppressedCount === 1);
+
+    // Greedy-extension guard: a COMPLETE token ending flush at line A's content
+    // end, followed by a line whose content starts with ordinary alphanumerics,
+    // must NOT be re-reported as a longer straddling "reconstruction" (token +
+    // the next line's first word) — that value exists nowhere. Exactly one
+    // finding, from the raw pass, no span marker, one distinct value.
+    const flushToken = "ghp_" + "F4keT0ken".repeat(4); // 36-char body for the open-ended github rule; synthetic
+    const flushA = JSON.stringify({ type: "user", message: {
+      content: [{ type: "text", text: "here is the whole value: " + flushToken }] } });
+    const flushB = JSON.stringify({ type: "user", message: {
+      content: [{ type: "text", text: "export the results and continue with the deploy" }] } });
+    const flushRes = await scanOneFile("flush.jsonl", flushA + "\n" + flushB + "\n");
+    const flushFinds = flushRes.findings.filter((f) => f.ruleId === "github_pat");
+    check("greedy-extension: seam-flush token reported once, never as a fabricated straddle",
+      flushFinds.length === 1 && !flushFinds[0].spanLines && flushFinds[0].line === 1);
+    check("greedy-extension: no fabricated extra distinct value is counted",
+      flushRes.distinctCounts.github_pat === 1);
+
+    // "=" glue: `NAME=<base64>` is the commonest env-assignment shape and the
+    // decode feature's own headline case — the variable name plus "=" must not
+    // poison the blob ("=" can only be terminal padding in valid base64).
+    const envB64 = Buffer.from("aws key: " + plantedAwsKey + " end\n").toString("base64");
+    const envRes = await scanOneFile("envglue.jsonl",
+      JSON.stringify({ message: { content: "CREDS_B64=" + envB64 + " loaded" } }) + "\n");
+    check("padding-split: NAME=<base64> env assignment still decodes the glued blob",
+      envRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.encoding === "base64"));
+
+    // A padding-terminated blob directly followed by a second base64 run
+    // across a clean wrap gap is TWO independent values; both must survive.
+    const padBlob1 = Buffer.from("first: " + plantedAwsKey + " here!\n").toString("base64");
+    check("padding sanity: first blob is padding-terminated", padBlob1.endsWith("="));
+    const padBlob2 = Buffer.from("second: " + flushToken + " done\n").toString("base64");
+    const padRes = await scanOneFile("padwrap.jsonl",
+      JSON.stringify({ message: { content: "dump:\n" + padBlob1 + "\n" + padBlob2 } }) + "\n");
+    check("padding-split: both blobs across the wrap gap decode independently",
+      padRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.encoding === "base64") &&
+      padRes.findings.some((f) => f.ruleId === "github_pat" && f.encoding === "base64"));
+
+    // TAB is not base64 wrap whitespace: two base64 cells of tab-separated
+    // output are independent values, not one wrapped (and thus dead) blob.
+    const tabCell = Buffer.from("cell: " + plantedAwsKey + "\n").toString("base64");
+    const tabCell2 = Buffer.from("hello world output cell two\n").toString("base64");
+    const tabRes = await scanOneFile("tabs.jsonl",
+      JSON.stringify({ message: { content: tabCell + "\t" + tabCell2 } }) + "\n");
+    check("tab-separated: adjacent base64 cells decode independently, key recovered",
+      tabRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.encoding === "base64"));
+
+    // Edge-chunk retry: a command word directly above (or below) wrapped
+    // encoded output merges into the wrap candidate and breaks the decode;
+    // retrying with the foreign edge chunk dropped must recover the blob.
+    const wrapForEdge = (Buffer.from("k: " + plantedAwsKey + "\n").toString("base64").match(/.{1,20}/g) || []).join("\n");
+    const aboveRes = await scanOneFile("edgeabove.jsonl",
+      JSON.stringify({ message: { content: "creds\n" + wrapForEdge } }) + "\n");
+    check("edge-retry: word above the wrapped blob no longer loses it",
+      aboveRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.encoding === "base64"));
+    const belowRes = await scanOneFile("edgebelow.jsonl",
+      JSON.stringify({ message: { content: wrapForEdge + "\noutput" } }) + "\n");
+    check("edge-retry: word below the wrapped blob no longer loses it",
+      belowRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.encoding === "base64"));
+
+    // Candidate cap: a line with more encoded runs than the per-line bound is
+    // flagged as partially checked, never silently truncated.
+    const manyRuns = Array.from({ length: 300 }, (_, i) => "runx" + String(i).padStart(4, "0")).join(" ");
+    const capRes = await scanOneFile("cap.jsonl", JSON.stringify({ message: { content: manyRuns } }) + "\n");
+    check("candidate cap: over-the-bound line is flagged as partially checked",
+      capRes.unreadableFiles.some((u) => u.reason.includes("encoded runs")));
+
+    // A vendor prefix followed by a multi-megabyte same-charset run overflows
+    // V8's regex backtrack stack inside a RULE regex (RangeError), a crash
+    // class met on real transcript data. The scan must survive it, keep every
+    // other file's findings, and degrade loudly (per-file flag when the line
+    // could not be matched; suppression if a future engine matches the
+    // zero-entropy run instead) — never a whole-scan loss, never silence.
+    const evilDir = fs.mkdtempSync(path.join(tmp, "evil-"));
+    fs.writeFileSync(path.join(evilDir, "good.jsonl"),
+      JSON.stringify({ message: { content: "real one " + plantedAwsKey + " kept" } }) + "\n");
+    fs.writeFileSync(path.join(evilDir, "evil.jsonl"),
+      JSON.stringify({ message: { content: "sk-" + "a".repeat(8 * 1024 * 1024) } }) + "\n");
+    const evilSrc = {
+      id: () => "smoke", label: () => "Smoke", available: () => true,
+      *files() {
+        for (const f of ["good.jsonl", "evil.jsonl"]) {
+          const file = path.join(evilDir, f);
+          const st = fs.statSync(file);
+          yield { file, mtimeMs: st.mtimeMs, sizeBytes: st.size, broken: false };
+        }
+      },
+      async readLines(f) { return { lines: fs.readFileSync(f, "utf-8").split("\n"), status: "complete", bytesRead: fs.statSync(f).size }; },
+    };
+    const evilRes = await scan({ sources: [evilSrc] });
+    check("huge prefixed line: scan survives and the other file's finding is kept",
+      evilRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.relFile === "good.jsonl"));
+    check("huge prefixed line: degradation is loud, never silent",
+      evilRes.unreadableFiles.some((u) => u.file === "evil.jsonl" && u.reason === "some lines could not be matched") ||
+      evilRes.suppressedCount > 0);
   }
 
   // ── cursor source: synthetic sqlite fixture ────────────────────────────

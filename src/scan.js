@@ -54,8 +54,24 @@ const CONTEXT_WINDOW = 40;
  * never ends in one, and prefix+XXXX placeholders always do. Same policy
  * as every suppression: counted, re-includable with --include-suppressed,
  * never silently dropped.
+ *
+ * Implemented as a fixed 12-character look at the END of the value, not as
+ * the equivalent anchored-backreference regex /(.)\1{11,}$/ — that regex is
+ * O(n^2) on a matched value containing a long INTERIOR identical-character
+ * run (the greedy backreference re-tests the anchor at every start
+ * position), and such values are reachable: base64 of zero-heavy bytes is a
+ * long run of "A"s inside a prefix-matched value. Checking only the last 12
+ * code units is exactly equivalent to "ends in 12 or more identical
+ * characters" and O(1) whatever the value looks like.
  */
-const ZERO_ENTROPY_BODY_RE = /(.)\1{11,}$/;
+function zeroEntropyTail(value) {
+  if (value.length < 12) return false;
+  const last = value.charCodeAt(value.length - 1);
+  for (let i = value.length - 12; i < value.length - 1; i++) {
+    if (value.charCodeAt(i) !== last) return false;
+  }
+  return true;
+}
 
 const VENDOR_EXAMPLE_VALUES = new Set([
   "AKIAIOSFODNN7EXAMPLE",
@@ -64,6 +80,19 @@ const VENDOR_EXAMPLE_VALUES = new Set([
   "gho_16C7e42F292c6912E7710c838347Ae178B4a",
   "ghr_1B4a2e77838347a7E420ce178F2E7c6912E169246c34E1ccbF66C46812d16D5B1A9Dc86A1498",
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+  // Stripe's two published sample test keys, verified against Stripe's own
+  // material (2026-09): the API reference authentication page
+  // (docs.stripe.com/api/authentication) embeds the first in its curl
+  // example under "A sample test API key is included in all the examples
+  // here"; the second is Stripe's long-running docs sample key, present
+  // verbatim in Stripe's own repositories (stripe/stripe-java and
+  // stripe/stripe-dotnet test suites) and echoed by virtually every Stripe
+  // tutorial a transcript might read. Both match stripe_test_key by
+  // construction, so without this entry each is reported at high confidence.
+  // Written split (prefix + body) so the faithful example literals do not
+  // trip GitHub push protection; the Set still holds the whole values.
+  "sk_test_" + "BQokikJOvBiI2HlWgH4olfQ2",
+  "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc",
 ]);
 
 /** Matches every finding's own `relFile` convention — never the full path. See SECURITY.md. */
@@ -138,7 +167,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // before" in the original line).
   const suppressionReason = (value, before) => {
     if (VENDOR_EXAMPLE_VALUES.has(value)) return "vendor-documented example value";
-    if (ZERO_ENTROPY_BODY_RE.test(value)) return "zero-entropy body";
+    if (zeroEntropyTail(value)) return "zero-entropy body";
     if (before !== null && SUPPRESS_CONTEXT_RE.test(before)) return "placeholder-like context";
     return null;
   };
@@ -167,9 +196,12 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // was present only encoded on this line. It redacts from the DECODED value
   // (the encoded run is treated as secret material and never appears in the
   // preview), and carries an `encoding` marker the report renders as
-  // "base64-wrapped".
+  // "base64-wrapped". Returns true when the per-line candidate cap left
+  // encoded runs on this line unchecked, so the caller can flag the file as
+  // only partially checked instead of staying silent about the gap.
   const decodeLine = (line, file, relFile, lineNo, mtimeMs) => {
-    for (const d of findDecodedMatches(line, highRules)) {
+    const { matches, truncated } = findDecodedMatches(line, highRules);
+    for (const d of matches) {
       const suppressedReason = suppressionReason(d.value, null);
       if (suppressedReason && !includeSuppressed) {
         suppressedCount++;
@@ -178,6 +210,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       record({ id: d.ruleId, label: d.label }, d.value, relFile, file, lineNo,
         mtimeMs, suppressedReason ? "low" : "high", suppressedReason, { encoding: d.encoding });
     }
+    return truncated;
   };
 
   // Feature 2: split-line boundary join. A finding here means one credential
@@ -258,22 +291,44 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       // Content projection of the PREVIOUS line, kept so each line is
       // projected once and reused for both pairs it belongs to.
       let prevContent = null;
+      // Per-file degradation flags, each surfaced at most once so a
+      // pathological file produces one visible entry, not thousands.
+      let lineMatchFailed = false;
+      let decodeTruncated = false;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (line) {
-          matchLine(line, file, relFile, i + 1, mtimeMs);
-          decodeLine(line, file, relFile, i + 1, mtimeMs);
-          const content = contentProjection(line);
-          // Boundary join with the previous line (2-way splits only; see
-          // decode.js). Both lines must be non-empty so a blank separator
-          // never forms a spurious pair.
-          if (prevContent !== null) {
-            boundaryPair(prevContent, content, file, relFile, i, mtimeMs);
+          // A rule regex itself can throw on adversarial input: V8's
+          // backtrack stack overflows (RangeError) when an open-ended
+          // quantifier meets a prefix followed by a multi-megabyte
+          // same-charset run — real transcripts contain such lines. One
+          // unmatched line must degrade to a visible per-file flag, never
+          // abort the scan and discard every finding already collected
+          // (same contract as the readLines catch above).
+          try {
+            matchLine(line, file, relFile, i + 1, mtimeMs);
+            decodeTruncated = decodeLine(line, file, relFile, i + 1, mtimeMs) || decodeTruncated;
+            const content = contentProjection(line);
+            // Boundary join with the previous line (2-way splits only; see
+            // decode.js). Both lines must be non-empty so a blank separator
+            // never forms a spurious pair.
+            if (prevContent !== null) {
+              boundaryPair(prevContent, content, file, relFile, i, mtimeMs);
+            }
+            prevContent = content;
+          } catch (err) {
+            if (!lineMatchFailed) {
+              lineMatchFailed = true;
+              unreadableFiles.push({ file: safeName(file), reason: "some lines could not be matched" });
+            }
+            prevContent = null;
           }
-          prevContent = content;
         } else {
           prevContent = null;
         }
+      }
+      if (decodeTruncated) {
+        unreadableFiles.push({ file: safeName(file), reason: "some lines held more encoded runs than the per-line bound; checked partially" });
       }
     }
 

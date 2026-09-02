@@ -44,15 +44,25 @@
 //    scope. So is hex encoding. Both are future work, left out here rather
 //    than half-done.
 //  - One decode level only: we do not recursively decode base64-in-base64.
+//  - A neighbor token glued onto a wrapped blob across the wrap newline (a
+//    command word or filename directly above or below the encoded output)
+//    is recovered by retrying the decode with ONE edge chunk dropped — but
+//    only one, and only at an edge: junk on both edges, or prose merged into
+//    the middle of a blob, still loses the whole candidate.
+//  - At most B64_MAX_CANDIDATES candidates are decoded per line; a line with
+//    more encoded runs than that is reported by the caller as only partially
+//    checked rather than silently truncated.
 
 // A run is made of characters that can appear in base64 or base64url:
-// A-Z a-z 0-9 + / = _ - (see isB64Code). Wrap separators between chunks of one logical blob are line breaks (CR, LF,
-// TAB) — the wrap whitespace that base64 line-wrapping uses. Spaces are NOT a
-// separator: base64 wrapping never uses them, and merging on spaces would
-// splice ordinary prose words together. When wrapped base64 is embedded in a
-// JSON string the line breaks arrive as the escape sequences \n \r \t (two
-// chars, backslash+letter); normalizeEscapes() turns those into real line
-// breaks first, so the escape's letter can never leak into a run.
+// A-Z a-z 0-9 + / = _ - (see isB64Code). Wrap separators between chunks of
+// one logical blob are line breaks (CR, LF) only — the whitespace that base64
+// line-wrapping actually emits. TAB and space are NOT separators: base64
+// wrapping never uses either, and merging across them splices adjacent cells
+// of tabbed or spaced output into one dead candidate. When wrapped base64 is
+// embedded in a JSON string the line breaks arrive as the escape sequences
+// \n \r \t (two chars, backslash+letter); normalizeEscapes() turns those
+// into the real characters first, so the escape's letter can never leak into
+// a run (a real TAB then dirties the gap like any non-wrap character).
 // Candidate runs are located by a hand-rolled single-pass character scan,
 // NOT a regex. The obvious regex forms both fail on real data: a repeated
 // group (chunk (sep chunk)*) recurses per repetition, and even a plain
@@ -76,19 +86,52 @@ function normalizeEscapes(line) {
  * Chunk runs merged into logical candidates: consecutive chunks whose gap
  * consists solely of wrap line breaks are one wrapped blob (its separators
  * dropped, exactly as any base64 decoder ignores whitespace); any other gap
- * (a space, prose, punctuation) ends the candidate. Iterative on purpose —
- * see the note above B64_CHUNK_RE.
+ * (a space, TAB, prose, punctuation) ends the candidate. Iterative on
+ * purpose — see the character-scan note above isB64Code.
+ *
+ * Each candidate is returned as its ARRAY of chunks, not pre-joined: the
+ * decode step needs the chunk boundaries to retry with an edge chunk dropped
+ * (see findDecodedMatches). `truncated` is true when the per-line candidate
+ * cap cut the list short, so the caller can surface the partial coverage
+ * instead of silently dropping the rest.
  */
 function isB64Code(c) {
   return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) ||
     c === 43 || c === 47 || c === 61 || c === 95 || c === 45; // + / = _ -
 }
 
+/**
+ * "=" can only be terminal padding in valid base64, so an "=" group with more
+ * base64 characters after it inside one run separates two independent values
+ * glued together — the common shapes being an env assignment (`NAME=<blob>`,
+ * where the variable name and "=" would otherwise poison the blob) and a
+ * padding-terminated blob directly followed by more encoded content. Split
+ * there, keeping the padding attached to the value it terminates.
+ */
+function splitAtPadding(chunk) {
+  const parts = [];
+  let start = 0;
+  for (let k = 0; k < chunk.length - 1; k++) {
+    if (chunk.charCodeAt(k) === 61 && chunk.charCodeAt(k + 1) !== 61) { // "=" then non-"="
+      parts.push(chunk.slice(start, k + 1));
+      start = k + 1;
+    }
+  }
+  parts.push(chunk.slice(start));
+  return parts;
+}
+
 function b64Candidates(norm) {
-  const out = [];
-  let current = null;   // accumulated candidate (chunks joined, separators dropped)
+  const candidates = []; // array of chunk arrays
+  let truncated = false;
+  let current = null;   // chunk array of the candidate in progress
   let runStart = -1;    // start of the b64 run in progress, -1 when not in one
-  let gapClean = true;  // gap since the last chunk held only \r \n \t
+  let gapClean = true;  // gap since the last chunk held only \r \n
+  const push = (cand) => {
+    if (candidates.length >= B64_MAX_CANDIDATES) { truncated = true; return false; }
+    candidates.push(cand);
+    return true;
+  };
   const n = norm.length;
   for (let i = 0; i <= n; i++) {
     const c = i < n ? norm.charCodeAt(i) : -1; // one virtual terminator flushes the last run
@@ -97,16 +140,22 @@ function b64Candidates(norm) {
       continue;
     }
     if (runStart >= 0) {
-      const chunk = norm.slice(runStart, i);
+      const raw = norm.slice(runStart, i);
       runStart = -1;
-      if (chunk.length >= B64_MIN_CHUNK) {
-        if (current !== null && gapClean) current += chunk;
-        else {
-          if (current !== null) {
-            out.push(current);
-            if (out.length >= B64_MAX_CANDIDATES) return out; // pathological line stays bounded
+      if (raw.length >= B64_MIN_CHUNK) {
+        const parts = splitAtPadding(raw);
+        for (let p = 0; p < parts.length; p++) {
+          if (p === 0 && current !== null && gapClean) current.push(parts[p]);
+          else {
+            if (current !== null && !push(current)) return { candidates, truncated };
+            current = [parts[p]];
           }
-          current = chunk;
+          // A part ending in padding is a complete value: nothing after it —
+          // not even across a clean wrap gap — can belong to the same blob.
+          if (parts[p].charCodeAt(parts[p].length - 1) === 61) {
+            if (!push(current)) return { candidates, truncated };
+            current = null;
+          }
         }
         gapClean = true;
       } else {
@@ -114,11 +163,12 @@ function b64Candidates(norm) {
         gapClean = false;
       }
     }
-    // Line breaks (CR, LF, TAB) keep a wrap gap clean; anything else dirties it.
-    if (c !== -1 && c !== 10 && c !== 13 && c !== 9) gapClean = false;
+    // Line breaks (CR, LF) keep a wrap gap clean; anything else — TAB and
+    // space included, base64 wrapping uses neither — dirties it.
+    if (c !== -1 && c !== 10 && c !== 13) gapClean = false;
   }
-  if (current !== null) out.push(current);
-  return out;
+  if (current !== null) push(current);
+  return { candidates, truncated };
 }
 
 /**
@@ -161,16 +211,35 @@ function decodeToText(cleaned) {
 /**
  * Find credentials that appear only base64-encoded on one line. `rules` MUST
  * be the high-confidence subset (see LIMITS above). Returns
+ * { matches, truncated } where matches is
  * [{ ruleId, label, confidence, value, encoding }] with `value` the DECODED
- * secret (caller redacts). Deduped by rule+value so a blob echoed twice on
- * one line (content plus tool-result mirror) is one entry.
+ * secret (caller redacts), deduped by rule+value so a blob echoed twice on
+ * one line (content plus tool-result mirror) is one entry, and `truncated`
+ * is true when the per-line candidate cap left runs unchecked (the caller
+ * surfaces that as partial coverage, never silently).
  */
 function findDecodedMatches(line, rules) {
   const out = [];
   const seen = new Set();
   const norm = normalizeEscapes(line);
-  for (const cand of b64Candidates(norm)) {
-    const decoded = decodeToText(cand);
+  const { candidates, truncated } = b64Candidates(norm);
+  for (const chunks of candidates) {
+    // A wrap-merged candidate can carry one glued-on neighbor token: a word
+    // or filename sitting directly above or below the blob across the wrap
+    // newline merges into the candidate and breaks the decode (alignment
+    // shift or round-trip failure). When the full join fails, retry once
+    // with the first chunk dropped and once with the last chunk dropped —
+    // the two positions a foreign neighbor can occupy. LIMIT: one edge
+    // chunk only; junk on both edges or prose merged mid-blob still loses
+    // the candidate. The round-trip guard in decodeToText applies to every
+    // retry, so a retry can not "decode" junk into findings.
+    const attempts = [chunks.join("")];
+    if (chunks.length > 1) {
+      attempts.push(chunks.slice(1).join(""));
+      attempts.push(chunks.slice(0, -1).join(""));
+    }
+    let decoded = null;
+    for (const a of attempts) { decoded = decodeToText(a); if (decoded) break; }
     if (!decoded) continue;
     for (const rule of rules) {
       rule.re.lastIndex = 0;
@@ -185,7 +254,7 @@ function findDecodedMatches(line, rules) {
       }
     }
   }
-  return out;
+  return { matches: out, truncated };
 }
 
 // ── Feature 2: split-line boundary join ─────────────────────────────────────
@@ -215,14 +284,34 @@ function findDecodedMatches(line, rules) {
 //  - The projection assumes the split value lives in the line's LONGEST
 //    string. A record whose longest string is not the conversational content
 //    (e.g. a huge embedded blob or a very long path) defeats it.
+//  - Only BOUNDARY_WINDOW chars from each side of the seam are joined, so a
+//    fragment longer than that window (possible only for unbounded-length
+//    token shapes) is not reconstructed; the raw pass still fires on any
+//    prefix-bearing fragment, so the window never causes a silent all-clear.
 //  - A reconstructed match must straddle the seam; a match lying wholly
 //    within either original line is already reported by the single-line pass
 //    and is dropped here, so nothing is double-counted.
+//  - GREEDY-EXTENSION GUARD: a rule with an open-ended quantifier that
+//    matches a value ending flush at line A's content end would "straddle"
+//    by swallowing whatever alphanumeric characters happen to start line B's
+//    content — fabricating a longer, never-existing value out of a complete
+//    match plus its neighbor. So a straddling match is dropped when the same
+//    rule already produces a complete match ending exactly at the seam (or
+//    starting exactly at it) that the straddling match merely extends. The
+//    cost, accepted knowingly: a token split so that its first fragment is
+//    BY ITSELF a complete valid match of the same rule is reported as that
+//    fragment (by the raw pass) rather than reconstructed — for fixed-length
+//    token shapes, the common case, no such ambiguity exists.
 
 const BOUNDARY_WINDOW = 300;   // chars taken from each side of the seam
 const BOUNDARY_MIN_CONTENT = 24; // shorter "longest string" is treated as non-content
 
-/** Escape-aware list of JSON string-literal CONTENTS on a line (no field names). */
+/**
+ * Escape-aware list of JSON string-literal CONTENTS on a line. Field names
+ * are included (this walker does not distinguish keys from values); the
+ * longest-value projection below makes short structural strings lose, which
+ * is what keeps keys out of the projection in practice.
+ */
 function jsonStringValues(line) {
   const out = [];
   const n = line.length;
@@ -272,7 +361,34 @@ function findBoundaryMatches(contentA, contentB, rules) {
   const seam = tail.length;
   const out = [];
   const seen = new Set();
+
+  // GREEDY-EXTENSION GUARD (see LIMITS above): the start positions of this
+  // rule's complete matches in the tail ALONE that end flush at the seam,
+  // and the end positions (in joined coordinates) of its complete matches
+  // in the head ALONE that start flush at the seam. A straddling match that
+  // shares a start with the former or an end with the latter is a complete
+  // single-line match greedily extended across the seam, not a
+  // reconstruction, and reporting it would fabricate a value that exists
+  // nowhere. Computed lazily: most pairs produce no straddling match.
+  const seamFlush = (rule) => {
+    const startsAtSeamEnd = new Set();
+    const endsFromSeamStart = new Set();
+    let t;
+    rule.re.lastIndex = 0;
+    while ((t = rule.re.exec(tail)) !== null) {
+      if (t.index + t[0].length === seam) startsAtSeamEnd.add(t.index);
+      if (t.index === rule.re.lastIndex) rule.re.lastIndex++;
+    }
+    rule.re.lastIndex = 0;
+    while ((t = rule.re.exec(head)) !== null) {
+      if (t.index === 0) endsFromSeamStart.add(seam + t[0].length);
+      if (t.index === rule.re.lastIndex) rule.re.lastIndex++;
+    }
+    return { startsAtSeamEnd, endsFromSeamStart };
+  };
+
   for (const rule of rules) {
+    const straddles = [];
     rule.re.lastIndex = 0;
     let m;
     while ((m = rule.re.exec(joined)) !== null) {
@@ -280,14 +396,18 @@ function findBoundaryMatches(contentA, contentB, rules) {
       const end = m.index + m[0].length;
       // Straddle-only: the match must cross the seam, else it lay wholly in
       // one line and the single-line pass already reported it.
-      if (start < seam && end > seam) {
-        const key = rule.id + "\u0000" + m[0];
-        if (!seen.has(key)) {
-          seen.add(key);
-          out.push({ ruleId: rule.id, label: rule.label, confidence: rule.confidence, value: m[0] });
-        }
-      }
+      if (start < seam && end > seam) straddles.push({ start, end, value: m[0] });
       if (m.index === rule.re.lastIndex) rule.re.lastIndex++;
+    }
+    let flush = null;
+    for (const p of straddles) {
+      if (flush === null) flush = seamFlush(rule);
+      if (flush.startsAtSeamEnd.has(p.start) || flush.endsFromSeamStart.has(p.end)) continue;
+      const key = rule.id + "\u0000" + p.value;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({ ruleId: rule.id, label: rule.label, confidence: rule.confidence, value: p.value });
+      }
     }
   }
   return out;
