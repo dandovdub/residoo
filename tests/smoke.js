@@ -953,6 +953,23 @@ async function main() {
     check("cli e2e emits valid JSON", parsed !== null);
     check("cli e2e finds the planted key via the agent-configs source",
       !!parsed && parsed.findings.some((f) => f.rule === "aws_access_key_id" && f.source === "agent-configs"));
+    check("cli e2e --json carries a per-finding fileMTimeMs matching the real fixture file's mtime",
+      !!parsed && parsed.findings.every((f) => Number.isFinite(f.fileMTimeMs)) &&
+      Math.abs(parsed.findings[0].fileMTimeMs - fs.statSync(path.join(eHome, ".claude", "settings.local.json")).mtimeMs) < 5000);
+
+    // runCli always passes --json; re-invoke without it to check the human report.
+    const plain = spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--no-color"], {
+        cwd: eCwd, encoding: "utf-8",
+        env: {
+          ...process.env,
+          HOME: eHome, USERPROFILE: eHome,
+          XDG_CONFIG_HOME: path.join(eHome, ".config"), XDG_DATA_HOME: path.join(eHome, ".local", "share"),
+          GEMINI_CLI_HOME: eHome, CODEX_HOME: path.join(eHome, ".codex"),
+        },
+      }).stdout;
+    check("cli human report's 'By file:' section shows a per-file age, not just the filename",
+      /By file:\n\s+\d+\s+~\s*\d+d old\s+settings\.local\.json/.test(plain));
     check("cli e2e integrity section reports the planted hook as a warning",
       !!parsed && !!parsed.integrity && parsed.integrity.warningCount >= 1 &&
       parsed.integrity.findings.some((f) => f.severity === "warn" && f.kind === "hook"));

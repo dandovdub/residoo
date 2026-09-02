@@ -197,7 +197,15 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
     byRule.get(f.ruleId).items.push(f);
   }
   const byFile = new Map();
-  for (const f of findings) byFile.set(f.file, (byFile.get(f.file) || 0) + 1);
+  for (const f of findings) {
+    const entry = byFile.get(f.file) || { count: 0, mtimeMs: f.fileMTimeMs };
+    entry.count++;
+    // Newest mtime wins if a file's own findings ever carried different
+    // values (they should not, mtimeMs is a per-file stat, but a defensive
+    // max here costs nothing and avoids depending on finding order).
+    if (f.fileMTimeMs > entry.mtimeMs) entry.mtimeMs = f.fileMTimeMs;
+    byFile.set(f.file, entry);
+  }
   const oldest = findings.reduce((a, b) => (b.fileMTimeMs < a ? b.fileMTimeMs : a), Date.now());
   const newest = findings.reduce((a, b) => (b.fileMTimeMs > a ? b.fileMTimeMs : a), 0);
 
@@ -230,9 +238,9 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
 
   push();
   push(paint(c.bold, "By file:"));
-  const fileRows = [...byFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
-  for (const [file, count] of fileRows) {
-    push(`  ${String(count).padStart(4)}  ${paint(c.cyan, safeBasename(file))}`);
+  const fileRows = [...byFile.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 15);
+  for (const [file, { count, mtimeMs }] of fileRows) {
+    push(`  ${String(count).padStart(4)}  ${paint(c.dim, `~${String(ageDays(mtimeMs)).padStart(2)}d old`)}  ${paint(c.cyan, safeBasename(file))}`);
   }
   if (byFile.size > fileRows.length) push(paint(c.dim, `  … and ${byFile.size - fileRows.length} more file(s)`));
 
@@ -277,6 +285,7 @@ function renderJson(result, integrity = null, rotation = null) {
       findings: result.findings.map((f) => ({
         rule: f.ruleId, label: f.label, confidence: f.confidence,
         source: f.source, file: f.relFile, line: f.line, preview: f.preview,
+        fileMTimeMs: f.fileMTimeMs,
         // Markers for the two decode/reconstruct passes (absent on ordinary
         // findings). `encoding` names how the value was wrapped ("base64" /
         // "base64url"); `spanLines` names the adjacent line pair a split value
