@@ -103,6 +103,14 @@ won't be built into the tool that writes it.
   files), and checks the places the 2026 supply-chain campaigns planted
   persistence: hooks, dropper scripts, auto-run tasks, invisible Unicode.
   See the next section.
+- Attaches a **rotation runbook** to every finding: the vendor's real
+  revocation path, verified against their own docs, plus a local
+  acknowledgement ledger so "found it" can become "closed it". See
+  [Rotation](#rotation-from-found-to-closed).
+- Scans a **repository checkout** instead of the machine with
+  `--project <dir>`: committed transcripts, agent configs, and root `.env`
+  files, built for CI and pre-commit. See
+  [CI and pre-commit](#ci-and-pre-commit).
 
 ## Beyond transcripts: configs and planted persistence
 
@@ -159,6 +167,7 @@ counted as clean.
   │                                                               │
   │   42 transcript sources           agent config files          │
   │   ~/.claude, Cursor, Codex…       settings · MCP · memory     │
+  │   (--project <dir>: a repo checkout instead of the machine)   │
   │            │                              │                   │
   │            ├──────────────┬───────────────┤                   │
   │            ▼              │               ▼                   │
@@ -167,6 +176,9 @@ counted as clean.
   │            │              │        zero-width unicode         │
   │            ▼              ▼               │                   │
   │        redacted report (first/last 4 chars only) ◀────────────┤
+  │            │                                                  │
+  │            ├─▶ rotation hints per finding · explain / ack     │
+  │            │   ledger: ~/.residoo/rotations.json              │
   │            │                                                  │
   │            ▼  --seal (only if you ask)                        │
   │        AES-256-GCM vault · scrypt key · encrypted manifest    │
@@ -179,7 +191,9 @@ counted as clean.
 
 The `--seal` and `--upload-cloudroam` legs never run unless you pass their
 flag. Everything above the vault happens on every scan; nothing in the
-diagram ever modifies or deletes an existing file.
+diagram ever modifies or deletes an existing file. The one exception, stated
+in the open: `residoo ack` writes residoo's own rotation ledger at
+`~/.residoo/rotations.json` (atomic, redacted, never a user file).
 
 ## Sealing what it finds
 
@@ -207,6 +221,76 @@ touches the network, it never runs unless you pass the flag, and only
 ciphertext is transmitted.** The vault is sealed before upload code ever
 executes.
 
+## Rotation: from found to closed
+
+Detection without rotation is theater, and the field's own numbers say so:
+64% of secrets leaked publicly in 2022 were still valid years later, 88% of
+re-verified leaked AWS keys still authenticated, and the median time to
+remediate a GitHub-leaked secret is 94 days. A scanner that stops at "found
+it" leaves all of that untouched. So every finding in a residoo report comes
+with the way out:
+
+- **A rotation hint per finding**, from a per-rule guidance map covering all
+  35 detection rules (plus the opt-in noisy ones). Where a rotation URL is
+  shown, that exact URL was fetched and confirmed to document rotating or
+  revoking that credential type; where a vendor's docs are login-walled or
+  unfetchable, the report gives the console path in words instead of a link
+  it could not verify. Generic shapes (a JWT, a bearer header) get honest
+  generic guidance that says how to identify the issuer, never a pretend
+  vendor.
+- **`residoo explain <rule-id>`** prints the full runbook for one credential
+  type: where to revoke, the steps, and what revocation actually does at
+  that vendor. `residoo explain --list` shows the whole catalogue.
+- **`residoo ack <fingerprint>`** records that you rotated one finding.
+  Every finding carries a stable fingerprint (derived only from
+  already-redacted material, so the ledger can never leak), shown in the
+  report and in `--json`. Acknowledged findings are reported as such on the
+  next scan instead of re-alarming forever. The ledger lives at
+  `~/.residoo/rotations.json`: residoo's own file, written atomically, ack
+  notes redacted through the same pipeline as previews.
+- **Order matters, and the report says so when it does.** The ChainDrop
+  campaign (Aug 2026) shipped a token monitor that fires an attacker payload
+  the moment the stolen GitHub token is revoked. When one scan finds both
+  integrity warnings and leaked credentials, the report tells you to remove
+  the planted persistence first and rotate second, because "rotate
+  everything now" advice can itself trigger the damage.
+
+Acks change what the report says, never what CI does: `--fail-on-find`
+fails on every finding, acknowledged or not, unless you explicitly pass
+`--allow-acked` (integrity warnings always fail either way).
+
+## CI and pre-commit
+
+`residoo scan --project <dir>` scans a repository checkout instead of the
+machine it runs on: committed agent transcripts (Claude Code `.jsonl`
+trees, Codex `rollout-*.jsonl`, SpecStory histories), agent config and
+rules files at any depth, and root-level `.env` files, plus the integrity
+checks anchored at that directory. It deliberately does not touch the
+machine's home-level sources, so a clean CI run means the checkout is
+clean and claims nothing about anyone's laptop.
+
+As a GitHub Action (this repository doubles as a composite action):
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+  - uses: dandovdub/residoo@v0.3.0
+```
+
+As a pre-commit hook:
+
+```yaml
+repos:
+  - repo: https://github.com/dandovdub/residoo
+    rev: v0.3.0
+    hooks:
+      - id: residoo
+```
+
+Or with no integration at all: `npx --yes residoo scan --project . --fail-on-find`.
+Exit codes, inputs, and exactly what project mode does and does not see are
+documented in [docs/ci.md](docs/ci.md).
+
 ## What it does not do
 
 - **No network calls in the default path, and none at all unless you
@@ -232,6 +316,20 @@ npm install -g residoo
 residoo scan
 ```
 
+A Homebrew formula ships in this repo at `packaging/homebrew/`. It installs
+the exact tarball published to npm (same bits, sha256 verified), so Homebrew
+is a second door to the same release, not a second build. Once the tap
+repository (`dandovdub/homebrew-residoo`) is published, installation is:
+
+```bash
+brew tap dandovdub/residoo
+brew install residoo
+```
+
+Until the tap is up, npm above is the way in. The formula always points at
+the latest *published* npm release (its sha256 is computed from the real
+tarball), so it can lag a fresh tag by one publish cycle.
+
 Requires Node.js 18+. The SQLite-backed sources listed below additionally
 need 22.5+; residoo still runs and scans every line-delimited/JSON source,
 including Claude Code, fine without it. Zero runtime dependencies, and you
@@ -243,10 +341,14 @@ can check `package.json` rather than take that on faith.
 residoo scan [options]
 
   --json                  machine-readable output (full detail, still redacted)
+  --project [dir]         scan a repository checkout instead of this machine
+                          (committed transcripts, agent configs, root .env)
   --include-noisy         also run broad, false-positive-prone rules
   --include-suppressed    also show matches that looked like placeholder/example text
   --fail-on-find          exit code 1 if anything is found (for CI): secret
                           findings and integrity warnings count, review items don't
+  --allow-acked           with --fail-on-find: acknowledged findings no longer
+                          fail the run (pending ones and warnings still do)
   --no-integrity          skip the integrity checks
   --no-color              disable ANSI colour
 
@@ -254,6 +356,10 @@ residoo scan [options]
   --vault-dir <dir>       vault location (default ./residoo-vault-<stamp>)
   --upload-cloudroam      also upload the sealed vault (needs CLOUDROAM_API_KEY,
                           --connector <id>, --bucket <name>; ciphertext only)
+
+residoo explain <rule-id>                           full rotation runbook for one rule
+residoo explain --list                              every rule id and label
+residoo ack <fingerprint> [--note <text>]           mark one finding rotated
 
 residoo unseal <vault-dir>                          list a vault's contents
 residoo unseal <vault-dir> --restore <n> --out <p>  restore one file, hash-verified
@@ -266,7 +372,10 @@ so pick one you keep.
 ## Sources supported today
 
 43 sources as of this writing (42 transcript stores plus the agent-config
-source described above), in two honestly-distinct tiers. See
+source described above), in two honestly-distinct tiers. Project mode
+(`--project`) adds one more, opt-in source (`src/sources/project-artifacts.js`)
+that scans a repository checkout rather than the machine and never
+participates in a default scan. See
 `src/sources/index.js` for the full list and grouping, and each source file's
 own header for exactly what was and wasn't checked.
 

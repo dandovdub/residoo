@@ -15,6 +15,13 @@ changes is "keeps it auditable," not "adds more."
    telemetry will be rejected regardless of intent.
 3. **Scanning stays read-only; nothing is ever destructive.** Sealing creates
    new files. No code in this repo may modify or delete an existing file.
+   One disclosed carve-out: `residoo ack` maintains residoo's own state file,
+   `~/.residoo/rotations.json` (the rotation acknowledgement ledger). It is
+   residoo's file in residoo's directory, written atomically (temp file plus
+   rename, mode 0600), it never contains a raw secret (ack notes go through
+   the same redaction pipeline as previews), and it is the only file residoo
+   ever writes outside an explicit `--seal`. Nothing else may claim this
+   carve-out; a change that writes anywhere else will be rejected.
 4. **Output stays redacted.** The raw matched value may exist in memory for
    dedup counting and inside `redact()`. Nowhere else, and never in any
    output format, error message, or log line.
@@ -59,8 +66,16 @@ clean: a scanner that checks the wrong place and reports "no secrets found"
 is worse than one that admits it doesn't support the tool. Say in the PR what
 you verified against (tool + version + OS).
 
+One source lives outside the registry on purpose: `src/sources/
+project-artifacts.js`, the `--project` (repo checkout) source. A project scan
+needs a parameter (which directory), and the registry holds parameterless
+singletons, so its default export is permanently unavailable and the CLI
+builds a configured instance via its `withRoot(root)` factory instead. Read
+its header before extending it; the inclusion and exclusion lists are
+evidence-cited line by line.
+
 **43 sources are supported as of this writing** (42 transcript stores plus
-agent-configs). See `src/sources/index.js` for the full registry and its
+agent-configs, not counting the opt-in project source above). See `src/sources/index.js` for the full registry and its
 trust-tier note, and README.md's "Sources supported today" for the same list
 from a user's perspective. Only Claude Code and agent-configs' Claude-family
 paths are real-install-verified; every other source, Cursor included, is
@@ -109,6 +124,17 @@ go in `PATTERNS`; broad shape-based rules go in `NOISY_PATTERNS` (opt-in via
 - Add a case to `tests/smoke.js` using synthetic material only. AWS's
   documented example key id (`AKIAIOSFODNN7EXAMPLE`) is the model: officially
   fake, correctly shaped.
+- Add a matching entry to `ROTATION_GUIDANCE` in `src/rotation.js`. Every
+  rule id must map to rotation guidance, and the smoke tests fail if one is
+  missing. A `rotateUrl` may only ship if you fetched that exact URL and
+  confirmed it documents rotating or revoking that credential type (cite the
+  check in a comment next to the entry); where the vendor's page is
+  login-walled or unfetchable, ship a `consolePath` in words instead, with
+  the corroboration noted. A guessed URL in remediation advice will be
+  rejected outright.
+- House style for anything user-facing (labels, steps, notes, help text,
+  docs): no em-dashes. Use periods, commas, colons, semicolons, or
+  parentheses instead.
 
 ## Tests
 

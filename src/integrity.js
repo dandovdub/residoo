@@ -113,7 +113,7 @@ const HOOK_SUSPICION = [
     // .claude/ and .vscode/ (Wiz IOC list), and the artifact the Mini
     // Shai-Hulud/Miasma SessionStart hooks execute.
     re: /\bsetup\.mjs\b/i,
-    reason: "references setup.mjs — the dropper filename the Aug-2026 keyv/ChainDrop wave planted in .claude/ and .vscode/ (Wiz IOC)",
+    reason: "references setup.mjs, the dropper filename the Aug-2026 keyv/ChainDrop wave planted in .claude/ and .vscode/ (Wiz IOC)",
   },
   {
     id: "curl-pipe-sh",
@@ -121,12 +121,12 @@ const HOOK_SUSPICION = [
     // linear-time on adversarial input (see CONTRIBUTING.md on ReDoS) and
     // stops a curl in one shell statement matching a pipe in the next.
     re: /\b(?:curl|wget)\b[^|;&\n]{0,200}\|\s*(?:ba|z|da|fi)?sh\b/i,
-    reason: "downloads from the network and pipes straight into a shell — a hook doing this re-fetches its payload on every session",
+    reason: "downloads from the network and pipes straight into a shell: a hook doing this re-fetches its payload on every session",
   },
   {
     id: "base64-decode",
     re: /\bbase64\b\s+(?:-d|-D|--decode)\b/,
-    reason: "decodes base64 before executing — the obfuscation step the 2026 npm campaigns used to hide payloads from exactly this kind of review",
+    reason: "decodes base64 before executing: the obfuscation step the 2026 npm campaigns used to hide payloads from exactly this kind of review",
   },
   {
     id: "script-in-dot-dir",
@@ -138,7 +138,7 @@ const HOOK_SUSPICION = [
     // "confirm you wrote it", not "malware".
     re: /(?:^|[\s"'/=])\.[A-Za-z0-9_][A-Za-z0-9_.-]*\/[^\s"']*\.(?:mjs|cjs|js)\b/,
     requireRunner: /\b(?:node|bun|deno)\b/,
-    reason: "runs a script that lives inside a dot-directory — the persistence shape of the Mini Shai-Hulud/Miasma SessionStart plants; confirm you wrote that script",
+    reason: "runs a script that lives inside a dot-directory: the persistence shape of the Mini Shai-Hulud/Miasma SessionStart plants; confirm you wrote that script",
     // Claude Code's own hooks docs suggest keeping hook scripts at
     // ~/.claude/hooks/<script>.js — warning on the vendor-documented layout
     // (and failing --fail-on-find CI on it, every scan) is the cry-wolf →
@@ -149,7 +149,7 @@ const HOOK_SUSPICION = [
     // stays warn. (setup.mjs never reaches here: dropper-name matches
     // first.)
     demoteIfHomeAnchored: true,
-    reasonInfo: "runs a script from a dot-directory under your home directory — the vendor-documented hook layout; confirm you wrote that script",
+    reasonInfo: "runs a script from a dot-directory under your home directory: the vendor-documented hook layout; confirm you wrote that script",
   },
 ];
 
@@ -384,9 +384,22 @@ function extractHooks(parsed) {
 
 /**
  * `home` and `cwd` are overridable for tests only (a synthetic planted HOME
- * beats mutating process.env mid-process); production callers pass nothing.
+ * beats mutating process.env mid-process); production callers pass nothing,
+ * except the CLI's --project mode, which pins both anchors to the project
+ * root AND sets `projectMode: true`. The flag exists because two behaviors
+ * must change when the anchors stop meaning "this user's machine":
+ *
+ * - GEMINI_CLI_HOME is ignored. It is this MACHINE's Gemini root override;
+ *   honoring it in a project scan would pull a machine-level settings file
+ *   into a verdict that claims to be about the checkout only, and could
+ *   fail CI on a clean repo because of the runner's (or a developer's) own
+ *   environment.
+ * - The home-anchored hook demotion (see HOOK_SUSPICION) is suppressed. The
+ *   demotion exists to avoid crying wolf on the user's own standing config;
+ *   a hook inside a COMMITTED repo config is not the user's standing config,
+ *   and demoting it there would hand a hostile repo a warn-tier bypass.
  */
-function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
+function checkIntegrity({ home = os.homedir(), cwd = process.cwd(), projectMode = false } = {}) {
   const findings = [];
   const filesChecked = [];
   // Home checks and project checks can name the same file (running residoo
@@ -425,9 +438,9 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
     const res = readSmallFile(file);
     mark(file, res.status === "ok" ? "checked" : res.status);
     if (res.status === "unreadable") {
-      add("warn", "unreadable-config", file, "exists in an auto-execution location but could not be read — its contents are unverified, not clean");
+      add("warn", "unreadable-config", file, "exists in an auto-execution location but could not be read; its contents are unverified, not clean");
     } else if (res.status === "too-large") {
-      add("warn", "oversized-config", file, `larger than ${MAX_CONFIG_BYTES / 1024 / 1024}MB — far beyond any hand-written config (the Miasma payload runner was 4.3MB); not parsed, review it directly`);
+      add("warn", "oversized-config", file, `larger than ${MAX_CONFIG_BYTES / 1024 / 1024}MB, far beyond any hand-written config (the Miasma payload runner was 4.3MB); not parsed, review it directly`);
     }
     return res.status === "ok" ? res.text : null;
   };
@@ -437,14 +450,21 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
   // exact files Miasma planted in cloned repos — a repo-local
   // .claude/settings.json the user never wrote is the campaign's signature.
   // GEMINI_CLI_HOME is Gemini CLI's own documented root override (the CLI
-  // creates `.gemini` INSIDE it) — the same resolution agent-configs.js and
+  // creates `.gemini` INSIDE it), the same resolution agent-configs.js and
   // gemini-cli.js use. Hard-coding ~/.gemini here made the two modules
   // disagree about the same file within one run: agent-configs would find a
   // secret in the real settings file while integrity called that location
-  // absent and missed a planted hook in it.
-  const geminiHome = process.env.GEMINI_CLI_HOME
+  // absent and missed a planted hook in it. In project mode the override is
+  // a MACHINE-level fact and is deliberately ignored: the anchors point at
+  // the checkout, and a project verdict must never be pierced by the
+  // invoking environment (see the function docstring).
+  const geminiHome = !projectMode && process.env.GEMINI_CLI_HOME
     ? path.join(process.env.GEMINI_CLI_HOME, ".gemini")
     : path.join(home, ".gemini");
+  // Feeds the home-anchored demotion in suspicionReason: null disables it,
+  // which is the correct posture when `home` is a project root rather than
+  // anyone's home directory.
+  const demotionHome = projectMode ? null : home;
   const hookFiles = [
     path.join(home, ".claude", "settings.json"),
     path.join(home, ".claude", "settings.local.json"),
@@ -460,10 +480,10 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
 
     let parsed;
     try { parsed = JSON.parse(text); } catch {
-      add("warn", "unparseable-config", file, "exists in an auto-execution location but is not valid JSON — the agent's own loader would also choke on it, so corruption or tampering is worth a look; raw text was signature-checked instead");
+      add("warn", "unparseable-config", file, "exists in an auto-execution location but is not valid JSON; the agent's own loader would also choke on it, so corruption or tampering is worth a look; raw text was signature-checked instead");
       // The parse failing must not mean the campaign signatures go
       // unchecked — grep the raw text for the same shapes.
-      const hit = suspicionReason(text, home);
+      const hit = suspicionReason(text, demotionHome);
       if (hit) add(hit.severity, "hook", file, `suspicious signature in raw text: ${hit.reason}`);
       continue;
     }
@@ -473,31 +493,31 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
       // No hand-written config is 10k nodes deep/wide — this shape exists
       // to exhaust a walker. The hooks in it are unverified, said loudly;
       // the raw text still gets signature-checked below.
-      add("warn", "unwalkable-config", file, `hooks section exceeds ${MAX_WALK_NODES} nodes — far beyond any hand-written config; its hooks are unverified, not clean, review the file directly`);
-      const hit = suspicionReason(text, home);
+      add("warn", "unwalkable-config", file, `hooks section exceeds ${MAX_WALK_NODES} nodes, far beyond any hand-written config; its hooks are unverified, not clean, review the file directly`);
+      const hit = suspicionReason(text, demotionHome);
       if (hit) add(hit.severity, "hook", file, `suspicious signature in raw text: ${hit.reason}`);
     }
     for (const u of unrecognized) {
       // A `command` that isn't a string (e.g. ["node", "x.js"]) is not
       // extracted or signature-checked — schema drift must degrade to
       // still-reported, never a silent miss.
-      add("info", "hook-unrecognized", file, `${u.event ? safePreview(u.event, 40) : "unknown event"} hook entry whose "command" is not a string — not extracted or signature-checked; review it manually`);
+      add("info", "hook-unrecognized", file, `${u.event ? safePreview(u.event, 40) : "unknown event"} hook entry whose "command" is not a string: not extracted or signature-checked; review it manually`);
     }
     if (!truncated && hadHooksKey && hooks.length === 0 && unrecognized.length === 0 && sawLeaf) {
       // A populated hooks block this walker couldn't pull a command out of
       // is a coverage gap, and coverage gaps get said out loud. sawLeaf
       // keeps a legitimately empty {"SessionStart": []} block from tripping
       // this.
-      add("info", "hook-unrecognized", file, "has a hooks section whose shape this check doesn't recognize — no commands extracted; review it manually");
+      add("info", "hook-unrecognized", file, "has a hooks section whose shape this check doesn't recognize: no commands extracted; review it manually");
       continue;
     }
     for (const h of hooks) {
       const where = `${h.event ? safePreview(h.event, 40) : "unknown event"}${h.matcher ? ` (matcher: ${safePreview(h.matcher, 40)})` : ""}`;
-      const hit = suspicionReason(h.command, home);
+      const hit = suspicionReason(h.command, demotionHome);
       if (hit) {
         add(hit.severity, "hook", file, `${where} hook ${hit.reason}: "${safePreview(h.command)}"`);
       } else {
-        add("info", "hook", file, `${where} hook runs automatically: "${safePreview(h.command)}" — confirm you added this one`);
+        add("info", "hook", file, `${where} hook runs automatically: "${safePreview(h.command)}}"; confirm you added this one`);
       }
     }
   }
@@ -520,7 +540,7 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
       // exists but can't be listed hides whatever is in it.
       if (!(err && (err.code === "ENOENT" || err.code === "ENOTDIR"))) {
         mark(dir, "unreadable");
-        add("warn", "unreadable-config", dir, "directory exists but could not be listed — any loose scripts in it are unverified, not clean");
+        add("warn", "unreadable-config", dir, "directory exists but could not be listed; any loose scripts in it are unverified, not clean");
       }
       continue;
     }
@@ -531,9 +551,9 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
       // finding below always accompanies it (see the module header).
       mark(file, "checked");
       if (/^setup\.mjs$/i.test(e.name)) {
-        add("warn", "dropper-name", file, "matches the exact dropper filename the Aug-2026 keyv/ChainDrop wave planted in .claude/ (Wiz IOC) — if you did not create this file, do not run the agent from here until you've read it");
+        add("warn", "dropper-name", file, "matches the exact dropper filename the Aug-2026 keyv/ChainDrop wave planted in .claude/ (Wiz IOC); if you did not create this file, do not run the agent from here until you've read it");
       } else {
-        add("info", "loose-script", file, "script at the top level of an agent config directory — an auto-execution-adjacent location; review it");
+        add("info", "loose-script", file, "script at the top level of an agent config directory, an auto-execution-adjacent location; review it");
       }
     }
   }
@@ -553,9 +573,9 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
       // absence (EACCES, ELOOP) is unverified, not clean.
       mark(file, isFile ? "checked" : statFailed ? "unreadable" : "absent");
       if (statFailed) {
-        add("warn", "unreadable-config", file, "location could not be examined (stat failed) — unverified, not clean");
+        add("warn", "unreadable-config", file, "location could not be examined (stat failed): unverified, not clean");
       } else if (isFile) {
-        add("warn", "dropper-name", file, "matches the exact dropper filename the Aug-2026 keyv/ChainDrop wave planted in .vscode/ (Wiz IOC) — if you did not create this file, review it before opening this folder in VS Code");
+        add("warn", "dropper-name", file, "matches the exact dropper filename the Aug-2026 keyv/ChainDrop wave planted in .vscode/ (Wiz IOC); if you did not create this file, review it before opening this folder in VS Code");
       }
     }
   }
@@ -572,10 +592,10 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
     const bad = hits.filter((h) => h.suspicious);
     const joiners = hits.filter((h) => !h.suspicious);
     if (bad.length > 0) {
-      add("warn", "zero-width", file, `${bad.length} invisible character${bad.length === 1 ? "" : "s"}: ${summarizeZeroWidth(bad)} — zero-width Unicode carried hidden agent instructions in the TrapDoor campaign; inspect with a hex viewer before trusting this file`);
+      add("warn", "zero-width", file, `${bad.length} invisible character${bad.length === 1 ? "" : "s"}: ${summarizeZeroWidth(bad)} : zero-width Unicode carried hidden agent instructions in the TrapDoor campaign; inspect with a hex viewer before trusting this file`);
     }
     if (joiners.length > 0) {
-      add("info", "zero-width", file, `${summarizeZeroWidth(joiners)} adjacent to non-ASCII text — usually legitimate emoji/script joiners; listed so the count above can't quietly absorb them`);
+      add("info", "zero-width", file, `${summarizeZeroWidth(joiners)} adjacent to non-ASCII text: usually legitimate emoji/script joiners; listed so the count above can't quietly absorb them`);
     }
   };
   for (const file of zwFiles) {
@@ -593,7 +613,7 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
     catch (err) {
       if (!(err && (err.code === "ENOENT" || err.code === "ENOTDIR"))) {
         mark(rulesDir, "unreadable");
-        add("warn", "unreadable-config", rulesDir, "rules directory exists but could not be listed — its contents are unverified, not clean");
+        add("warn", "unreadable-config", rulesDir, "rules directory exists but could not be listed; its contents are unverified, not clean");
       }
     }
     if (entries) {
@@ -607,9 +627,9 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
         // filesChecked lie about verification depth.
         const text = readOrReport(file);
         if (/^setup\.mdc$/i.test(e.name)) {
-          add("warn", "dropper-name", file, "matches the rules filename Miasma planted (.cursor/rules/setup.mdc) to prompt-inject Cursor on repo open — confirm you created it");
+          add("warn", "dropper-name", file, "matches the rules filename Miasma planted (.cursor/rules/setup.mdc) to prompt-inject Cursor on repo open; confirm you created it");
         } else {
-          add("info", "cursor-rule", file, "Cursor loads rules files as agent instructions automatically — confirm you added this one");
+          add("info", "cursor-rule", file, "Cursor loads rules files as agent instructions automatically; confirm you added this one");
         }
         if (text !== null) zwCheck(file, text);
       }
@@ -624,9 +644,9 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
     if (text !== null) {
       let parsed = null;
       try { parsed = JSON.parse(stripJsonc(text)); } catch {
-        add("warn", "unparseable-config", file, "not valid JSON even after comment/trailing-comma stripping — unverified, not clean; raw text was signature-checked instead");
+        add("warn", "unparseable-config", file, "not valid JSON even after comment/trailing-comma stripping: unverified, not clean; raw text was signature-checked instead");
         if (/"runOn"\s*:\s*"folderOpen"/.test(text)) {
-          add("warn", "autorun-task", file, 'raw text contains "runOn": "folderOpen" — a task that executes on folder open (Mini Shai-Hulud/Miasma persistence); review it');
+          add("warn", "autorun-task", file, 'raw text contains "runOn": "folderOpen", a task that executes on folder open (Mini Shai-Hulud/Miasma persistence); review it');
         }
       }
       if (parsed) {
@@ -643,14 +663,14 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd() } = {}) {
           if (!node || typeof node !== "object") continue;
           if (node.runOptions && node.runOptions.runOn === "folderOpen") {
             const what = node.label || node.command || node.script || "(unnamed task)";
-            add("warn", "autorun-task", file, `task "${safePreview(what, 60)}" runs on folder open ("runOn": "folderOpen") — the Mini Shai-Hulud/Miasma persistence mechanism; confirm you added it`);
+            add("warn", "autorun-task", file, `task "${safePreview(what, 60)}" runs on folder open ("runOn": "folderOpen"), the Mini Shai-Hulud/Miasma persistence mechanism; confirm you added it`);
           }
           for (const v of Object.values(node)) stack.push(v);
         }
         if (truncated) {
-          add("warn", "unwalkable-config", file, `structure exceeds ${MAX_WALK_NODES} nodes — far beyond any hand-written tasks.json; auto-run tasks in it are unverified, not clean, review the file directly`);
+          add("warn", "unwalkable-config", file, `structure exceeds ${MAX_WALK_NODES} nodes, far beyond any hand-written tasks.json; auto-run tasks in it are unverified, not clean, review the file directly`);
           if (/"runOn"\s*:\s*"folderOpen"/.test(text)) {
-            add("warn", "autorun-task", file, 'raw text contains "runOn": "folderOpen" — a task that executes on folder open (Mini Shai-Hulud/Miasma persistence); review it');
+            add("warn", "autorun-task", file, 'raw text contains "runOn": "folderOpen", a task that executes on folder open (Mini Shai-Hulud/Miasma persistence); review it');
           }
         }
       }

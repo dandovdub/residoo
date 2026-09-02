@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("path");
+const { fingerprintFinding, ROTATION_ORDER_ADVISORY } = require("./rotation");
 
 // Minimal raw ANSI — no chalk, no deps. A security tool asking you to trust
 // a pile of third-party packages before it's even scanned anything is a bad
@@ -26,6 +27,90 @@ function makePaint(forceNoColor) {
 
 function ageDays(mtimeMs) {
   return Math.max(0, Math.floor((Date.now() - mtimeMs) / 86400000));
+}
+
+// File NAMES are attacker-controllable text headed for a terminal: in
+// --project mode a hostile checkout chooses its own filenames, and a name
+// carrying raw ESC bytes could clear the screen or overwrite the findings
+// block with a spoofed all-clear. Same discipline integrity.js applies to
+// its displayed paths (its stripControlChars/escapeInvisibles pair, mirrored
+// here rather than exported: patterns.js and integrity.js each keep their own
+// copy for the same shared-file reason): control bytes stripped, invisible
+// code points made visible so a zero-width name cannot render as nothing.
+const INVISIBLES_RE = /[\u200b\u200c\u200d\u2060\ufeff\u{e0000}-\u{e007f}]/gu;
+function safeBasename(file) {
+  return path.basename(String(file))
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .replace(INVISIBLES_RE, (ch) => "\\u{" + ch.codePointAt(0).toString(16).toUpperCase() + "}");
+}
+
+// Plain greedy word wrap for the one long-paragraph string this report prints
+// (the rotation ordering advisory). Continuation lines get the indent.
+function wrapText(s, width, indent) {
+  const words = String(s).split(/\s+/);
+  const lines = [];
+  let cur = "";
+  for (const w of words) {
+    if (cur && cur.length + 1 + w.length > width) { lines.push(cur); cur = w; }
+    else cur = cur ? cur + " " + w : w;
+  }
+  if (cur) lines.push(cur);
+  return lines.map((l, i) => (i === 0 ? l : indent + l));
+}
+
+/**
+ * The rotation section: what to DO about each distinct finding, fed by
+ * src/rotation.js's renderRotation() (pure data) and printed in the same
+ * visual language as the rest of the report. Compact on purpose: one status
+ * line plus one guidance pointer per distinct value; the full runbook lives
+ * behind "residoo explain <rule-id>" so the report stays scannable. The
+ * fingerprint is printed in full because it is the exact argument
+ * "residoo ack" takes; a truncated one would be prettier and useless.
+ *
+ * `showAdvisory` is set by render() only when integrity WARNINGS and secret
+ * findings coexist in one run: that is the ChainDrop scenario where rotating
+ * first can itself trigger the planted payload, so remediation order becomes
+ * safety-critical and the report says so before listing anything to rotate.
+ */
+function renderRotationSection(rotation, { noColor = false, showAdvisory = false } = {}) {
+  const paint = makePaint(noColor);
+  const lines = [];
+  const push = (s = "") => lines.push(s);
+  const { counts, entries } = rotation;
+  if (counts.distinct === 0) return "";
+
+  // "rotations", not "distinct values": the headline's distinct count dedupes
+  // raw values, while these entries dedupe fingerprints (which include the
+  // basename, so one value in two differently-named files is two rotations to
+  // track). Two counts under one word would read as a contradiction.
+  push(paint(c.bold, "Rotation:") +
+    ` ${counts.pending} of ${counts.distinct} rotation${counts.distinct === 1 ? "" : "s"} pending` +
+    (counts.acked > 0 ? ` (${counts.acked} acknowledged)` : ""));
+  if (showAdvisory) {
+    const wrapped = wrapText(ROTATION_ORDER_ADVISORY, 72, "     ");
+    push(`  ${paint(c.red + c.bold, "⚠  " + wrapped[0])}`);
+    for (const l of wrapped.slice(1)) push(`  ${paint(c.red, l)}`);
+  }
+  // Same anti-flood policy as the by-file table: a report is a summary, not a
+  // dump. Everything elided here is in --json in full.
+  const MAX_SHOWN = 12;
+  const shown = entries.slice(0, MAX_SHOWN);
+  for (const e of shown) {
+    const tag = e.status === "pending" ? paint(c.yellow, "pending") : paint(c.green, "acked  ");
+    push(`  ${tag}  ${e.fingerprint}  ${e.label}`);
+    if (e.status === "acked") {
+      push(paint(c.dim, `           acknowledged ${e.ackedAt || "(no timestamp)"}${e.ackNote ? `: ${e.ackNote}` : ""}`));
+    } else {
+      const g = e.guidance;
+      const where = g.rotateUrl ? `rotate: ${g.rotateUrl}` : `where: ${g.consolePath}`;
+      push(paint(c.dim, `           ${where}`));
+    }
+  }
+  if (entries.length > shown.length) {
+    push(paint(c.dim, `  … and ${entries.length - shown.length} more; see --json for the full list`));
+  }
+  push(paint(c.dim, `  Full runbook: residoo explain <rule-id> · mark one rotated: residoo ack <fingerprint>`));
+  return lines.join("\n");
 }
 
 /**
@@ -75,7 +160,7 @@ function renderIntegrity(integrity, { noColor = false } = {}) {
   return lines.join("\n");
 }
 
-function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount = 0, distinctCounts = {}, unreadableFiles = [] }, { noColor = false, integrity = null } = {}) {
+function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount = 0, distinctCounts = {}, unreadableFiles = [] }, { noColor = false, integrity = null, rotation = null } = {}) {
   const paint = makePaint(noColor);
   const lines = [];
   const push = (s = "") => lines.push(s);
@@ -138,9 +223,15 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
   push(paint(c.bold, "By file:"));
   const fileRows = [...byFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
   for (const [file, count] of fileRows) {
-    push(`  ${String(count).padStart(4)}  ${paint(c.cyan, path.basename(file))}`);
+    push(`  ${String(count).padStart(4)}  ${paint(c.cyan, safeBasename(file))}`);
   }
   if (byFile.size > fileRows.length) push(paint(c.dim, `  … and ${byFile.size - fileRows.length} more file(s)`));
+
+  if (rotation && rotation.counts.distinct > 0) {
+    const integrityWarns = integrity ? integrity.findings.filter((f) => f.severity === "warn").length : 0;
+    push();
+    push(renderRotationSection(rotation, { noColor, showAdvisory: integrityWarns > 0 }));
+  }
 
   if (integrity) {
     push();
@@ -157,7 +248,12 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
 // `integrity` is the checkIntegrity() result, or null when --no-integrity
 // skipped it — the key is always present so a --json consumer can tell
 // "checked, clean" apart from "never checked" without guessing from absence.
-function renderJson(result, integrity = null) {
+// `rotation` is src/rotation.js's renderRotation() result (counts + per-
+// distinct-fingerprint entries with guidance attached), or null for a caller
+// that never computed it; the per-finding `fingerprint` is emitted either
+// way, since it is derived from already-redacted material and is what
+// "residoo ack" takes.
+function renderJson(result, integrity = null, rotation = null) {
   return JSON.stringify(
     {
       summary: {
@@ -172,7 +268,24 @@ function renderJson(result, integrity = null) {
       findings: result.findings.map((f) => ({
         rule: f.ruleId, label: f.label, confidence: f.confidence,
         source: f.source, file: f.relFile, line: f.line, preview: f.preview,
+        fingerprint: fingerprintFinding(f),
       })),
+      // orderAdvisory mirrors the human report's ChainDrop ordering warning:
+      // remediation order is safety-critical when planted persistence and
+      // leaked credentials coexist, and a --json consumer (a CI summarizer)
+      // must not have to re-derive that condition. The advisory text when the
+      // condition holds, null otherwise.
+      rotation: rotation
+        ? {
+            counts: rotation.counts,
+            entries: rotation.entries,
+            orderAdvisory:
+              result.findings.length > 0 &&
+              integrity && integrity.findings.some((f) => f.severity === "warn")
+                ? ROTATION_ORDER_ADVISORY
+                : null,
+          }
+        : null,
       integrity: integrity
         ? {
             warningCount: integrity.findings.filter((f) => f.severity === "warn").length,
@@ -187,4 +300,4 @@ function renderJson(result, integrity = null) {
   );
 }
 
-module.exports = { render, renderIntegrity, renderJson };
+module.exports = { render, renderIntegrity, renderRotationSection, renderJson };

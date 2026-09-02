@@ -1,0 +1,67 @@
+# Composite GitHub Action. Field set verified against
+# https://docs.github.com/en/actions/creating-actions/metadata-syntax-for-github-actions
+# (composite actions: name/description/runs required, every run step needs an
+# explicit shell, inputs are read via the inputs context).
+#
+# Version pinning design: the CLI is fetched with "npx --yes residoo@VERSION"
+# rather than run from the checked-out action tree, so the workflow runs the
+# exact bits published to npm, the same command a developer runs locally. The
+# action tag and the CLI version move together: dandovdub/residoo@v0.3.0
+# defaults to residoo 0.3.0 on npm. Override the version input only if you
+# need to split them.
+#
+# The npm fetch is distribution, not scanning: the scan itself makes zero
+# network calls and modifies nothing on disk.
+name: residoo scan
+description: >-
+  Scan a repository checkout for committed AI agent session artifacts that
+  leak secrets, and for repo-level planted persistence. Read-only, redacted
+  output, zero network calls in the scan itself.
+author: CloudRoam
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  fail-on-find:
+    description: >-
+      Fail the job (exit code 1) when the scan reports a secret finding or an
+      integrity warning. Info-level review items do not fail the job. Set to
+      "false" to report without failing.
+    required: false
+    default: "true"
+  project-dir:
+    description: >-
+      Directory to scan, relative to the workspace. This is the repository
+      checkout, so run actions/checkout before this action.
+    required: false
+    default: "."
+  version:
+    description: >-
+      residoo version to fetch from npm. Defaults to the release this action
+      tag ships with; the tag and the CLI version move together.
+    required: false
+    default: "0.3.0"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+    - name: Run residoo project scan
+      shell: bash
+      # Inputs cross into the step as environment variables instead of being
+      # interpolated into the script body, so a hostile value in a caller's
+      # workflow expression cannot inject shell syntax into this run block.
+      env:
+        RESIDOO_VERSION: ${{ inputs.version }}
+        RESIDOO_PROJECT_DIR: ${{ inputs.project-dir }}
+        RESIDOO_FAIL_ON_FIND: ${{ inputs.fail-on-find }}
+      run: |
+        set -euo pipefail
+        args=(scan --project "$RESIDOO_PROJECT_DIR")
+        if [ "$RESIDOO_FAIL_ON_FIND" = "true" ]; then
+          args+=(--fail-on-find)
+        fi
+        npx --yes "residoo@$RESIDOO_VERSION" "${args[@]}"

@@ -1,0 +1,28 @@
+# Hook manifest for the pre-commit framework (https://pre-commit.com).
+#
+# language: node means pre-commit clones this repo at the pinned rev and runs
+# "npm install ." in an isolated hook environment; the "bin" entry in
+# package.json exposes the residoo executable, which is what "entry" invokes.
+# Verified against https://pre-commit.com/#node: "The hook repository must
+# have a package.json. It will be installed via npm install ." and "The
+# installed package will provide an executable that will match the entry",
+# usually through bin in package.json.
+#
+# pass_filenames: false plus always_run: true because project mode scans the
+# whole checkout (committed agent artifacts and repo-level planted
+# persistence), not the staged file list; filtering by staged filenames would
+# skip the very files the scan exists to catch.
+#
+# Consumers add to .pre-commit-config.yaml:
+#   repos:
+#     - repo: https://github.com/dandovdub/residoo
+#       rev: v0.3.0
+#       hooks:
+#         - id: residoo
+- id: residoo
+  name: residoo project scan (committed agent artifacts, planted persistence)
+  description: Scan the repository checkout for committed AI agent session artifacts leaking secrets, and for repo-level planted persistence. Read-only, zero network calls, redacted output.
+  entry: residoo scan --project . --fail-on-find
+  language: node
+  pass_filenames: false
+  always_run: true
