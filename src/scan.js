@@ -653,30 +653,30 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     // Deliberately not gated on isTTY like the scan spinner: a script
     // piping through a pager or into a log still needs this disclosure.
     //
-    // Three columns, not two: an earlier version of this table showed only
-    // the vendor name ("AWS  2"), which answers "how many" but drops the
-    // one thing a security-conscious user actually wants to check before
-    // agreeing to real outbound calls, namely WHICH endpoint each vendor's
-    // credential gets sent to. Every vendor's own SIMPLE_VERIFY_VENDOR_LABEL
-    // is already written "<Vendor>'s <endpoint>", so split it into the two
-    // columns rather than maintaining a second, parallel description.
+    // Went through two earlier shapes, each missing what mattered: first a
+    // bare vendor+count ("AWS  2", which credential?), then vendor+endpoint
+    // +count ("AWS  sts:get-caller-identity  2", still no way to tell WHICH
+    // two). What answers "which needs to be handled" is the same redacted
+    // preview (first/last 4 characters) already shown for that finding
+    // everywhere else in the report — reusing redact() on the same raw
+    // value record() was called with, not a second display convention.
+    // One line per vendor+endpoint header, one indented line per credential.
     const rows = [];
     if (pendingAwsVerifications.size > 0 && awsAvailable) {
-      rows.push(["AWS", "sts:get-caller-identity", pendingAwsVerifications.size]);
+      rows.push(["AWS", "sts:get-caller-identity", [...pendingAwsVerifications.keys()].map(redact)]);
     }
     if (pendingPlanetScaleVerifications.size > 0) {
-      rows.push(["PlanetScale", "organizations endpoint", pendingPlanetScaleVerifications.size]);
+      rows.push(["PlanetScale", "organizations endpoint", [...pendingPlanetScaleVerifications.keys()].map(redact)]);
     }
     for (const [ruleId, byValue] of pendingSimpleVerifications) {
       if (byValue.size === 0) continue;
       const [vendor, endpoint] = SIMPLE_VERIFY_VENDOR_LABEL[ruleId].split("'s ");
-      rows.push([vendor, endpoint, byValue.size]);
+      rows.push([vendor, endpoint, [...byValue.keys()].map(redact)]);
     }
     if (rows.length > 0) {
-      const vendorWidth = Math.max(...rows.map(([vendor]) => vendor.length));
-      const endpointWidth = Math.max(...rows.map(([, endpoint]) => endpoint.length));
       const table = rows
-        .map(([vendor, endpoint, count]) => `    ${vendor.padEnd(vendorWidth)}  ${endpoint.padEnd(endpointWidth)}  ${count}`)
+        .map(([vendor, endpoint, previews]) =>
+          `    ${vendor} · ${endpoint}\n` + previews.map((p) => `        ${p}`).join("\n"))
         .join("\n");
       process.stderr.write(
         "residoo --verify: checking whether these credentials are still active. Real network " +
