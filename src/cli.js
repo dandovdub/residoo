@@ -54,9 +54,11 @@ const HELP = `residoo: find secrets leaking through your AI agent's session hist
   Both are recorded in ~/.residoo/rotations.json, the only file residoo
   ever writes outside an explicit --seal.
 
-  Scanning makes NO network calls and changes nothing on disk. Findings are
-  redacted in every output format. Sealing (--seal) writes NEW encrypted
-  files only. It never modifies or deletes anything that already exists.
+  Scanning makes NO network calls by default and changes nothing on disk.
+  Findings are redacted in every output format. The one opt-in exception is
+  --verify, which asks AWS itself whether a found AWS credential still
+  authenticates; see below. Sealing (--seal) writes NEW encrypted files
+  only. It never modifies or deletes anything that already exists.
 
 Usage:
   residoo scan [options]
@@ -96,6 +98,17 @@ Scan options:
   --no-integrity          skip the integrity checks (planted hooks, dropper
                           files, auto-run tasks, hidden Unicode)
   --no-color              disable ANSI colour
+  --verify                for every AWS access key id found paired with its
+                          secret (see Rotation below), ask AWS itself
+                          whether the pair still authenticates, via
+                          sts:get-caller-identity, using the exact
+                          credential found in your transcript. THIS MAKES A
+                          REAL NETWORK CALL TO AWS. Off by default. Needs
+                          the aws CLI on PATH; residoo shells out to it
+                          rather than reimplementing AWS request signing.
+                          Only AWS is covered today. A verified-invalid
+                          credential is reported as already dead, not as
+                          something to rotate.
 
 Rotation:
   residoo explain <rule-id>     full rotation runbook for one detection rule
@@ -125,10 +138,11 @@ Seal options (used with scan):
                           only, unlike a passphrase, it is not portable to
                           another machine.
   --vault-dir <dir>       where to create the vault (default: ./residoo-vault-<stamp>)
-  --upload-cloudroam      ALSO upload the sealed vault to CloudRoam. This is the
-                          only residoo feature that touches the network, it is
-                          off unless you pass it, and only ciphertext is sent.
-                          Needs CLOUDROAM_API_KEY (env) plus:
+  --upload-cloudroam      ALSO upload the sealed vault to CloudRoam. One of two
+                          opt-in features that touch the network (--verify
+                          above is the other); off unless you pass it, and
+                          only ciphertext is sent. Needs CLOUDROAM_API_KEY
+                          (env) plus:
   --connector <id>        CloudRoam connector id for the destination
   --bucket <name>         destination bucket
   --prefix <p>            optional key prefix inside the bucket
@@ -434,6 +448,12 @@ async function main(argv) {
   const includeSuppressed = args.includes("--include-suppressed");
   const failOnFind = args.includes("--fail-on-find");
   const allowAcked = args.includes("--allow-acked");
+  // The one flag that makes residoo do something other than read local
+  // files: --verify shells out to the user's own `aws` CLI with any AWS
+  // access key + paired secret this scan finds, to ask AWS itself whether
+  // they still authenticate (see verify.js). Off by default; every other
+  // flag here only changes what is READ or how it is DISPLAYED.
+  const verifyAws = args.includes("--verify");
 
   // --project [dir]: the dir is optional (CI passes ".", a bare --project
   // means the current directory). null means machine mode.
@@ -543,7 +563,7 @@ async function main(argv) {
   }
 
   const progress = makeProgressReporter(noColor);
-  const result = await scan({ sources, includeNoisy, includeSuppressed, onProgress: progress.onProgress });
+  const result = await scan({ sources, includeNoisy, includeSuppressed, onProgress: progress.onProgress, verifyAws });
   progress.stop();
   const integrity = wantsIntegrity ? runIntegrity() : null;
   const rotation = renderRotation(result.findings, acks, dismissed);

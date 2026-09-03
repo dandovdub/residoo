@@ -897,6 +897,18 @@ function renderRotation(findings, acks, dismissed = {}) {
         // usable credential pair, not just that a secret exists somewhere.
         pairedSecretPreview: null,
         pairedAccessKeyPreview: null,
+        // A JWT's own `exp` claim, decoded locally (see jwtExpiry.js): the
+        // one credential type residoo can say "still valid" or "expired"
+        // about with zero network calls, since expiry is inside the signed
+        // payload. null for every non-JWT finding, and for a JWT that
+        // failed to decode or carries no exp claim.
+        jwtExpiresAtMs: null,
+        // --verify only (see verify.js): whether AWS itself accepted this
+        // exact credential. null unless the scan was run with --verify AND
+        // this value is one half of a demonstrated pair; residoo makes no
+        // network calls otherwise.
+        awsVerified: null,
+        awsVerifiedDetail: null,
       };
       byFp.set(st.fingerprint, e);
     }
@@ -909,7 +921,9 @@ function renderRotation(findings, acks, dismissed = {}) {
     // honest, locally-derivable signal for "how stale is this." NOT proof a
     // credential was rotated or revoked, only that residoo hasn't seen it
     // paste anywhere more recently than this. residoo makes no network
-    // calls, so it never checks a provider for whether a key is still live.
+    // calls in the default path, so this alone never checks a provider for
+    // whether a key is still live (see awsVerified above for the opt-in
+    // exception, and jwtExpiresAtMs for the zero-network JWT case).
     if (typeof f.fileMTimeMs === "number" && (e.lastSeenMs === null || f.fileMTimeMs > e.lastSeenMs)) {
       e.lastSeenMs = f.fileMTimeMs;
     }
@@ -923,19 +937,35 @@ function renderRotation(findings, acks, dismissed = {}) {
     if (e.pairedAccessKeyPreview === null && typeof f.pairedAccessKeyPreview === "string") {
       e.pairedAccessKeyPreview = f.pairedAccessKeyPreview;
     }
+    if (e.jwtExpiresAtMs === null && typeof f.jwtExpiresAtMs === "number") {
+      e.jwtExpiresAtMs = f.jwtExpiresAtMs;
+    }
+    if (e.awsVerified === null && typeof f.awsVerified === "string") {
+      e.awsVerified = f.awsVerified;
+      e.awsVerifiedDetail = typeof f.awsVerifiedDetail === "string" ? f.awsVerifiedDetail : null;
+    }
   }
 
-  // A paired entry is a DEMONSTRATED usable credential (see pairing.js); an
-  // unpaired access-key-id or secret finding of the same rule and status is
-  // only a shape that matched a pattern. Sorted first within its status tier
-  // so a real pair is never the one the display cap (see renderRotationSection)
-  // pushes into "N more"; the report's own priority order (see the group
-  // sort just below in renderRotationSection) already applies the same
-  // "what needs attention most" logic one level up.
-  const isPaired = (e) => e.pairedSecretPreview !== null || e.pairedAccessKeyPreview !== null;
+  // Within a status tier, order by how demonstrated-urgent an entry is, not
+  // just its rule id: a real pair (see pairing.js) is a DEMONSTRATED usable
+  // credential, and --verify confirming AWS still accepts it is stronger
+  // evidence still; either way this entry must never be the one the display
+  // cap (see renderRotationSection) pushes into "N more." Proven dead
+  // credentials sort the other direction, LOWER than an ordinary unpaired
+  // finding: --verify confirming AWS rejected it, or a JWT's own signed exp
+  // claim already in the past, is proof this specific value needs no
+  // action, not just an absence of proof it does.
+  const priorityScore = (e) => {
+    if (e.awsVerified === "active") return -2;
+    if (e.pairedSecretPreview !== null || e.pairedAccessKeyPreview !== null) return -1;
+    if (e.awsVerified === "invalid") return 1;
+    if (e.jwtExpiresAtMs !== null && e.jwtExpiresAtMs < Date.now()) return 1;
+    return 0;
+  };
   const entries = [...byFp.values()].sort((a, b) => {
     if (a.status !== b.status) return STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
-    if (isPaired(a) !== isPaired(b)) return isPaired(a) ? -1 : 1;
+    const pa = priorityScore(a), pb = priorityScore(b);
+    if (pa !== pb) return pa - pb;
     if (a.ruleId !== b.ruleId) return a.ruleId < b.ruleId ? -1 : 1;
     return a.fingerprint < b.fingerprint ? -1 : 1;
   });

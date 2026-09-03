@@ -5,6 +5,14 @@ const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
 const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("./decode");
 const { findPairedSecret } = require("./pairing");
 const { looksRandom } = require("./rarity");
+const { decodeJwtExpiryMs } = require("./jwtExpiry");
+const { isAwsCliAvailable, verifyAwsCredential } = require("./verify");
+
+// Never verify more than this many distinct AWS pairs in one scan: a
+// pathological transcript with dozens of distinct paired credentials should
+// not turn --verify into a long burst of outbound AWS calls. Real scans see
+// 0-2; this is a backstop, not the expected path.
+const MAX_AWS_VERIFICATIONS = 10;
 
 // Rule ids that findPairedSecret's window search applies to (see pairing.js):
 // AWS access key ids and STS session tokens both pair with the same shape
@@ -127,7 +135,7 @@ function safeName(file) { return path.basename(file); }
  * absolute path can itself carry a username or a project name the rest of
  * this report is careful never to print.
  */
-async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null } = {}) {
+async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verifyAws = false } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
   // The decode pass (see decode.js) only applies high-confidence, vendor-
   // prefixed rules to decoded bytes: random binary that decodes to printable
@@ -146,11 +154,24 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // browser-testing run is one leak, not ten) — never written to a report,
   // never leaves this function.
   const distinctByRule = new Map();
+  // --verify only (see verify.js): accessKeyValue -> { secretValue, refs }.
+  // Keyed by the RAW access key so the map itself dedupes distinct
+  // credentials for the AWS call (one call per key, no matter how many
+  // times it was echoed) while `refs` accumulates EVERY occurrence's
+  // finding-object pair, so the result reaches all of them, not only the
+  // first: an access key re-echoed across several lines gets several
+  // finding objects, and every one of them needs the same answer. Like
+  // distinctByRule above, this lives only for the duration of this scan()
+  // call; nothing in it is ever written to a finding until verification has
+  // REPLACED the raw values with a status string.
+  const pendingAwsVerifications = new Map();
 
   // One place raw matched text turns into a recorded finding: counts the
   // distinct value and pushes the redacted record. `extra` carries the
   // encoding / split markers for the decode and boundary passes; the raw pass
-  // passes none.
+  // passes none. Returns the finding object itself so a caller (the pairing
+  // and --verify logic) can attach more fields onto it later, after the
+  // fields that need real work (an AWS API round-trip) finish.
   const record = (rule, value, relFile, file, lineNo, mtimeMs, confidence, suppressedReason, extra) => {
     if (!distinctByRule.has(rule.id)) distinctByRule.set(rule.id, new Set());
     distinctByRule.get(rule.id).add(value);
@@ -166,6 +187,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       fileMTimeMs: mtimeMs,
       ...(extra || {}),
     });
+    return findings[findings.length - 1];
   };
 
   // One suppression policy for all three passes (raw, decoded, boundary).
@@ -221,6 +243,8 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           // next to it in the transcript, not just that a secret exists
           // somewhere in the scan.
           let pairedSecretPreview = null;
+          let secretFinding = null;
+          let rawPairedSecret = null;
           if (!suppressedReason && AWS_PAIR_RULE_IDS.has(rule.id)) {
             const paired = findPairedSecret(line, m[0], m.index);
             if (paired) {
@@ -229,18 +253,42 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
                 suppressedCount++;
               } else {
                 pairedSecretPreview = redact(paired);
-                record({ id: "aws_secret_access_key_paired", label: "AWS Secret Access Key (paired with access key id)" },
+                rawPairedSecret = paired;
+                secretFinding = record({ id: "aws_secret_access_key_paired", label: "AWS Secret Access Key (paired with access key id)" },
                   paired, relFile, file, lineNo, mtimeMs,
                   pairedSuppressedReason ? "low" : "high", pairedSuppressedReason,
                   { paired: true, pairedAccessKeyPreview: redact(m[0]) });
               }
             }
           }
-          record(rule, m[0], relFile, file, lineNo,
+          // Local, offline JWT expiry (see jwtExpiry.js): only ever reads
+          // the `exp` claim out of the decoded payload, nothing else, and
+          // only for the unsuppressed default `jwt` rule, since a
+          // suppressed placeholder/example match is not worth decoding.
+          const jwtExtra = (!suppressedReason && rule.id === "jwt")
+            ? { jwtExpiresAtMs: decodeJwtExpiryMs(m[0]) }
+            : null;
+          const akiaFinding = record(rule, m[0], relFile, file, lineNo,
             mtimeMs,
             resolveConfidence(rule.id, m[0], rule.confidence, suppressedReason),
             suppressedReason,
-            pairedSecretPreview ? { pairedSecretPreview } : undefined);
+            { ...(pairedSecretPreview ? { pairedSecretPreview } : {}), ...(jwtExtra || {}) });
+
+          // --verify only, and only for a DEMONSTRATED pair (both halves
+          // present, neither suppressed): queue it for the verification pass
+          // that runs once, after every file has been scanned (see below).
+          // The Map key dedupes the actual AWS call to one per distinct
+          // credential; `refs` still grows on every occurrence, so a key
+          // re-echoed across several lines gets several finding objects, and
+          // the eventual result is applied to every one of them, not only
+          // the first.
+          if (verifyAws && secretFinding && rawPairedSecret) {
+            if (!pendingAwsVerifications.has(m[0]) && pendingAwsVerifications.size < MAX_AWS_VERIFICATIONS) {
+              pendingAwsVerifications.set(m[0], { secretValue: rawPairedSecret, refs: [] });
+            }
+            const entry = pendingAwsVerifications.get(m[0]);
+            if (entry) entry.refs.push({ akiaFinding, secretFinding });
+          }
         }
         if (m.index === rule.re.lastIndex) rule.re.lastIndex++; // guard zero-width matches
       }
@@ -394,6 +442,41 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     }
 
     if (sourceScannedAnything) sourcesScanned.push(source.id());
+  }
+
+  // --verify: runs once, here, after every file has been scanned, never
+  // interleaved with the matching pass above. A real network call per
+  // distinct pairing, one at a time (not concurrent), so this is the one
+  // place a scan's wall-clock time depends on something other than disk
+  // I/O; that tradeoff only exists when a caller explicitly asked for it.
+  if (verifyAws && pendingAwsVerifications.size > 0) {
+    const applyResult = (refs, result) => {
+      for (const ref of refs) {
+        ref.akiaFinding.awsVerified = result.status;
+        ref.akiaFinding.awsVerifiedDetail = result.detail;
+        ref.secretFinding.awsVerified = result.status;
+        ref.secretFinding.awsVerifiedDetail = result.detail;
+      }
+    };
+    if (!isAwsCliAvailable()) {
+      process.stderr.write(
+        "residoo --verify: the aws CLI was not found on PATH, so the " +
+        `${pendingAwsVerifications.size} AWS credential(s) found in this scan could not be checked. ` +
+        "Install it (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) to use --verify.\n"
+      );
+      const result = { status: "error", detail: "aws CLI not found on PATH" };
+      for (const { refs } of pendingAwsVerifications.values()) applyResult(refs, result);
+    } else {
+      process.stderr.write(
+        `residoo --verify: calling AWS sts:get-caller-identity for ${pendingAwsVerifications.size} ` +
+        "credential(s) found in this scan. This is a real network request to AWS, using the exact " +
+        "credential found in your transcript, one at a time.\n"
+      );
+      for (const [accessKeyValue, { secretValue, refs }] of pendingAwsVerifications) {
+        const result = verifyAwsCredential(accessKeyValue, secretValue);
+        applyResult(refs, result);
+      }
+    }
   }
 
   const distinctCounts = {};

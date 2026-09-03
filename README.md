@@ -117,6 +117,24 @@ won't be built into the tool that writes it.
   demonstrated usable credential and sorted to the top of its group in the
   Rotation section, ahead of the ones that are, on their own, not yet proven
   exploitable.
+- Decodes a JWT-shaped token's own `exp` claim locally (no network call: the
+  claim is inside the signed payload, so it cannot be altered without
+  breaking the signature) and reports "valid until" or "expired" next to it
+  in the Rotation section, instead of just "last seen." Only `exp` is ever
+  read; every other claim in the payload is decoded transiently and
+  discarded. See `src/jwtExpiry.js`.
+- **`--verify`** (opt-in, makes a real network call): for an AWS access key
+  id found paired with its secret, asks AWS itself whether the pair still
+  authenticates via `sts:get-caller-identity`, the same free, read-only,
+  permission-less call the AWS CLI and tools like aws-vault use for exactly
+  this. Shells out to your own `aws` CLI rather than reimplementing AWS
+  request signing (residoo ships zero runtime dependencies, and a subtly
+  wrong signing implementation would silently report real keys as invalid,
+  worse than not checking). A verified-active pair is escalated to "rotate
+  immediately"; a verified-invalid one is reported as already dead, no
+  action needed, and sorted out of the way. Off by default; every environment
+  variable the `aws` CLI reads is built from scratch, never inherited, so it
+  can never fall back to your own real AWS profile. See `src/verify.js`.
 - With `--include-noisy`, filters the broad generic-secret rules by how
   machine-random the matched value actually looks (a lightweight, offline
   approximation of BPE-tokenization rarity checks): ordinary English, a
@@ -128,10 +146,10 @@ won't be built into the tool that writes it.
   preview, never the real value, including in `--json` mode. A decoded or
   rejoined secret is redacted exactly like a plain one.
 - On an interactive terminal, prints who it is and where it lives before
-  scanning starts (`residoo v0.4.3 · find secrets your AI coding agent left
+  scanning starts (`residoo v0.4.4 · find secrets your AI coding agent left
   on disk` plus the repo URL), then a live spinner naming the current file
   as it scans. Every report also opens with the exact version and timestamp
-  it was run with (`residoo v0.4.3 · scanned 2026-01-01 12:00`; `--json`
+  it was run with (`residoo v0.4.4 · scanned 2026-01-01 12:00`; `--json`
   carries the same as `residooVersion`/`scannedAt`), so a report pasted or
   screenshotted later never leaves you guessing which build produced it.
   When there are findings, the report closes with a "Next steps" pointer to
@@ -355,7 +373,7 @@ As a GitHub Action (this repository doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.4.3
+  - uses: dandovdub/residoo@v0.4.4
 ```
 
 As a pre-commit hook:
@@ -363,7 +381,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.4.3
+    rev: v0.4.4
     hooks:
       - id: residoo
 ```
@@ -378,10 +396,14 @@ documented in [docs/ci.md](docs/ci.md).
 ## What it does not do
 
 - **No network calls in the default path, and none at all unless you
-  explicitly pass `--upload-cloudroam`.** A secret scanner that phones home is
-  not a tool you should trust with your secrets. Verify this yourself: the one
-  `fetch` call in the codebase is in `src/sealvault.js`, reachable only behind
-  that flag, and sends only encrypted bytes.
+  explicitly pass `--upload-cloudroam` or `--verify`.** A secret scanner that
+  phones home is not a tool you should trust with your secrets. Verify this
+  yourself: the one `fetch` call in the codebase is in `src/sealvault.js`,
+  reachable only behind `--upload-cloudroam`, and sends only encrypted bytes.
+  `--verify` is the other opt-in exception, and makes no `fetch` call at all:
+  it shells out to your own `aws` CLI with the exact AWS credential a scan
+  found, asking AWS's own `sts:get-caller-identity` whether it still
+  authenticates (see `src/verify.js`). Neither runs unless you pass the flag.
 - **Nothing destructive, ever.** Scanning is read-only. Sealing creates *new*
   files and modifies or deletes nothing, not even the plaintext it just
   encrypted a copy of. That last step is deliberately left to a human.

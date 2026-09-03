@@ -229,8 +229,19 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
       // the same type are shown as two separate lines on purpose, not
       // collapsed on a guess.
       const lastSeenNote = typeof e.lastSeenMs === "number" ? `last seen ~${ageDays(e.lastSeenMs)}d ago` : null;
+      // The one credential type residoo can say "still valid" about with
+      // zero network calls: a JWT's own exp claim, inside its signature
+      // (see jwtExpiry.js). Not proof it is accepted anywhere (residoo
+      // never checks the signature), only that the token's own claimed
+      // window has or has not passed.
+      const jwtExpiryNote = typeof e.jwtExpiresAtMs === "number"
+        ? (e.jwtExpiresAtMs < Date.now()
+            ? `expired ${new Date(e.jwtExpiresAtMs).toISOString().slice(0, 10)}`
+            : `valid until ${new Date(e.jwtExpiresAtMs).toISOString().slice(0, 10)}`)
+        : null;
       push(`    ${STATUS_TAG[e.status]}  ${e.preview}  ${paint(c.dim, fileNote)}` +
-        (lastSeenNote ? `  ${paint(c.dim, lastSeenNote)}` : ""));
+        (lastSeenNote ? `  ${paint(c.dim, lastSeenNote)}` : "") +
+        (jwtExpiryNote ? `  ${paint(c.dim, jwtExpiryNote)}` : ""));
       // An access key id and its AWS secret are each meaningless alone (see
       // pairing.js): the id names WHICH key, the secret authenticates it,
       // and an attacker needs both. Called out in red/bold, the same
@@ -238,11 +249,25 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
       // line under it is a demonstrated full working credential, not just a
       // shape that matched a pattern; a plain access-key-id or secret finding
       // with NO pairing note is still worth checking, but nothing here
-      // proves it is actually exploitable on its own.
-      if (e.pairedSecretPreview) {
-        push(paint(c.red + c.bold, `               ⚠ paired with secret ${e.pairedSecretPreview} · full working credential, rotate this one first`));
-      } else if (e.pairedAccessKeyPreview) {
-        push(paint(c.red + c.bold, `               ⚠ paired with access key ${e.pairedAccessKeyPreview} · full working credential`));
+      // proves it is actually exploitable on its own. --verify (see
+      // verify.js) can strengthen this to an outright confirmation, or
+      // downgrade it to "already dead": both come from a real answer from
+      // AWS, not a guess, so they get their own wording rather than folding
+      // into the generic pairing line.
+      if (e.pairedSecretPreview || e.pairedAccessKeyPreview) {
+        const otherHalf = e.pairedSecretPreview
+          ? `paired with secret ${e.pairedSecretPreview}`
+          : `paired with access key ${e.pairedAccessKeyPreview}`;
+        if (e.awsVerified === "active") {
+          push(paint(c.red + c.bold, `               ⚠ ${otherHalf} · VERIFIED ACTIVE: AWS accepted these credentials moments ago, rotate immediately`));
+        } else if (e.awsVerified === "invalid") {
+          push(paint(c.green, `               ✓ ${otherHalf} · already inactive: AWS rejected these credentials, no rotation needed`));
+        } else if (e.awsVerified === "error") {
+          push(paint(c.red + c.bold, `               ⚠ ${otherHalf} · full working credential, rotate this one first`) +
+            paint(c.dim, ` (could not verify: ${e.awsVerifiedDetail || "unknown error"})`));
+        } else {
+          push(paint(c.red + c.bold, `               ⚠ ${otherHalf} · full working credential, rotate this one first`));
+        }
       }
       if (e.status === "acked") {
         push(paint(c.dim, `               acknowledged ${e.ackedAt || "(no timestamp)"}${e.ackNote ? `: ${e.ackNote}` : ""} · ${e.fingerprint}`));

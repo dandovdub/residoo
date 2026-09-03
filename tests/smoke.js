@@ -476,6 +476,196 @@ async function main() {
       !!akiaAloneFind && akiaAloneFind.pairedSecretPreview === undefined);
   }
 
+  // ── scan: local JWT expiry decoding (see src/jwtExpiry.js) ─────────────────
+  // Zero network calls, unlike --verify below: the exp claim is inside the
+  // signed payload, so decoding it locally is a real answer, not a guess.
+  {
+    const { decodeJwtExpiryMs } = require("../src/jwtExpiry");
+    const { renderRotation, fingerprintFinding } = require("../src/rotation");
+    const { renderRotationSection } = require("../src/report");
+    const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString("base64")
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    // sigSuffix makes the two test tokens distinguishable in their REDACTED
+    // preview (first/last 4 chars only): with a shared fake signature and
+    // same-length payloads, both tokens would redact to an identical
+    // preview, making them impossible to tell apart by preview alone.
+    const makeJwt = (payload, sigSuffix) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url(payload)}.fake${sigSuffix}sig`;
+
+    const futureExp = Math.floor(Date.now() / 1000) + 3600;
+    const pastExp = Math.floor(Date.now() / 1000) - 3600;
+    check("decodeJwtExpiryMs: reads exp as milliseconds",
+      decodeJwtExpiryMs(makeJwt({ sub: "x", exp: futureExp }, "AAAA")) === futureExp * 1000);
+    check("decodeJwtExpiryMs: no exp claim decodes to null, not zero or NaN",
+      decodeJwtExpiryMs(makeJwt({ sub: "x" }, "AAAA")) === null);
+    check("decodeJwtExpiryMs: not a JWT (wrong number of segments) decodes to null",
+      decodeJwtExpiryMs("not.a.jwt.at.all") === null);
+    check("decodeJwtExpiryMs: undecodable payload decodes to null, never throws",
+      decodeJwtExpiryMs("eyJhbGciOiJIUzI1NiJ9.not-valid-base64-json.sig") === null);
+
+    const jwtValid = makeJwt({ sub: "u1", exp: futureExp }, "LIVE1111");
+    const jwtExpired = makeJwt({ sub: "u2", exp: pastExp }, "DEAD2222");
+    const jwtRes = await scanOneFile("jwt.jsonl",
+      JSON.stringify({ message: { content: "valid: " + jwtValid + " expired: " + jwtExpired } }) + "\n");
+    const validFind = jwtRes.findings.find((f) => f.preview === redact(jwtValid));
+    const expiredFind = jwtRes.findings.find((f) => f.preview === redact(jwtExpired));
+    check("scan: a JWT finding carries jwtExpiresAtMs from its own exp claim",
+      !!validFind && validFind.jwtExpiresAtMs === futureExp * 1000);
+    check("scan: a second distinct JWT in the same line gets its OWN expiry, not the first one's",
+      !!expiredFind && expiredFind.jwtExpiresAtMs === pastExp * 1000 &&
+      expiredFind.jwtExpiresAtMs !== validFind.jwtExpiresAtMs);
+
+    const rot = renderRotation([validFind, expiredFind], {}, {});
+    const validEntry = rot.entries.find((e) => e.fingerprint === fingerprintFinding(validFind));
+    const expiredEntry = rot.entries.find((e) => e.fingerprint === fingerprintFinding(expiredFind));
+    const outJwt = renderRotationSection(rot, { noColor: true });
+    check("rotation report shows 'valid until' for the non-expired JWT and 'expired' for the other",
+      outJwt.includes("valid until") && outJwt.includes("expired 2"));
+    check("an expired JWT sorts AFTER a non-expired one within the same pending tier",
+      rot.entries.indexOf(validEntry) < rot.entries.indexOf(expiredEntry));
+  }
+
+  // ── src/verify.js: --verify's AWS credential check, injected spawnFn only ──
+  // Every case here runs through an in-process fake spawnFn: no real `aws`
+  // binary is ever spawned, no network call is ever made, matching this
+  // project's own hard rule that test code must never touch a real external
+  // resource (see keychain.js's RESIDOO_TEST_KEYCHAIN_FILE for the same
+  // discipline applied to the OS keychain).
+  {
+    const { isAwsCliAvailable, verifyAwsCredential } = require("../src/verify");
+    const fakeSpawn = (result) => () => result;
+
+    check("isAwsCliAvailable: true when the binary runs and exits 0",
+      isAwsCliAvailable(fakeSpawn({ error: null, status: 0 })) === true);
+    check("isAwsCliAvailable: false when the binary is missing (ENOENT)",
+      isAwsCliAvailable(fakeSpawn({ error: { code: "ENOENT" } })) === false);
+    check("isAwsCliAvailable: false when spawnFn itself throws",
+      isAwsCliAvailable(() => { throw new Error("boom"); }) === false);
+
+    const activeResult = verifyAwsCredential("AKIAFAKE", "secretfake", {
+      spawnFn: fakeSpawn({ error: null, status: 0, stdout: '{"Account":"123"}', stderr: "" }),
+    });
+    check("verifyAwsCredential: exit 0 is reported active",
+      activeResult.status === "active");
+
+    const invalidResult = verifyAwsCredential("AKIAFAKE", "secretfake", {
+      spawnFn: fakeSpawn({
+        error: null, status: 254, stdout: "",
+        stderr: "An error occurred (InvalidClientTokenId) when calling the GetCallerIdentity operation",
+      }),
+    });
+    check("verifyAwsCredential: InvalidClientTokenId is reported invalid, not error",
+      invalidResult.status === "invalid");
+
+    const deniedResult = verifyAwsCredential("AKIAFAKE", "secretfake", {
+      spawnFn: fakeSpawn({
+        error: null, status: 254, stdout: "",
+        stderr: "An error occurred (AccessDenied) when calling the GetCallerIdentity operation",
+      }),
+    });
+    check("verifyAwsCredential: AccessDenied on GetCallerIdentity still proves authentication (reported active)",
+      deniedResult.status === "active");
+
+    const missingResult = verifyAwsCredential("AKIAFAKE", "secretfake", {
+      spawnFn: fakeSpawn({ error: { code: "ENOENT" } }),
+    });
+    check("verifyAwsCredential: missing CLI is an error, never conflated with invalid",
+      missingResult.status === "error" && missingResult.detail.includes("not found"));
+
+    const timeoutResult = verifyAwsCredential("AKIAFAKE", "secretfake", {
+      spawnFn: fakeSpawn({ error: { code: "ETIMEDOUT" } }),
+    });
+    check("verifyAwsCredential: a timeout is an error, not invalid (inability to check is not proof of death)",
+      timeoutResult.status === "error");
+
+    const weirdResult = verifyAwsCredential("AKIAFAKE", "secretfake", {
+      spawnFn: fakeSpawn({ error: null, status: 255, stdout: "", stderr: "some unrecognized AWS error text" }),
+    });
+    check("verifyAwsCredential: an unrecognized AWS error is reported as error, not guessed either way",
+      weirdResult.status === "error");
+
+    // The credential itself must never appear in a returned detail string:
+    // detail text is shown directly in the report.
+    const leakCheck = verifyAwsCredential("AKIASECRETVALUE12345", "supersecretvalue", {
+      spawnFn: fakeSpawn({ error: null, status: 254, stdout: "", stderr: "InvalidClientTokenId" }),
+    });
+    check("verifyAwsCredential: neither the access key nor the secret ever appears in the result",
+      !JSON.stringify(leakCheck).includes("AKIASECRETVALUE12345") &&
+      !JSON.stringify(leakCheck).includes("supersecretvalue"));
+  }
+
+  // ── scan + --verify: real spawnSync, real subprocess, fake `aws` binary ────
+  // One level up from the unit tests above: this exercises scan.js's OWN
+  // wiring (dedup by access key, the MAX_AWS_VERIFICATIONS cap, attaching
+  // the result to BOTH the access-key and secret findings, the stderr
+  // transparency notice) through a REAL spawnSync call, crossing a real
+  // process boundary, but into a small fixture script this test controls,
+  // never the real aws CLI, never the network. Same RESIDOO_TEST_AWS_CLI
+  // escape hatch keychain.js's own tests use for the OS keychain.
+  {
+    const fakeAwsDir = fs.mkdtempSync(path.join(tmp, "fake-aws-"));
+    const fakeAwsPath = path.join(fakeAwsDir, "fake-aws.js");
+    const callLogPath = path.join(fakeAwsDir, "calls.log");
+    fs.writeFileSync(fakeAwsPath,
+      "#!/usr/bin/env node\n" +
+      "const fs = require('fs');\n" +
+      `fs.appendFileSync(${JSON.stringify(callLogPath)}, (process.env.AWS_ACCESS_KEY_ID || '') + '\\n');\n` +
+      "if (process.argv[2] === '--version') { process.stdout.write('aws-cli/2.0 fake\\n'); process.exit(0); }\n" +
+      "const key = process.env.AWS_ACCESS_KEY_ID || '';\n" +
+      "if (key.indexOf('DEADKEY') !== -1) {\n" +
+      "  process.stderr.write('An error occurred (InvalidClientTokenId) when calling the GetCallerIdentity operation\\n');\n" +
+      "  process.exit(254);\n" +
+      "}\n" +
+      "process.stdout.write(JSON.stringify({ Account: '123456789012' }) + '\\n');\n" +
+      "process.exit(0);\n");
+    fs.chmodSync(fakeAwsPath, 0o755);
+
+    // A local stepping generator, same idea as the paired-secret block above
+    // (not reused directly: that one is scoped to its own block), never
+    // repeated characters so it never trips the zero-entropy placeholder
+    // filter.
+    const verifySecret = (() => {
+      const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+      let s = "";
+      for (let i = 0; i < 40; i++) s += charset[(i * 7 + 3) % charset.length];
+      return s;
+    })();
+    const liveKey = plantedAwsKey.replace("FAKEKEY", "LIVEKEY");
+    const deadKey = plantedAwsKey.replace("FAKEKEY", "DEADKEY");
+
+    const prevAwsCli = process.env.RESIDOO_TEST_AWS_CLI;
+    process.env.RESIDOO_TEST_AWS_CLI = fakeAwsPath;
+    let verifyRes;
+    try {
+      verifyRes = await scanOneFile("verify.jsonl",
+        JSON.stringify({ message: { content: liveKey + " " + verifySecret + " and re-echoed again: " + liveKey + " " + verifySecret + " also " + deadKey + " " + verifySecret } }) + "\n",
+        { verifyAws: true });
+    } finally {
+      if (prevAwsCli === undefined) delete process.env.RESIDOO_TEST_AWS_CLI;
+      else process.env.RESIDOO_TEST_AWS_CLI = prevAwsCli;
+    }
+
+    // Previews are redacted to first/last 4 characters, so matching by a
+    // substring like "LIVE" (which lands in the redacted middle) would
+    // silently match nothing; compare against the exact redacted preview
+    // both keys actually produce instead.
+    const liveAkia = verifyRes.findings.find((f) => f.ruleId === "aws_access_key_id" && f.preview === redact(liveKey));
+    const liveSecrets = verifyRes.findings.filter((f) => f.ruleId === "aws_secret_access_key_paired" && f.pairedAccessKeyPreview === redact(liveKey));
+    check("--verify: an AWS-accepted pair is reported active on the access-key finding",
+      !!liveAkia && liveAkia.awsVerified === "active");
+    check("--verify: the SAME status reaches the paired secret's own finding too",
+      liveSecrets.length > 0 && liveSecrets.every((f) => f.awsVerified === "active"));
+
+    const deadAkia = verifyRes.findings.find((f) => f.ruleId === "aws_access_key_id" && f.preview === redact(deadKey));
+    check("--verify: an AWS-rejected pair is reported invalid, not active",
+      !!deadAkia && deadAkia.awsVerified === "invalid");
+
+    const calls = fs.readFileSync(callLogPath, "utf-8").trim().split("\n").filter(Boolean);
+    check("--verify: the re-echoed live key is verified ONCE, not once per occurrence (deduped)",
+      calls.filter((k) => k === liveKey).length === 1);
+    check("--verify: a distinct key (dead) gets its own, separate verification call",
+      calls.filter((k) => k === deadKey).length === 1);
+  }
+
   // ── scan: rarity-based filtering for generic secrets (see src/rarity.js) ───
   {
     const { looksRandom, commonBigramFraction } = require("../src/rarity");
