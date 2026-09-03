@@ -32,35 +32,58 @@ function ageDays(mtimeMs) {
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /**
- * A minimal progress indicator for the scan phase, wired to scan()'s own
+ * Printed once, before scanning starts: what this is, what version, where
+ * it lives. Answers exactly the question a first-time (or every-time)
+ * reader has before results ever appear, without waiting for the report.
+ * Same TTY gate and same stream as the progress spinner below and for the
+ * same reason: stderr only, so a --json/--sarif consumer's stdout is
+ * untouched, and a complete no-op under redirection, piping, or CI.
+ */
+function printIntro(noColor) {
+  if (!process.stderr.isTTY) return;
+  const paint = makePaint(noColor);
+  const { version } = require("../package.json");
+  process.stderr.write(
+    paint(c.bold + c.cyan, `residoo v${version}`) +
+    paint(c.dim, " · find secrets your AI coding agent left on disk\n") +
+    paint(c.dim, "https://github.com/dandovdub/residoo\n\n")
+  );
+}
+
+/**
+ * A progress indicator for the scan phase, wired to scan()'s own
  * onProgress callback. Writes to STDERR only, never stdout: --json/--sarif
  * consumers pipe stdout into a parser, and a spinner corrupting that would
  * be a much worse bug than not having one. Gated on stderr actually being a
  * TTY, so it is a complete no-op under redirection, piping, or CI, exactly
  * the contexts where carriage-return spam in a captured log would be
- * useless or actively annoying, not merely invisible. `stop()` clears the
- * line so whatever prints next (the report, on stdout, is unaffected
- * either way since this never touched stdout, but a plain-text stderr
- * reader watching live should not see a stale line lingering) starts
+ * useless or actively annoying, not merely invisible. Shows the actual
+ * current file (basename only, through the same safeBasename() every other
+ * displayed path in this report goes through — control bytes stripped,
+ * invisible code points made visible), not just a running count: real
+ * signal, not just motion, and genuinely useful if a scan stalls on one
+ * huge file. `stop()` clears the line so whatever prints next starts
  * clean.
  */
-function makeProgressReporter() {
+function makeProgressReporter(noColor) {
   if (!process.stderr.isTTY) return { onProgress: null, stop() {} };
+  const paint = makePaint(noColor);
   let count = 0;
   let lastWriteMs = 0;
   let lastLineLen = 0;
   let frame = 0;
-  const write = (s) => {
+  const write = (s, visibleLen) => {
     process.stderr.write("\r" + " ".repeat(lastLineLen) + "\r" + s);
-    lastLineLen = s.length;
+    lastLineLen = visibleLen;
   };
-  const onProgress = ({ source }) => {
+  const onProgress = ({ source, file }) => {
     count++;
     const now = Date.now();
     if (now - lastWriteMs < 80) return; // throttled: avoid flicker on a fast scan
     lastWriteMs = now;
     frame = (frame + 1) % SPINNER_FRAMES.length;
-    write(`${SPINNER_FRAMES[frame]} scanning… ${count} file${count === 1 ? "" : "s"} checked (${source})`);
+    const label = `scanning ${source}… ${count} file${count === 1 ? "" : "s"}  ${safeBasename(file)}`;
+    write(paint(c.bold + c.cyan, SPINNER_FRAMES[frame]) + " " + paint(c.dim, label), 2 + label.length);
   };
   const stop = () => { if (lastLineLen > 0) process.stderr.write("\r" + " ".repeat(lastLineLen) + "\r"); };
   return { onProgress, stop };
@@ -305,8 +328,12 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
   }
 
   push();
+  push(paint(c.bold, "Next steps:"));
+  push(`  residoo scan --json          ${paint(c.dim, "machine-readable output, full detail")}`);
+  push(`  residoo scan --seal          ${paint(c.dim, "encrypt the affected files into a local vault (originals untouched)")}`);
+  push();
   push(paint(c.dim, "Values are redacted in this report (first/last 4 characters only). Nothing scanned"));
-  push(paint(c.dim, "here left your machine; residoo makes no network calls. Run with --json for full detail."));
+  push(paint(c.dim, "here left your machine; residoo makes no network calls."));
 
   return lines.join("\n");
 }
@@ -450,4 +477,4 @@ function renderSarif(result) {
   }, null, 2);
 }
 
-module.exports = { render, renderIntegrity, renderRotationSection, renderJson, renderSarif, makeProgressReporter };
+module.exports = { render, renderIntegrity, renderRotationSection, renderJson, renderSarif, makeProgressReporter, printIntro };

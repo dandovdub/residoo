@@ -1073,7 +1073,7 @@ async function main() {
   // without needing to ask at all.
   {
     const { version: pkgVersion } = require("../package.json");
-    const { render, renderJson, makeProgressReporter } = require("../src/report");
+    const { render, renderJson, makeProgressReporter, printIntro } = require("../src/report");
     const emptyResultShape = { findings: [], filesScanned: 0, sourcesScanned: [], bytesScanned: 0, suppressedCount: 0, distinctCounts: {}, unreadableFiles: [] };
     const bannerLine = render(emptyResultShape, { noColor: true }).split("\n")[0];
     check("banner: plain report's first line names the exact running version",
@@ -1102,11 +1102,21 @@ async function main() {
       let written = [];
       process.stderr.isTTY = true;
       process.stderr.write = (s) => { written.push(s); return true; };
-      const { onProgress, stop } = makeProgressReporter();
+
+      printIntro(true);
+      check("intro: on a TTY, names the exact version and the repo URL, on stderr only",
+        written.length === 1 && written[0].includes(`residoo v${pkgVersion}`) &&
+        written[0].includes("https://github.com/dandovdub/residoo"));
+
+      written = [];
+      const { onProgress, stop } = makeProgressReporter(true);
       check("progress: onProgress is a function when stderr is a TTY", typeof onProgress === "function");
-      onProgress({ source: "claude-code" });
+      onProgress({ source: "claude-code", file: "/Users/someone/.claude/projects/x/session-abc123.jsonl" });
       const afterFirst = written.length;
-      onProgress({ source: "claude-code" }); // fired immediately after: must be throttled away
+      check("progress: the live frame names the current file (basename only, never the full path)",
+        afterFirst === 1 && written[0].includes("session-abc123.jsonl") &&
+        !written[0].includes("/Users/someone"));
+      onProgress({ source: "claude-code", file: "/tmp/y.jsonl" }); // fired immediately after: must be throttled away
       check("progress: rapid successive calls are throttled, not one write per file",
         afterFirst === 1 && written.length === afterFirst);
       check("progress: the written frame never touches stdout, only stderr (mocked here)",
@@ -1117,6 +1127,8 @@ async function main() {
 
       written = [];
       process.stderr.isTTY = false;
+      printIntro(true);
+      check("intro: off a TTY, prints nothing at all", written.length === 0);
       const nonTty = makeProgressReporter();
       check("progress: off a TTY, onProgress is null (a true no-op, not a silently-discarding function)",
         nonTty.onProgress === null);
@@ -1126,6 +1138,16 @@ async function main() {
       process.stderr.isTTY = originalIsTTY;
       process.stderr.write = originalWrite;
     }
+
+    const withFinding = render(
+      { findings: [{ ruleId: "aws_access_key_id", label: "AWS Access Key ID", confidence: "high", file: "a", relFile: "a", line: 1, preview: "AKIA…test", fileMTimeMs: Date.now() }],
+        filesScanned: 1, sourcesScanned: ["claude-code"], bytesScanned: 100, suppressedCount: 0, distinctCounts: {}, unreadableFiles: [] },
+      { noColor: true }
+    );
+    check("next steps: shown when there are findings, suggesting --json and --seal",
+      withFinding.includes("Next steps:") && withFinding.includes("residoo scan --json") && withFinding.includes("residoo scan --seal"));
+    check("next steps: never shown on a clean scan (nothing to suggest sealing)",
+      !render(emptyResultShape, { noColor: true }).includes("Next steps:"));
   }
 
   // ── keychain: --seal --keychain / unseal --keychain (see src/keychain.js) ──

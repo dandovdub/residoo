@@ -121,13 +121,18 @@ won't be built into the tool that writes it.
 - Redacts everything in its own output. You get a shape and a first/last-4
   preview, never the real value, including in `--json` mode. A decoded or
   rejoined secret is redacted exactly like a plain one.
-- Every report opens with the exact version and timestamp it was run with
-  (`residoo v0.3.8 · scanned 2026-01-01 12:00`; `--json` carries the same
-  as `residooVersion`/`scannedAt`), so a report pasted or screenshotted
-  later never leaves you guessing which build produced it. On an
-  interactive terminal, a lightweight spinner shows scan progress on
-  stderr; it is a complete no-op when stdout/stderr are piped, redirected,
-  or run in CI, so it can never interleave with `--json`/`--sarif` output.
+- On an interactive terminal, prints who it is and where it lives before
+  scanning starts (`residoo v0.3.9 · find secrets your AI coding agent left
+  on disk` plus the repo URL), then a live spinner naming the current file
+  as it scans. Every report also opens with the exact version and timestamp
+  it was run with (`residoo v0.3.9 · scanned 2026-01-01 12:00`; `--json`
+  carries the same as `residooVersion`/`scannedAt`), so a report pasted or
+  screenshotted later never leaves you guessing which build produced it.
+  When there are findings, the report closes with a "Next steps" pointer to
+  `--json` and `--seal`. All of the interactive chatter (the intro, the
+  spinner) goes to stderr only and is a complete no-op when stdout/stderr
+  are piped, redirected, or run in CI, so none of it can ever interleave
+  with `--json`/`--sarif` output.
 - `--sarif` emits SARIF 2.1.0 for GitHub code scanning's Security tab and
   inline pull-request annotations, the same format gitleaks/trufflehog/
   agentsweep already speak, so residoo's own Action and pre-commit hook plug
@@ -324,7 +329,7 @@ As a GitHub Action (this repository doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.3.8
+  - uses: dandovdub/residoo@v0.3.9
 ```
 
 As a pre-commit hook:
@@ -332,7 +337,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.3.8
+    rev: v0.3.9
     hooks:
       - id: residoo
 ```

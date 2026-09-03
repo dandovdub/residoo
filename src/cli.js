@@ -5,7 +5,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { availableSources, ALL_SOURCES } = require("./sources");
 const { scan, emptyResult } = require("./scan");
-const { render, renderIntegrity, renderJson, renderSarif, makeProgressReporter } = require("./report");
+const { render, renderIntegrity, renderJson, renderSarif, makeProgressReporter, printIntro } = require("./report");
 const { checkIntegrity } = require("./integrity");
 const {
   ROTATION_GUIDANCE, guidanceFor, loadAcks, ackFinding, renderRotation,
@@ -404,6 +404,7 @@ async function main(argv) {
   // mutated env var would leak past this one invocation and silently kill
   // color for a later call that never asked for that.
   const noColor = args.includes("--no-color");
+  printIntro(noColor);
 
   // Integrity runs by default: a scan that reports "no secrets leaked" while
   // a planted SessionStart hook sits ready to re-leak them next session is
@@ -494,7 +495,7 @@ async function main(argv) {
     return failOnFind && integrityWarnCount(integrity) > 0 ? 1 : 0;
   }
 
-  const progress = makeProgressReporter();
+  const progress = makeProgressReporter(noColor);
   const result = await scan({ sources, includeNoisy, includeSuppressed, onProgress: progress.onProgress });
   progress.stop();
   const integrity = wantsIntegrity ? runIntegrity() : null;
