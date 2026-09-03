@@ -2654,6 +2654,279 @@ async function main() {
       runProj(["scan", "--project", path.join(tmp, "no-such-dir")]).status === 2);
   }
 
+  // ── watch: continuous scanning (src/watch.js) ───────────────────────────────
+  // In-process only, real timers at a tiny pollMs, real temp files — never a
+  // spawned child (no precedent for that anywhere else in this suite, and a
+  // long-running child adds real flakiness for no benefit: startWatch()'s
+  // whole point is that its I/O is injectable). fs.watch is never used by
+  // src/watch.js at all in this version (see its own doc comment on why:
+  // no source exposes a root directory to attach one to), so there is
+  // nothing to disable here — every test below exercises the polling path,
+  // which is the only path.
+  {
+    const { sweepOnce, startWatch } = require("../src/watch");
+    const wDir = fs.mkdtempSync(path.join(tmp, "watch-"));
+
+    // A minimal synthetic source: one file, `.jsonl` (tailable) unless the
+    // caller names something else. Mirrors scanOneFile's synthetic-source
+    // shape above, adapted for a FILE THAT CHANGES OVER TIME instead of one
+    // written once before the source is ever consulted.
+    function watchSource(file, id = "watch-test-source") {
+      return {
+        id: () => id, label: () => id, available: () => true,
+        *files() {
+          let st;
+          try { st = fs.statSync(file); } catch { return; }
+          yield { file, mtimeMs: st.mtimeMs, sizeBytes: st.size, broken: false };
+        },
+        async readLines(f) {
+          const text = fs.readFileSync(f, "utf-8");
+          const lines = text.split("\n");
+          if (lines[lines.length - 1] === "") lines.pop(); // trailing newline, not a real line
+          return { lines, status: "complete", bytesRead: Buffer.byteLength(text, "utf-8") };
+        },
+      };
+    }
+    function freshTracked() { return { tracked: new Map(), seen: new Map(), ledger: { acks: {}, dismissed: {} } }; }
+    const wOpts = { includeNoisy: false, includeSuppressed: false, verify: false, noColor: true };
+
+    // 1: first sweep baselines without alerting.
+    {
+      const file = path.join(wDir, "t1.jsonl");
+      fs.writeFileSync(file, JSON.stringify({ message: { content: "AWS_ACCESS_KEY_ID=" + plantedAwsKey } }) + "\n");
+      const { tracked, seen, ledger } = freshTracked();
+      const events = [];
+      const stats = await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit: (e) => events.push(e) });
+      check("watch: first sweep baselines existing content without alerting",
+        stats.loud === 0 && stats.quiet === 0 && events.length === 0);
+    }
+
+    // 2: append after baseline alerts, with correct ruleId + redacted preview.
+    let sharedTracked, sharedSeen, sharedLedger, sharedFile, sharedEvents;
+    {
+      const file = path.join(wDir, "t2.jsonl");
+      fs.writeFileSync(file, "");
+      const { tracked, seen, ledger } = freshTracked();
+      const events = [];
+      await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit: (e) => events.push(e) });
+      fs.appendFileSync(file, JSON.stringify({ message: { content: "AWS_ACCESS_KEY_ID=" + plantedAwsKey } }) + "\n");
+      const stats = await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit: (e) => events.push(e) });
+      const finding = events.find((e) => e.type === "finding");
+      check("watch: append after baseline alerts with the correct rule id",
+        stats.loud === 1 && !!finding && finding.ruleId === "aws_access_key_id");
+      check("watch: the alert carries a redacted preview, never the raw secret",
+        finding.preview.includes("AKIA") && !JSON.stringify(events).includes("SM0KETESTFAKEKEY"));
+      sharedTracked = tracked; sharedSeen = seen; sharedLedger = ledger; sharedFile = file; sharedEvents = events;
+    }
+
+    // 3: no change -> no new events (idempotent).
+    {
+      const stats = await sweepOnce({ sources: [watchSource(sharedFile)], tracked: sharedTracked, seen: sharedSeen, ledger: sharedLedger, options: wOpts, emit: (e) => sharedEvents.push(e) });
+      check("watch: a sweep with no file change produces no new events",
+        stats.loud === 0 && stats.quiet === 0);
+    }
+
+    // 4/10: re-exposure of the SAME secret is counted quietly, not re-alerted loud.
+    {
+      fs.appendFileSync(sharedFile, JSON.stringify({ message: { content: "AWS_ACCESS_KEY_ID=" + plantedAwsKey } }) + "\n");
+      const stats = await sweepOnce({ sources: [watchSource(sharedFile)], tracked: sharedTracked, seen: sharedSeen, ledger: sharedLedger, options: wOpts, emit: (e) => sharedEvents.push(e) });
+      check("watch: re-exposure of an already-alerted secret is quiet, not a second loud alert",
+        stats.loud === 0 && stats.quiet === 1 &&
+        sharedEvents[sharedEvents.length - 1].type === "reexposure" &&
+        sharedEvents[sharedEvents.length - 1].count === 2);
+    }
+
+    // 3 (partial line): a line with no trailing newline is not scanned until
+    // it's completed by a later append.
+    {
+      const file = path.join(wDir, "t3.jsonl");
+      fs.writeFileSync(file, "");
+      const { tracked, seen, ledger } = freshTracked();
+      const events = [];
+      const emit = (e) => events.push(e);
+      await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit });
+      fs.writeFileSync(file, JSON.stringify({ message: { content: "AWS_ACCESS_KEY_ID=" + plantedAwsKey } })); // NO trailing \n
+      let stats = await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit });
+      check("watch: a partial line (no trailing newline) is not scanned yet",
+        stats.loud === 0 && events.length === 0);
+      fs.appendFileSync(file, "\n");
+      stats = await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit });
+      check("watch: completing the line with its newline alerts exactly once",
+        stats.loud === 1 && events.filter((e) => e.type === "finding").length === 1);
+    }
+
+    // 5: a secret split across two separate SWEEPS (not just two lines in one
+    // batch) is still detected via scan()'s own boundary pass, using the
+    // exact proven fixture technique from the base64/split feature tests
+    // above (cut the key, put each half at the edge of an adjacent JSONL
+    // record's text field).
+    {
+      const file = path.join(wDir, "t5.jsonl");
+      fs.writeFileSync(file, "");
+      const { tracked, seen, ledger } = freshTracked();
+      const events = [];
+      const emit = (e) => events.push(e);
+      await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit });
+
+      const cut = 11;
+      const p1 = plantedAwsKey.slice(0, cut), p2 = plantedAwsKey.slice(cut);
+      const recA = JSON.stringify({ type: "assistant", message: { id: "msg_shared", content: [{ type: "text", text: "reconstructed start: " + p1 }] } });
+      const recB = JSON.stringify({ type: "assistant", message: { id: "msg_shared", content: [{ type: "text", text: p2 + " is the remainder" }] } });
+
+      fs.appendFileSync(file, recA + "\n");
+      let stats = await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit });
+      check("watch: the first half of a split secret alone stays silent",
+        stats.loud === 0 && events.length === 0);
+
+      fs.appendFileSync(file, recB + "\n");
+      stats = await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit });
+      check("watch: the second half completes the boundary match and alerts exactly once, across the sweep seam",
+        stats.loud === 1 && events.filter((e) => e.type === "finding").length === 1);
+
+      fs.appendFileSync(file, JSON.stringify({ message: { content: "unrelated benign line" } }) + "\n");
+      stats = await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit });
+      check("watch: the overlap seam line does not re-report the same split secret on the next sweep",
+        stats.loud === 0 && stats.quiet === 0 && events.filter((e) => e.type === "finding").length === 1);
+    }
+
+    // 7: truncate-and-rewrite re-baselines silently -- no false alert on
+    // content the file no longer even contains, and no crash on the
+    // truncate-then-grow-past-old-offset case a plain size check would miss.
+    {
+      const file = path.join(wDir, "t7.jsonl");
+      fs.writeFileSync(file, JSON.stringify({ message: { content: "AWS_ACCESS_KEY_ID=" + plantedAwsKey } }) + "\n");
+      const { tracked, seen, ledger } = freshTracked();
+      const events = [];
+      const emit = (e) => events.push(e);
+      await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit }); // baseline (existing content, silent)
+      fs.truncateSync(file, 0);
+      fs.writeFileSync(file, JSON.stringify({ message: { content: "totally different, same key again: " + plantedAwsKey } }) + "\n");
+      const stats = await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger, options: wOpts, emit });
+      check("watch: truncate-then-rewrite-past-the-old-offset re-baselines silently, no false alert",
+        stats.loud === 0 && events.length === 0);
+    }
+
+    // 9: whole-file (rescan-class, non-.jsonl) source: mtime touch with no
+    // content change produces zero events (idempotent rescans), AND -- the
+    // real bug this exact suite caught live on this machine before it ever
+    // shipped -- a rescan-class file that ALREADY has a secret in it when
+    // watch first sees it must baseline silently too, the same
+    // watch-from-now promise every source gets, not just .jsonl ones.
+    {
+      const file = path.join(wDir, "settings.local.json"); // no .jsonl extension: rescan class
+      fs.writeFileSync(file, JSON.stringify({ token: plantedAwsKey }) + "\n");
+      const { tracked, seen, ledger } = freshTracked();
+      const events = [];
+      const emit = (e) => events.push(e);
+      let stats = await sweepOnce({ sources: [watchSource(file, "agent-configs")], tracked, seen, ledger, options: wOpts, emit });
+      check("watch: a rescan-class file that already has a secret in it baselines silently on first sight",
+        stats.loud === 0 && events.length === 0);
+
+      const before = fs.statSync(file).mtimeMs;
+      fs.utimesSync(file, new Date(), new Date(before + 5000));
+      stats = await sweepOnce({ sources: [watchSource(file, "agent-configs")], tracked, seen, ledger, options: wOpts, emit });
+      check("watch: a whole-file rescan with no real content change stays quiet (idempotent)",
+        stats.loud === 0 && events.length === 0);
+
+      fs.writeFileSync(file, JSON.stringify({ token: "AKIA" + "Q7B3N5K9M1P4R2T6" }) + "\n");
+      stats = await sweepOnce({ sources: [watchSource(file, "agent-configs")], tracked, seen, ledger, options: wOpts, emit });
+      check("watch: a REAL change to a rescan-class file after baseline still alerts",
+        stats.loud === 1 && events.length === 1 && events[0].lineIsAbsolute === true);
+    }
+
+    // 12: an already-dismissed fingerprint is suppressed, not alerted.
+    {
+      const file = path.join(wDir, "t12.jsonl");
+      fs.writeFileSync(file, "");
+      const { tracked, seen } = freshTracked();
+      const events = [];
+      const emit = (e) => events.push(e);
+      await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger: { acks: {}, dismissed: {} }, options: wOpts, emit });
+      fs.appendFileSync(file, JSON.stringify({ message: { content: "AWS_ACCESS_KEY_ID=" + plantedAwsKey } }) + "\n");
+      // Compute the fingerprint the same way scan() would, without needing
+      // a real ack/dismiss call: fingerprintFinding only needs
+      // {ruleId, preview, relFile}, and the preview is deterministic from
+      // the planted value via redact().
+      const { fingerprintFinding } = require("../src/rotation");
+      const { redact: redactValue } = require("../src/patterns");
+      const fp = fingerprintFinding({ ruleId: "aws_access_key_id", preview: redactValue(plantedAwsKey), relFile: "t12.jsonl" });
+      const dismissedLedger = { acks: {}, dismissed: { [fp]: { at: new Date().toISOString() } } };
+      const stats = await sweepOnce({ sources: [watchSource(file)], tracked, seen, ledger: dismissedLedger, options: wOpts, emit });
+      check("watch: a fingerprint already present in the dismissed ledger is suppressed, not alerted",
+        stats.loud === 0 && stats.suppressedByLedger === 1 && events.length === 0);
+    }
+
+    // startWatch(): the full loop, with real (tiny) timers.
+    class FakeStream { constructor() { this.chunks = []; } write(s) { this.chunks.push(s); return true; } }
+
+    // 13: --json mode emits single-line parseable NDJSON, basename-only
+    // paths, and never the raw secret anywhere in the stream.
+    {
+      const file = path.join(wDir, "t13.jsonl");
+      fs.writeFileSync(file, "");
+      const out = new FakeStream(), errOut = new FakeStream();
+      const src = watchSource(file);
+      const { promise, stop } = startWatch({ sources: [src], options: { ...wOpts, json: true, pollMs: 15 }, out, errOut });
+      await new Promise((r) => setTimeout(r, 40));
+      fs.appendFileSync(file, JSON.stringify({ message: { content: "AWS_ACCESS_KEY_ID=" + plantedAwsKey } }) + "\n");
+      await new Promise((r) => setTimeout(r, 60));
+      stop();
+      await promise;
+      const findingLines = out.chunks.filter((s) => s.includes('"type":"finding"'));
+      check("watch --json: emits at least one finding line", findingLines.length >= 1);
+      let parsedOk = true, hasBasenameOnly = true;
+      for (const chunk of out.chunks) {
+        for (const line of chunk.split("\n").filter(Boolean)) {
+          let obj;
+          try { obj = JSON.parse(line); } catch { parsedOk = false; continue; }
+          if (obj.relFile && obj.relFile.includes(path.sep)) hasBasenameOnly = false;
+        }
+      }
+      check("watch --json: every stdout line is independently parseable JSON", parsedOk);
+      check("watch --json: relFile is a basename, never a full path", hasBasenameOnly);
+      check("watch --json: the raw secret never appears anywhere in the stream",
+        !out.chunks.join("").includes("SM0KETESTFAKEKEY"));
+    }
+
+    // 14: stop() resolves the promise with summary stats and releases the
+    // timer -- the test process must exit on its own afterward, which is
+    // exactly what the rest of this suite finishing normally demonstrates;
+    // checked explicitly here via the stats shape and that stop() is safe
+    // to call twice (SIGINT then SIGTERM in the real CLI must not double-act).
+    {
+      const file = path.join(wDir, "t14.jsonl");
+      fs.writeFileSync(file, "");
+      const out = new FakeStream(), errOut = new FakeStream();
+      const { promise, stop } = startWatch({ sources: [watchSource(file)], options: { ...wOpts, json: false, pollMs: 15 }, out, errOut });
+      await new Promise((r) => setTimeout(r, 30));
+      const stats1 = stop();
+      const stats2 = stop(); // idempotent: must not throw, must not restart the loop
+      const resolved = await promise;
+      check("watch: stop() returns session summary stats with the expected shape",
+        typeof stats1.sweeps === "number" && stats1.sweeps > 0 && stats1.loud === 0 && stats1.errors === 0);
+      check("watch: stop() is idempotent (safe to call twice, matching SIGINT-then-SIGTERM)",
+        stats2 === stats1 && resolved === stats1);
+    }
+
+    // 15 (and 5's silent-baseline case doubles as the self-watch churn
+    // check): a source that never changes across several sweeps writes
+    // ZERO bytes to either stream -- the regression this project's own
+    // house rule about self-watch feedback exists to prevent (see
+    // src/watch.js's own doc comment: a watcher's alerts landing back in
+    // its own watched transcript must never re-trigger more alerts).
+    {
+      const file = path.join(wDir, "t15.jsonl");
+      fs.writeFileSync(file, JSON.stringify({ message: { content: "nothing secret here at all" } }) + "\n");
+      const out = new FakeStream(), errOut = new FakeStream();
+      const { promise, stop } = startWatch({ sources: [watchSource(file)], options: { ...wOpts, json: false, pollMs: 15 }, out, errOut });
+      await new Promise((r) => setTimeout(r, 80)); // several sweeps, nothing ever changes
+      const stats = stop();
+      await promise;
+      check("watch: several findings-free sweeps write zero bytes to stdout and stderr",
+        out.chunks.length === 0 && errOut.chunks.length === 0 && stats.sweeps >= 3);
+    }
+  }
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

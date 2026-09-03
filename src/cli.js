@@ -10,6 +10,7 @@ const { checkIntegrity } = require("./integrity");
 const {
   ROTATION_GUIDANCE, guidanceFor, loadAcks, loadDismissed, ackFinding, dismissFinding, renderRotation,
 } = require("./rotation");
+const { startWatch, isTailable } = require("./watch");
 
 /**
  * A source is unavailable for the ordinary reason (not installed — nothing
@@ -125,6 +126,26 @@ Scan options:
                           JWT's own signed exp claim is checked locally
                           with no network call at all, on by default, not
                           part of --verify.
+
+Watch:
+  residoo watch            continuous scanning instead of one snapshot:
+                          alerts the moment a new secret lands in a
+                          transcript, instead of waiting for the next
+                          "residoo scan". Covers the same sources as scan;
+                          run scan first for anything already on disk,
+                          since watch only ever looks at content written
+                          AFTER it starts. No other tool in this project's
+                          own benchmark (bench/) has anything like it.
+  --interval <seconds>   how often to check for new content (default 5,
+                          minimum 1)
+  --json                  NDJSON events on stdout instead of plain text,
+                          one line per finding/re-exposure
+  --verify                same opt-in vendor check as scan --verify,
+                          applied to each newly found credential once,
+                          never to one already seen
+  --include-noisy, --include-suppressed, --no-color   same meaning as scan
+  Ctrl+C stops cleanly and prints a session summary (skipped with --json,
+  where the same information is one final NDJSON event).
 
 Rotation:
   residoo explain <rule-id>     full rotation runbook for one detection rule
@@ -441,6 +462,115 @@ function runDismiss(args) {
   return 0;
 }
 
+/**
+ * One pass over each source's files() purely to describe what's about to
+ * be watched -- how many files will be tailed (byte-offset, only new
+ * content ever read) versus polled (whole-file rescan on any change). A
+ * separate, cheap enumeration from the watch itself; not wired into
+ * startWatch() so a banner-rendering concern never has to live inside the
+ * engine.
+ */
+function printWatchBanner(sources) {
+  process.stderr.write("residoo watch: establishing a baseline over each source (this covers NEW content only -- run `residoo scan` first for anything already on disk)...\n");
+  for (const source of sources) {
+    let tail = 0, rescan = 0;
+    try {
+      for (const entry of source.files()) {
+        if (entry.broken) continue;
+        if (isTailable(entry.file)) tail++; else rescan++;
+      }
+    } catch {
+      // A source erroring while just being counted for the banner is not
+      // fatal to the watch itself -- sweepOnce has its own try/catch
+      // around files() and reports it there instead.
+    }
+    const parts = [];
+    if (tail) parts.push(`${tail} tailed`);
+    if (rescan) parts.push(`${rescan} polled (rescanned on change)`);
+    process.stderr.write(`  ${source.label()} (${source.id()}): ${parts.join(", ") || "no files yet"}\n`);
+  }
+  process.stderr.write(
+    "fs.watch is not used; every alert comes from polling, so an alert can lag\n" +
+    "up to one --interval behind the actual write. SQLite-backed sources are\n" +
+    "always polled in full (no incremental read exists for them). Ctrl+C to stop.\n\n"
+  );
+}
+
+function printWatchSummary(stats) {
+  process.stderr.write(
+    `\nresidoo watch: stopped. ${stats.sweeps} sweep${stats.sweeps === 1 ? "" : "s"}, ` +
+    `${stats.loud} new finding${stats.loud === 1 ? "" : "s"}, ${stats.quiet} re-exposure${stats.quiet === 1 ? "" : "s"}` +
+    (stats.suppressedByLedger ? `, ${stats.suppressedByLedger} already acked or dismissed` : "") +
+    (stats.errors ? `, ${stats.errors} sweep error${stats.errors === 1 ? "" : "s"}` : "") + ".\n"
+  );
+}
+
+/**
+ * `residoo watch`: continuous scanning instead of one snapshot. See
+ * src/watch.js for the engine; this function is only argument parsing,
+ * the startup/shutdown banners, and wiring SIGINT/SIGTERM to a clean stop.
+ */
+async function runWatch(args) {
+  const wantsJson = args.includes("--json");
+  const includeNoisy = args.includes("--include-noisy");
+  const includeSuppressed = args.includes("--include-suppressed");
+  const verify = args.includes("--verify");
+  const noColor = args.includes("--no-color");
+
+  let intervalSeconds = 5;
+  const intervalArg = argValue(args, "--interval");
+  if (intervalArg !== null) {
+    const n = Number(intervalArg);
+    if (!Number.isFinite(n) || n < 1) {
+      process.stderr.write(`--interval must be a number of seconds, at least 1; got "${intervalArg}".\n`);
+      return 2;
+    }
+    intervalSeconds = n;
+  }
+
+  const sources = availableSources();
+  if (sources.length === 0) {
+    process.stderr.write(
+      "No known transcript sources found on this machine; nothing to watch.\n" +
+      `Checked: ${sourceStatusList()}.\n`
+    );
+    return 0;
+  }
+
+  if (!wantsJson) printWatchBanner(sources);
+
+  const { promise, stop } = startWatch({
+    sources,
+    options: { includeNoisy, includeSuppressed, verify, noColor, json: wantsJson, pollMs: intervalSeconds * 1000 },
+  });
+
+  const printFinalSummary = (stats) => {
+    if (wantsJson) process.stdout.write(JSON.stringify({ type: "summary", at: new Date(), ...stats }) + "\n");
+    else printWatchSummary(stats);
+  };
+
+  // A second Ctrl+C must not hang waiting on a graceful stop that already
+  // started -- stop() itself is idempotent, but the listener only needs to
+  // act once.
+  let signalled = false;
+  const onSignal = () => {
+    if (signalled) return;
+    signalled = true;
+    printFinalSummary(stop());
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+
+  const stats = await promise;
+  process.removeListener("SIGINT", onSignal);
+  process.removeListener("SIGTERM", onSignal);
+  // promise can also resolve because something ELSE called stop() (not
+  // possible from outside this function today, but the contract allows
+  // it) -- print the summary exactly once regardless of which path got here.
+  if (!signalled) printFinalSummary(stats);
+  return 0;
+}
+
 async function main(argv) {
   const args = argv.slice(2);
   if (args.includes("-h") || args.includes("--help") || args.length === 0) {
@@ -453,6 +583,7 @@ async function main(argv) {
   if (cmd === "explain") return runExplain(args);
   if (cmd === "ack") return runAck(args);
   if (cmd === "dismiss") return runDismiss(args);
+  if (cmd === "watch") return runWatch(args);
   if (cmd !== "scan") {
     process.stderr.write(`Unknown command "${cmd}". Try "residoo --help".\n`);
     return 2;

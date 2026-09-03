@@ -13,6 +13,7 @@ for anyone deciding between residoo and an adjacent tool.
 | Remediation | `--seal` (encrypted copy) | none | none | in-place redaction |
 | Runtime deps | 0 (Node only) | 0 (Go binary) | 0 (Go binary) | Python 3.11+, 3 pip packages |
 | Agent sources covered | 43 | n/a | n/a | 31 |
+| Continuous mode | `residoo watch` | none | none | none |
 
 The rows above (rule counts, deps, sources) are documented facts, not
 measured ones. For actual detection quality, precision, and egress,
@@ -70,6 +71,28 @@ None of this makes agentsweep bad: it's a legitimately different set of
 choices, and its README is honest about its own tradeoffs too. Worth a look
 if broader source coverage matters more to you than a minimal dependency
 footprint.
+
+## Continuous mode: nobody else in the field has one
+
+Every tool in the table above, and every tool in residoo's own benchmark
+field (gitleaks, trufflehog, betterleaks, kingfisher, agentsweep,
+whatileaked, detect-secrets, ggshield), is scan-once-and-exit: verified
+directly against each installed binary's own `--help` output, not assumed
+by reputation. `residoo watch` polls the same sources `scan` covers and
+alerts the moment a new secret lands in a transcript, instead of waiting
+for the next manual run.
+
+The one adjacent thing is GitGuardian's `ggshield` AI hook, and it works a
+genuinely different way: a per-agent-tool hook that has to be installed
+into each tool's own hook system separately, intercepting a prompt or
+completion as it happens and shipping that content to GitGuardian's server
+for inspection. `residoo watch` is one local process, watching every known
+agent source at once, with no network call at all in its default path
+(same posture as `scan`; see [What it does not do](../README.md#what-it-does-not-do)).
+It doesn't replace a hook wired into a specific tool's own event stream,
+but it doesn't need one installed per tool either, and it covers every
+transcript store residoo already knows about, not just the one tool a hook
+happens to be attached to.
 
 ## Verifying a found value is still live
 

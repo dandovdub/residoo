@@ -113,6 +113,9 @@ reproduction; everything needed to rerun it ships in this repo.
   acknowledgement ledger. See [Rotation](#rotation-from-found-to-closed).
 - `--project <dir>` scans a repository checkout instead of the machine, for
   CI and pre-commit. See [CI and pre-commit](#ci-and-pre-commit).
+- **`residoo watch`**: continuous scanning instead of one snapshot, alerting
+  the moment a new secret lands in a transcript. See
+  [Watch: continuous scanning](#watch-continuous-scanning) below.
 
 ## Beyond transcripts: configs and planted persistence
 
@@ -285,7 +288,7 @@ As a GitHub Action (this repo doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.4.14
+  - uses: dandovdub/residoo@v0.5.0
 ```
 
 As a pre-commit hook:
@@ -293,7 +296,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.4.14
+    rev: v0.5.0
     hooks:
       - id: residoo
 ```
@@ -373,10 +376,48 @@ residoo ack <fingerprint> [--note <text>]           mark one finding rotated
 
 residoo unseal <vault-dir>                          list a vault's contents
 residoo unseal <vault-dir> --restore <n> --out <p>  restore one file, hash-verified
+
+residoo watch [options]
+
+  --interval <seconds>    how often to check for new content (default 5, minimum 1)
+  --json                  NDJSON events on stdout, one line per finding/re-exposure
+  --verify                same opt-in vendor check as scan --verify, applied to
+                          each newly found credential once
+  --include-noisy, --include-suppressed, --no-color   same meaning as scan
 ```
 
 The vault passphrase comes from `RESIDOO_PASSPHRASE` or a hidden interactive
 prompt. There is no recovery if you lose it, so pick one you keep.
+
+## Watch: continuous scanning
+
+`residoo scan` is a snapshot. `residoo watch` is the same engine run
+continuously: it polls every source `scan` already covers, and the moment a
+new secret lands in a transcript, prints an alert with the redacted value,
+the rule, the file, and the same rotation runbook a scan finding carries,
+instead of waiting for you to remember to run `scan` again.
+
+```
+$ residoo watch
+watching 43 sources, 118 files (61 tailed, 57 rescanned on change)
+polling every 5s; fs.watch is not used, every alert comes from polling
+
+2026-09-03 14:02:11  [high]  AWS Access Key ID  AKIA****ABCD
+  claude-code · session-9f2c.jsonl:214 · rf1-8a3e91  Rotate: https://.../access_keys
+```
+
+It is watch-from-**now**: run `residoo scan` first for anything already on
+disk, since a fresh `residoo watch` baselines whatever it finds on its first
+sweep silently and only alerts on content written after it starts. A finding
+already acknowledged or dismissed (`residoo ack` / `residoo dismiss`) stays
+suppressed, checked against the same `~/.residoo/rotations.json` ledger, and
+a ledger change made mid-watch takes effect within one poll interval, no
+restart needed. A findings-free sweep prints nothing at all, including to
+its own watched Claude Code session, by design: no other tool in this
+project's own benchmark ([`bench/`](bench/)) has a continuous mode at all,
+verified directly against each one's own `--help` output rather than
+assumed; see [docs/comparison.md](docs/comparison.md) for how the one
+adjacent thing, GitGuardian's `ggshield` AI hook, works differently.
 
 ## Sources supported today
 
