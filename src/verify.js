@@ -289,16 +289,22 @@ function verifyGithubToken(token, opts) {
 //   - Cohere, Mistral, Together AI, Fireworks, DeepSeek: not detected in
 //     the first place (see patterns.js's own comment on this), so wiring a
 //     verifier would be dead code — verification needs detection first.
-//   - PlanetScale, Fly.io: real, confirmed endpoints, deliberately deferred
-//     rather than rushed. PlanetScale's auth header needs BOTH the token
-//     id and the secret together, a paired-credential shape residoo has no
-//     detection rule for (only the secret's pscale_tkn_ prefix is
-//     detected). Fly.io needs one of two different Authorization header
-//     schemes depending on which of two token prefixes was found (a plain
-//     Bearer header for one, the literal string "FlyV1 <token>" for the
-//     other) layered on top of a GraphQL body check — real, but more
-//     engineering than the rest of this batch, better done as its own
-//     careful pass than folded in here.
+//   - Linode / Akamai Cloud: researched twice, ruled out both times, the
+//     second time more conclusively than the first: its own OpenAPI schema
+//     documents the token as a bare opaque string with no prefix
+//     whatsoever, not merely an undocumented one, so this is not something
+//     a future docs update could fix.
+// Two vendors that were deferred in an earlier pass are no longer on this
+// list, once their real formats or engineering were worked out: PlanetScale
+// (see verifyPlanetScaleToken below and pairing.js's findNearbyCandidate,
+// generalized from AWS's own pairing mechanism to cover its id/secret
+// pair) and Fly.io's fo1_ token family (see verifyFlyioBearerToken below).
+// Fly.io's OTHER token family, fm1a_/fm1r_/fm2_ "macaroons," stays
+// undetected: caught live on this project's own real-machine testing, that
+// shape's short prefix plus a wide, unstructured base64 body produced
+// dozens of apparent matches inside an unrelated real file that just
+// happened to contain a lot of embedded base64 data. See patterns.js's own
+// comment on flyio_bearer_token for the measured false-positive rate.
 
 function huggingfaceUrl() { return process.env.RESIDOO_TEST_HUGGINGFACE_API_URL || "https://huggingface.co/api/whoami-v2"; }
 function sendgridUrl() { return process.env.RESIDOO_TEST_SENDGRID_API_URL || "https://api.sendgrid.com/v3/scopes"; }
@@ -412,6 +418,67 @@ function verifyNetlifyToken(token, opts) {
   return verifyByStatusCode("Netlify", netlifyUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
 }
 
+function planetscaleUrl() { return process.env.RESIDOO_TEST_PLANETSCALE_API_URL || "https://api.planetscale.com/v1/organizations"; }
+/**
+ * PlanetScale: a paired credential (like AWS), not a single token — the
+ * Authorization header is the literal "<id>:<token>", no Bearer/Basic
+ * prefix, verbatim from PlanetScale's own docs' curl example.
+ */
+function verifyPlanetScaleToken(id, secret, opts) {
+  return verifyByStatusCode("PlanetScale", planetscaleUrl(), () => ({ Authorization: `${id}:${secret}` }), opts);
+}
+
+function vercelUrl() { return process.env.RESIDOO_TEST_VERCEL_API_URL || "https://api.vercel.com/v2/user"; }
+function verifyVercelToken(token, opts) {
+  return verifyByStatusCode("Vercel", vercelUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
+}
+
+function cerebrasUrl() { return process.env.RESIDOO_TEST_CEREBRAS_API_URL || "https://api.cerebras.ai/v1/models"; }
+function verifyCerebrasKey(key, opts) {
+  return verifyByStatusCode("Cerebras", cerebrasUrl(), () => ({ Authorization: `Bearer ${key}` }), opts);
+}
+
+function renderUrl() { return process.env.RESIDOO_TEST_RENDER_API_URL || "https://api.render.com/v1/owners"; }
+function verifyRenderKey(key, opts) {
+  return verifyByStatusCode("Render", renderUrl(), () => ({ Authorization: `Bearer ${key}` }), opts);
+}
+
+function flyioUrl() { return process.env.RESIDOO_TEST_FLYIO_API_URL || "https://api.fly.io/graphql"; }
+/**
+ * Fly.io: one GraphQL endpoint, Bearer header (the scheme flyctl-issued
+ * fo1_ tokens use; Fly's other token family, fm1a_/fm1r_/fm2_ "macaroons",
+ * uses a different literal "FlyV1 <token>" scheme instead, but that family
+ * is not detected — see patterns.js's own comment on why). Like Linear, a
+ * GraphQL 200 can still carry an auth failure in the body, so this checks
+ * for a populated data.viewer instead of trusting the status code alone,
+ * except for 401, which Fly's own API does use for an outright missing or
+ * malformed token.
+ */
+async function verifyFlyioBearerToken(token, { fetchFn = fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  let res;
+  try {
+    res = await fetchFn(flyioUrl(), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "{ viewer { email } }" }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    return { status: "error", detail: `could not reach Fly.io (${sanitizeDetail(e && e.message)})` };
+  }
+  if (res.status === 401) return { status: "invalid", detail: "Fly.io rejected this token (HTTP 401)" };
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    return { status: "error", detail: `Fly.io returned a non-JSON response (HTTP ${res.status})` };
+  }
+  if (body && body.data && body.data.viewer && body.data.viewer.email) {
+    return { status: "active", detail: "Fly.io accepted this token" };
+  }
+  return { status: "error", detail: `could not verify: ${sanitizeDetail(JSON.stringify(body && body.errors)).slice(0, 120) || `HTTP ${res.status}`}` };
+}
+
 /**
  * Linear: a GraphQL API, one POST endpoint for everything, not a plain GET.
  * A GraphQL server can answer HTTP 200 even for some authorization-level
@@ -489,4 +556,6 @@ module.exports = {
   verifyNotionToken, verifyGitlabToken, verifySupabaseToken, verifyElevenLabsKey,
   verifyCircleciToken, verifyAirtableToken, verifyCloudflareToken, verifyHerokuKey,
   verifyNetlifyToken, verifyLinearKey, verifyTelegramToken, verifyDiscordWebhook,
+  verifyPlanetScaleToken, verifyVercelToken, verifyCerebrasKey, verifyRenderKey,
+  verifyFlyioBearerToken,
 };

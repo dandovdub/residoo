@@ -267,17 +267,19 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
       // downgrade it to "already dead": both come from a real answer from
       // AWS, not a guess, so they get their own wording rather than folding
       // into the generic pairing line.
-      if (e.pairedSecretPreview || e.pairedAccessKeyPreview) {
+      if (e.pairedSecretPreview || e.pairedAccessKeyPreview || e.pairedOtherPreview) {
         const otherHalf = e.pairedSecretPreview
           ? `paired with secret ${e.pairedSecretPreview}`
-          : `paired with access key ${e.pairedAccessKeyPreview}`;
-        if (e.awsVerified === "active") {
-          push(paint(c.red + c.bold, `               ⚠ ${otherHalf} · VERIFIED ACTIVE: AWS accepted these credentials moments ago, rotate immediately`));
-        } else if (e.awsVerified === "invalid") {
-          push(paint(c.green, `               ✓ ${otherHalf} · already inactive: AWS rejected these credentials, no rotation needed`));
-        } else if (e.awsVerified === "error") {
+          : e.pairedAccessKeyPreview
+            ? `paired with access key ${e.pairedAccessKeyPreview}`
+            : `paired with ${e.pairedOtherLabel || "value"} ${e.pairedOtherPreview}`;
+        if (e.verified === "active") {
+          push(paint(c.red + c.bold, `               ⚠ ${otherHalf} · VERIFIED ACTIVE: the vendor accepted these credentials moments ago, rotate immediately`));
+        } else if (e.verified === "invalid") {
+          push(paint(c.green, `               ✓ ${otherHalf} · already inactive: the vendor rejected these credentials, no rotation needed`));
+        } else if (e.verified === "error") {
           push(paint(c.red + c.bold, `               ⚠ ${otherHalf} · full working credential, rotate this one first`) +
-            paint(c.dim, ` (could not verify: ${e.awsVerifiedDetail || "unknown error"})`));
+            paint(c.dim, ` (could not verify: ${e.verifiedDetail || "unknown error"})`));
         } else {
           push(paint(c.red + c.bold, `               ⚠ ${otherHalf} · full working credential, rotate this one first`));
         }

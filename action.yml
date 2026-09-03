@@ -7,7 +7,7 @@
 # residoo@VERSION" rather than run from the checked-out action tree, so the
 # workflow runs the exact bits published to npm, the same command a
 # developer runs locally. The action tag and the CLI version move together:
-# dandovdub/residoo@v0.4.6 defaults to residoo 0.4.6 on npm. Override the
+# dandovdub/residoo@v0.4.7 defaults to residoo 0.4.7 on npm. Override the
 # version input only if you need to split them.
 #
 # "npm install -g", not "npx --yes": verified directly in a real GitHub
@@ -53,7 +53,7 @@ inputs:
       residoo version to fetch from npm. Defaults to the release this action
       tag ships with; the tag and the CLI version move together.
     required: false
-    default: "0.4.6"
+    default: "0.4.7"
   sarif:
     description: >-
       Also produce SARIF output and upload it to GitHub code scanning's

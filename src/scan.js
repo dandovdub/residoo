@@ -3,7 +3,7 @@
 const path = require("path");
 const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
 const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("./decode");
-const { findPairedSecret } = require("./pairing");
+const { findPairedSecret, findNearbyCandidate } = require("./pairing");
 const { looksRandom } = require("./rarity");
 const { decodeJwtExpiryMs } = require("./jwtExpiry");
 const {
@@ -14,7 +14,23 @@ const {
   verifyNotionToken, verifyGitlabToken, verifySupabaseToken, verifyElevenLabsKey,
   verifyCircleciToken, verifyAirtableToken, verifyCloudflareToken, verifyHerokuKey,
   verifyNetlifyToken, verifyLinearKey, verifyTelegramToken, verifyDiscordWebhook,
+  verifyPlanetScaleToken, verifyVercelToken, verifyCerebrasKey, verifyRenderKey,
+  verifyFlyioBearerToken,
 } = require("./verify");
+
+// PlanetScale's id half: 12 lowercase alphanumeric characters, no prefix —
+// confirmed via planetscale.com/docs/api/reference/service-tokens. Searched
+// for near an already-confirmed planetscale_secret match the same way AWS's
+// secret is searched for near an access key id (see pairing.js).
+const PLANETSCALE_ID_RE = /\b[a-z0-9]{12}\b/g;
+// A tighter window than AWS's: PlanetScale's own docs show the id and
+// secret adjacent, joined by a colon ("<id>:<token>"), not spread across a
+// config file the way an AWS access key and secret often are. A 12-char
+// lowercase-alnum candidate is also a much more common shape to collide
+// with by accident (a hash fragment, a short id) than AWS's 40-char one, so
+// a smaller window reduces how often an unrelated nearby string creates a
+// false ambiguous match.
+const PLANETSCALE_PAIR_WINDOW = 100;
 
 // Never verify more than this many distinct credentials of ONE vendor in a
 // single scan: a pathological transcript with dozens of distinct
@@ -28,9 +44,11 @@ const MAX_VERIFICATIONS_PER_VENDOR = 10;
 // Deliberately NOT here despite being detected: google_api_key (a key can
 // belong to any Google product; testing it against one product's endpoint
 // would misreport a valid key for a DIFFERENT product as invalid) and
-// perplexity_key (no free, side-effect-free endpoint exists at all). See
-// verify.js's own header comment for the fuller reasoning, including the
-// vendors deferred rather than rushed (PlanetScale, Fly.io).
+// perplexity_key (no free, side-effect-free endpoint exists at all).
+// PlanetScale is ALSO not here despite being verified: it needs pairing
+// (see pendingPlanetScaleVerifications below), the same reason AWS isn't
+// here either. See verify.js's own header comment for the fuller
+// reasoning behind every vendor left out.
 const SIMPLE_VERIFY_FNS = {
   slack_token: verifySlackToken,
   openai_key: verifyOpenAiKey,
@@ -59,6 +77,10 @@ const SIMPLE_VERIFY_FNS = {
   linear_key: verifyLinearKey,
   telegram_bot_token: verifyTelegramToken,
   discord_webhook: verifyDiscordWebhook,
+  vercel_token: verifyVercelToken,
+  cerebras_key: verifyCerebrasKey,
+  render_key: verifyRenderKey,
+  flyio_bearer_token: verifyFlyioBearerToken,
 };
 const SIMPLE_VERIFY_VENDOR_LABEL = {
   slack_token: "Slack's auth.test",
@@ -88,6 +110,10 @@ const SIMPLE_VERIFY_VENDOR_LABEL = {
   linear_key: "Linear's GraphQL API",
   telegram_bot_token: "Telegram's getMe endpoint",
   discord_webhook: "Discord's webhook-info endpoint",
+  vercel_token: "Vercel's user endpoint",
+  cerebras_key: "Cerebras's models endpoint",
+  render_key: "Render's owners endpoint",
+  flyio_bearer_token: "Fly.io's GraphQL API",
 };
 
 // Rule ids that findPairedSecret's window search applies to (see pairing.js):
@@ -241,11 +267,15 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // call; nothing in it is ever written to a finding until verification has
   // REPLACED the raw values with a status string.
   const pendingAwsVerifications = new Map();
+  // Same shape as pendingAwsVerifications, for PlanetScale's paired
+  // credential (see the planetscale_secret match branch below): keyed by
+  // the secret value (the confirmed, prefixed anchor) -> { idValue, refs }.
+  const pendingPlanetScaleVerifications = new Map();
   // --verify only (see verify.js): ruleId -> (token value -> { refs }), for
-  // every SIMPLE_VERIFY_FNS vendor. Unlike AWS, none of these need pairing
-  // (the token itself is the complete credential), so this is simpler: one
-  // entry per distinct value per rule, `refs` accumulating every finding
-  // object that value produced.
+  // every SIMPLE_VERIFY_FNS vendor. Unlike AWS/PlanetScale, none of these
+  // need pairing (the token itself is the complete credential), so this is
+  // simpler: one entry per distinct value per rule, `refs` accumulating
+  // every finding object that value produced.
   const pendingSimpleVerifications = new Map();
 
   // One place raw matched text turns into a recorded finding: counts the
@@ -343,6 +373,32 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
               }
             }
           }
+          // PlanetScale: the opposite pairing direction from AWS (see
+          // pairing.js's findNearbyCandidate) — the SECRET is the
+          // confirmed, prefixed anchor here, and the unprefixed id is the
+          // nearby candidate. Uses the generic pairedOtherPreview/
+          // pairedOtherLabel fields rather than AWS's pairedSecretPreview/
+          // pairedAccessKeyPreview, since neither of those names fits ("the
+          // secret is paired with an id", not a second secret or an access
+          // key) — a future paired vendor reuses these same generic fields
+          // rather than growing a new AWS-shaped pair each time.
+          let planetScaleIdFinding = null;
+          let rawPlanetScaleId = null;
+          if (!suppressedReason && rule.id === "planetscale_secret") {
+            const pairedId = findNearbyCandidate(line, m[0], m.index, PLANETSCALE_ID_RE, PLANETSCALE_PAIR_WINDOW);
+            if (pairedId) {
+              const idSuppressedReason = suppressionReason(pairedId, null);
+              if (idSuppressedReason && !includeSuppressed) {
+                suppressedCount++;
+              } else {
+                rawPlanetScaleId = pairedId;
+                planetScaleIdFinding = record({ id: "planetscale_id", label: "PlanetScale service token id (paired with secret)" },
+                  pairedId, relFile, file, lineNo, mtimeMs,
+                  idSuppressedReason ? "low" : "high", idSuppressedReason,
+                  { paired: true, pairedOtherPreview: redact(m[0]), pairedOtherLabel: "secret" });
+              }
+            }
+          }
           // Local, offline JWT expiry (see jwtExpiry.js): only ever reads
           // the `exp` claim out of the decoded payload, nothing else, and
           // only for the unsuppressed default `jwt` rule, since a
@@ -354,7 +410,11 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
             mtimeMs,
             resolveConfidence(rule.id, m[0], rule.confidence, suppressedReason),
             suppressedReason,
-            { ...(pairedSecretPreview ? { pairedSecretPreview } : {}), ...(jwtExtra || {}) });
+            {
+              ...(pairedSecretPreview ? { pairedSecretPreview } : {}),
+              ...(planetScaleIdFinding ? { pairedOtherPreview: redact(rawPlanetScaleId), pairedOtherLabel: "id" } : {}),
+              ...(jwtExtra || {}),
+            });
 
           // --verify only, and only for a DEMONSTRATED pair (both halves
           // present, neither suppressed): queue it for the verification pass
@@ -370,6 +430,15 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
             }
             const entry = pendingAwsVerifications.get(m[0]);
             if (entry) entry.refs.push({ akiaFinding: primaryFinding, secretFinding });
+          }
+          // --verify, PlanetScale: same dedup-by-anchor-value shape as AWS
+          // above, keyed by the secret (the confirmed anchor) this time.
+          if (verify && planetScaleIdFinding && rawPlanetScaleId) {
+            if (!pendingPlanetScaleVerifications.has(m[0]) && pendingPlanetScaleVerifications.size < MAX_VERIFICATIONS_PER_VENDOR) {
+              pendingPlanetScaleVerifications.set(m[0], { idValue: rawPlanetScaleId, refs: [] });
+            }
+            const psEntry = pendingPlanetScaleVerifications.get(m[0]);
+            if (psEntry) psEntry.refs.push({ secretFinding: primaryFinding, idFinding: planetScaleIdFinding });
           }
           // --verify, single-token vendors (Slack, OpenAI, Anthropic,
           // GitHub): none of these need pairing (the value IS the complete
@@ -559,7 +628,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // separator, a real rendering bug caught live. Only called when there is
   // actually something to verify, so a plain --verify with nothing to check
   // never clears a spinner line for no reason.
-  const anyPending = pendingAwsVerifications.size > 0 ||
+  const anyPending = pendingAwsVerifications.size > 0 || pendingPlanetScaleVerifications.size > 0 ||
     [...pendingSimpleVerifications.values()].some((byValue) => byValue.size > 0);
   if (verify && anyPending && typeof onBeforeVerify === "function") onBeforeVerify();
 
@@ -596,6 +665,17 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
         const result = verifyAwsCredential(accessKeyValue, secretValue);
         applyPair(refs, result);
       }
+    }
+  }
+  if (verify && pendingPlanetScaleVerifications.size > 0) {
+    process.stderr.write(
+      `residoo --verify: calling PlanetScale's organizations endpoint for ${pendingPlanetScaleVerifications.size} ` +
+      "credential(s) found in this scan. This is a real network request to PlanetScale, using the exact " +
+      "credential found in your transcript, one at a time.\n"
+    );
+    for (const [secretValue, { idValue, refs }] of pendingPlanetScaleVerifications) {
+      const result = await verifyPlanetScaleToken(idValue, secretValue);
+      for (const ref of refs) applyVerifyResult([ref.secretFinding, ref.idFinding], result);
     }
   }
   if (verify) {

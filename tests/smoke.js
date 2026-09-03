@@ -476,6 +476,33 @@ async function main() {
       !!akiaAloneFind && akiaAloneFind.pairedSecretPreview === undefined);
   }
 
+  // ── scan: PlanetScale paired-secret detection, opposite direction from
+  // AWS (the SECRET is the confirmed anchor, the id is the nearby
+  // candidate) — see pairing.js's findNearbyCandidate, generalized from
+  // AWS's own mechanism specifically to cover this.
+  {
+    const planetscaleSecret = "pscale_tkn_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2".slice(0, 43);
+    const planetscaleId = "a1b2c3d4e5f6"; // 12 lowercase alnum, the id shape
+    const psRes = await scanOneFile("planetscale.jsonl",
+      JSON.stringify({ message: { content: `Authorization: ${planetscaleId}:${planetscaleSecret}` } }) + "\n");
+    const psSecretFind = psRes.findings.find((f) => f.ruleId === "planetscale_secret");
+    const psIdFind = psRes.findings.find((f) => f.ruleId === "planetscale_id");
+    check("PlanetScale: the secret is detected on its own (it has a real prefix)",
+      !!psSecretFind && psSecretFind.confidence === "high");
+    check("PlanetScale: a nearby id-shaped candidate produces a paired companion finding",
+      !!psIdFind && psIdFind.preview.includes(planetscaleId.slice(0, 4)));
+    check("PlanetScale: the secret's own finding carries the id's redacted preview via the generic paired fields",
+      psSecretFind.pairedOtherPreview === psIdFind.preview && psSecretFind.pairedOtherLabel === "id");
+    check("PlanetScale: the id's own finding carries the secret's redacted preview back, labeled 'secret'",
+      psIdFind.pairedOtherPreview === psSecretFind.preview && psIdFind.pairedOtherLabel === "secret");
+
+    const psAloneRes = await scanOneFile("planetscale-alone.jsonl",
+      JSON.stringify({ message: { content: "just the token: " + planetscaleSecret + " nothing else nearby" } }) + "\n");
+    check("PlanetScale: a secret with no nearby id-shaped candidate carries no pairedOtherPreview, and no companion finding is created",
+      !psAloneRes.findings.some((f) => f.ruleId === "planetscale_id") &&
+      psAloneRes.findings.find((f) => f.ruleId === "planetscale_secret").pairedOtherPreview === undefined);
+  }
+
   // ── scan: local JWT expiry decoding (see src/jwtExpiry.js) ─────────────────
   // Zero network calls, unlike --verify below: the exp claim is inside the
   // signed payload, so decoding it locally is a real answer, not a guess.
@@ -695,6 +722,7 @@ async function main() {
       verifySendgridKey, verifyGroqKey, verifyXaiKey, verifyOpenRouterKey, verifyStripeKey,
       verifyNpmToken, verifyNotionToken, verifyGitlabToken, verifySupabaseToken, verifyElevenLabsKey,
       verifyCircleciToken, verifyAirtableToken, verifyCloudflareToken, verifyHerokuKey, verifyNetlifyToken,
+      verifyPlanetScaleToken,
     } = require("../src/verify");
     const statusResponse = (status) => ({ status });
 
@@ -774,6 +802,41 @@ async function main() {
     await verifyHerokuKey("HRKU-AA-fake", { fetchFn: async (url, opts) => { herokuHeaders = opts.headers; return statusResponse(200); } });
     check("verifyHerokuKey: sends the required Accept: vnd.heroku+json header alongside Bearer",
       herokuHeaders.Authorization === "Bearer HRKU-AA-fake" && herokuHeaders.Accept.includes("vnd.heroku+json"));
+
+    let planetscaleHeaders = null;
+    await verifyPlanetScaleToken("abc123def456", "pscale_tkn_fake", { fetchFn: async (url, opts) => { planetscaleHeaders = opts.headers; return statusResponse(200); } });
+    check("verifyPlanetScaleToken: Authorization is the literal 'id:secret', no Bearer/Basic prefix",
+      planetscaleHeaders.Authorization === "abc123def456:pscale_tkn_fake");
+    const psActive = await verifyPlanetScaleToken("abc123def456", "pscale_tkn_fake", { fetchFn: async () => statusResponse(200) });
+    check("verifyPlanetScaleToken: HTTP 200 is reported active", psActive.status === "active");
+    const psInvalid = await verifyPlanetScaleToken("abc123def456", "pscale_tkn_fake", { fetchFn: async () => statusResponse(401) });
+    check("verifyPlanetScaleToken: HTTP 401 is reported invalid", psInvalid.status === "invalid");
+  }
+
+  // ── src/verify.js: Vercel, Cerebras, Render — the second research batch ────
+  // Same verifyByStatusCode shape as the first 19, added after confirming
+  // their real prefixes in a follow-up research pass (Vercel's vcp_ prefix
+  // is a recent vendor rollout the first pass missed entirely; Cerebras/
+  // Render have confirmed prefixes but no published body length, so their
+  // detection regex uses a floor/ceiling like notion_token's ntn_ does).
+  {
+    const { verifyVercelToken, verifyCerebrasKey, verifyRenderKey } = require("../src/verify");
+    const statusResponse = (status) => ({ status });
+    const SECOND_BATCH_VENDORS = [
+      { name: "Vercel", fn: verifyVercelToken, key: "vcp_fake" },
+      { name: "Cerebras", fn: verifyCerebrasKey, key: "csk-fake" },
+      { name: "Render", fn: verifyRenderKey, key: "rnd_fake" },
+    ];
+    for (const { name, fn, key } of SECOND_BATCH_VENDORS) {
+      const active = await fn(key, { fetchFn: async () => statusResponse(200) });
+      check(`${name}: HTTP 200 is reported active`, active.status === "active");
+      const invalid = await fn(key, { fetchFn: async () => statusResponse(401) });
+      check(`${name}: HTTP 401 is reported invalid`, invalid.status === "invalid");
+      const errored = await fn(key, { fetchFn: async () => statusResponse(500) });
+      check(`${name}: HTTP 500 is reported as error, never invalid`, errored.status === "error");
+      const leak = await fn("THE_REAL_SECRET_VALUE_" + name, { fetchFn: async () => statusResponse(401) });
+      check(`${name}: the key itself never appears in the result`, !JSON.stringify(leak).includes("THE_REAL_SECRET_VALUE"));
+    }
   }
 
   // ── src/verify.js: Linear (GraphQL+body), Telegram (body signal), ──────────
@@ -820,6 +883,23 @@ async function main() {
     const discord401 = await verifyDiscordWebhook("https://discord.com/api/webhooks/123/abc", { fetchFn: async () => ({ status: 401 }) });
     check("verifyDiscordWebhook: HTTP 401 (not Discord's documented signal) is reported as error, not invalid",
       discord401.status === "error");
+
+    // Fly.io: same GraphQL-body-check shape as Linear.
+    const { verifyFlyioBearerToken } = require("../src/verify");
+    let flyBearerHeaders = null;
+    const flyBearerActive = await verifyFlyioBearerToken("fo1_fake", {
+      fetchFn: async (url, opts) => { flyBearerHeaders = opts.headers; return jsonRes(200, { data: { viewer: { email: "x@example.com" } } }); },
+    });
+    check("verifyFlyioBearerToken: sends a plain Bearer header", flyBearerHeaders.Authorization === "Bearer fo1_fake");
+    check("verifyFlyioBearerToken: reports active when data.viewer.email is populated", flyBearerActive.status === "active");
+
+    const fly401 = await verifyFlyioBearerToken("fo1_fake", { fetchFn: async () => jsonRes(401, {}) });
+    check("verifyFlyioBearerToken: HTTP 401 is reported invalid", fly401.status === "invalid");
+    const flyGraphQLError = await verifyFlyioBearerToken("fo1_fake", {
+      fetchFn: async () => jsonRes(200, { errors: [{ message: "unauthorized" }] }),
+    });
+    check("verifyFlyioBearerToken: HTTP 200 with no data.viewer is reported as error, not active",
+      flyGraphQLError.status === "error");
   }
 
   // ── scan + --verify: real spawnSync, real subprocess, fake `aws` binary ────
@@ -893,6 +973,73 @@ async function main() {
       calls.filter((k) => k === liveKey).length === 1);
     check("--verify: a distinct key (dead) gets its own, separate verification call",
       calls.filter((k) => k === deadKey).length === 1);
+  }
+
+  // ── scan + --verify: PlanetScale, real fetch, real local HTTP server ───────
+  // Confirms the paired dispatch (pendingPlanetScaleVerifications) applies
+  // one result to BOTH the secret's finding AND the id's paired companion
+  // finding — the same "both halves get the same answer" contract AWS's
+  // pendingAwsVerifications already has, exercised here through the
+  // opposite-direction pairing (secret is the anchor, id is the candidate).
+  {
+    const http = require("http");
+    const calls = [];
+    // Body must be exactly 43 chars to match planetscale_secret's regex
+    // (pscale_tkn_[A-Za-z0-9_]{43}) — a too-short synthetic value here
+    // would silently never match the detection rule at all.
+    const psSecretBody = "LIVEfakeA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r";
+    const psSecret = "pscale_tkn_" + psSecretBody;
+    const server = http.createServer((req, res) => {
+      const auth = req.headers.authorization || "";
+      calls.push(auth);
+      res.statusCode = auth.endsWith(":" + psSecret) ? 200 : 401;
+      res.end("{}");
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+
+    const psId = "a1b2c3d4e5f6";
+    const prevPsUrl = process.env.RESIDOO_TEST_PLANETSCALE_API_URL;
+    process.env.RESIDOO_TEST_PLANETSCALE_API_URL = `http://127.0.0.1:${port}/v1/organizations`;
+    let psRes;
+    try {
+      psRes = await scanOneFile("planetscale-verify.jsonl",
+        JSON.stringify({ message: { content: `Authorization: ${psId}:${psSecret}` } }) + "\n",
+        { verify: true });
+    } finally {
+      server.close();
+      if (prevPsUrl === undefined) delete process.env.RESIDOO_TEST_PLANETSCALE_API_URL;
+      else process.env.RESIDOO_TEST_PLANETSCALE_API_URL = prevPsUrl;
+    }
+
+    const psSecretFind = psRes.findings.find((f) => f.ruleId === "planetscale_secret");
+    const psIdFind = psRes.findings.find((f) => f.ruleId === "planetscale_id");
+    check("--verify (PlanetScale): the server received the literal 'id:secret' Authorization header",
+      calls.includes(`${psId}:${psSecret}`));
+    check("--verify (PlanetScale): the secret's own finding is reported active",
+      !!psSecretFind && psSecretFind.verified === "active");
+    check("--verify (PlanetScale): the paired id's own finding gets the SAME result, not left unverified",
+      !!psIdFind && psIdFind.verified === "active");
+  }
+
+  // ── scan: detection for the second research batch (Vercel, Fly.io,
+  // Cerebras, Render) actually fires on real-shaped content, end to end
+  // through scan() — the regex collision checks done during implementation
+  // proved these patterns don't match anything ELSE; this proves each one
+  // matches its OWN real content.
+  {
+    function rep(s, n) { let r = ""; while (r.length < n) r += s; return r.slice(0, n); }
+    const samples = {
+      vercel_token: "vcp_" + rep("aB3xY9qZ1mN4pQ7rS2tU5vW8", 24),
+      flyio_bearer_token: "fo1_" + rep("aB3xY9qZ1mN4pQ7rS2tU5vW8", 43),
+      cerebras_key: "csk-" + rep("aB3xY9qZ1mN4pQ7rS2tU5vW8", 40),
+      render_key: "rnd_" + rep("aB3xY9qZ1mN4pQ7rS2tU5vW8", 40),
+    };
+    for (const [ruleId, value] of Object.entries(samples)) {
+      const res = await scanOneFile(`${ruleId}.jsonl`, JSON.stringify({ message: { content: "token: " + value } }) + "\n");
+      check(`scan: ${ruleId} fires on its own real-shaped content`,
+        res.findings.some((f) => f.ruleId === ruleId));
+    }
   }
 
   // ── scan + --verify: Slack, real fetch, real local HTTP server ─────────────
@@ -2010,6 +2157,30 @@ async function main() {
     // line for the one entry that actually has one, none for the other two.
     check("exactly one entry carries the pairing warning, not all three access keys",
       (outPair.match(/paired with secret/g) || []).length === 1);
+
+    // Regression test for a real bug caught live: report.js's pairing
+    // display read e.awsVerified (a field name from before the v0.4.5
+    // rename to the vendor-agnostic e.verified), so it silently always
+    // fell through to the generic "rotate this one first" wording even
+    // for a value --verify had already confirmed active or dead, directly
+    // contradicting the Recommended-actions summary above it. This checks
+    // the actual RENDERED text, which the checks above never did (they
+    // only asserted the pairing note appeared, not what it said about
+    // verified status) — exactly the gap that let the bug ship silently.
+    // verified is set on BOTH sides, matching real behavior: scan.js's
+    // applyVerifyResult always applies one result to both halves of a pair
+    // together (see the applyPair helper in scan.js), never just one side.
+    const pairedActive = { ...paired, verified: "active", verifiedDetail: "accepted" };
+    const secretSideActive = { ...secretSide, verified: "active", verifiedDetail: "accepted" };
+    const outActive = renderRotationSection(renderRotation([pairedActive, secretSideActive], {}, {}), { noColor: true });
+    check("a verified-ACTIVE pair renders 'VERIFIED ACTIVE', not the generic unverified warning",
+      outActive.includes("VERIFIED ACTIVE") && !outActive.includes("full working credential, rotate this one first"));
+
+    const pairedDead = { ...paired, verified: "invalid", verifiedDetail: "rejected" };
+    const secretSideDead = { ...secretSide, verified: "invalid", verifiedDetail: "rejected" };
+    const outDead = renderRotationSection(renderRotation([pairedDead, secretSideDead], {}, {}), { noColor: true });
+    check("a verified-INVALID pair renders 'already inactive', not the generic unverified warning",
+      outDead.includes("already inactive") && !outDead.includes("full working credential, rotate this one first"));
   }
 
   // ── CLI: rotation report, ack round-trip, --allow-acked exit codes ────────

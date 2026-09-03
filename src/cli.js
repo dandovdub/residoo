@@ -57,7 +57,7 @@ const HELP = `residoo: find secrets leaking through your AI agent's session hist
   Scanning makes NO network calls by default and changes nothing on disk.
   Findings are redacted in every output format. The one opt-in exception is
   --verify, which asks a credential's own vendor whether it still
-  authenticates (27 vendors today, see below). Sealing (--seal) writes NEW
+  authenticates (32 vendors today, see below). Sealing (--seal) writes NEW
   encrypted files only. It never modifies or deletes anything that already
   exists.
 
@@ -102,23 +102,27 @@ Scan options:
   --verify                ask the credential's own vendor whether it still
                           authenticates, using the exact value found in
                           your transcript. THIS MAKES A REAL NETWORK CALL.
-                          Off by default. 27 vendors today: AWS (an access
-                          key id found paired with its secret, see Rotation
-                          below, checked via sts:get-caller-identity;
-                          needs the aws CLI on PATH, residoo shells out to
-                          it rather than reimplementing AWS request
-                          signing) and 26 more via a direct, dependency-
-                          free API call each, no CLI needed: Slack, OpenAI,
-                          Anthropic, GitHub, Hugging Face, Replicate,
-                          DigitalOcean, Pinecone, SendGrid, Groq, xAI,
-                          OpenRouter, Stripe, npm, Notion, GitLab, Supabase
-                          (management tokens only), ElevenLabs, CircleCI,
-                          Airtable, Cloudflare, Heroku, Netlify, Linear,
-                          Telegram, Discord webhooks. A verified-invalid
-                          credential is reported as already dead, not as
-                          something to rotate; a JWT's own signed exp claim
-                          is checked locally with no network call at all,
-                          on by default, not part of --verify.
+                          Off by default. 32 vendors today. Two need a
+                          paired id+secret (see Rotation below): AWS,
+                          checked via sts:get-caller-identity (needs the
+                          aws CLI on PATH, residoo shells out to it rather
+                          than reimplementing AWS request signing), and
+                          PlanetScale, checked via a direct API call like
+                          every other non-AWS vendor here. The other 30 are
+                          each a single credential, one direct,
+                          dependency-free API call, no CLI needed: Slack,
+                          OpenAI, Anthropic, GitHub, Hugging Face,
+                          Replicate, DigitalOcean, Pinecone, SendGrid,
+                          Groq, xAI, OpenRouter, Stripe, npm, Notion,
+                          GitLab, Supabase (management tokens only),
+                          ElevenLabs, CircleCI, Airtable, Cloudflare,
+                          Heroku, Netlify, Linear, Telegram, Discord
+                          webhooks, Vercel, Cerebras, Render, and Fly.io.
+                          A verified-invalid credential is reported as
+                          already dead, not as something to rotate; a
+                          JWT's own signed exp claim is checked locally
+                          with no network call at all, on by default, not
+                          part of --verify.
 
 Rotation:
   residoo explain <rule-id>     full rotation runbook for one detection rule

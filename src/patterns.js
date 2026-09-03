@@ -117,6 +117,16 @@ const PATTERNS = [
     re: /\b(?:dop|doo|dor)_v1_[a-f0-9]{64}\b/g },
   { id: "supabase_token", label: "Supabase personal access token", confidence: "high",
     re: /\bsbp_[a-z0-9]{40}\b/g },
+  // Confirmed via planetscale.com/docs/api/reference/service-tokens: the
+  // secret half of a service token pair. The id half (12 lowercase
+  // alphanumeric characters, no prefix) is not a rule on its own for the
+  // same reason AWS's secret access key isn't: on its own it is
+  // indistinguishable from any other short id. Instead it is found the
+  // same way AWS's secret is (see pairing.js's findNearbyCandidate), just
+  // with the anchor and candidate roles swapped — this prefixed secret is
+  // the confirmed anchor, and the id is the nearby unprefixed candidate.
+  { id: "planetscale_secret", label: "PlanetScale service token", confidence: "high",
+    re: /\bpscale_tkn_[A-Za-z0-9_]{43}\b/g },
   // Current CircleCI PAT format only (CCIPAT_<22 alnum>_<40 hex>, confirmed
   // via circleci.com/docs/api/v2). The legacy format is a bare 40-char hex
   // string with no prefix at all — nowhere near specific enough to be a
@@ -143,6 +153,39 @@ const PATTERNS = [
   // opaque string with no prefix, left out for the same reason as above.
   { id: "netlify_token", label: "Netlify personal access token", confidence: "high",
     re: /\bnfp_[a-zA-Z0-9_]{36}\b/g },
+  // Confirmed via vercel.com/docs/accounts/access-tokens (updated 2026-08):
+  // "Personal access tokens begin with the prefix vcp_", 24-char alnum
+  // body shown in the docs' own example. A recent format rollout — an
+  // earlier research pass on this vendor found no confirmed prefix at all,
+  // since the vendor had not yet published this shape.
+  { id: "vercel_token", label: "Vercel personal access token", confidence: "high",
+    re: /\bvcp_[A-Za-z0-9]{24}\b/g },
+  // Fly.io issues a second token family too (fm1a_/fm1r_/fm2_
+  // "macaroons"), confirmed straight from Fly's own macaroon library
+  // source (github.com/superfly/macaroon, format.go). Deliberately NOT a
+  // rule here: caught live on this project's own real-machine testing, the
+  // macaroon shape (a short 4-5 char prefix plus a WIDE 100-700 char plain
+  // base64 body, no further structure) produced 16 distinct apparent
+  // matches inside a single real, unrelated job-queue log file that simply
+  // contained a lot of embedded base64 data — a real false-positive rate,
+  // not a hypothetical one, and exactly the noisy-shape case this file's
+  // own header says to leave out. fo1_ below did not show this problem
+  // (its body is a FIXED 43-char requirement, far less permissive), so
+  // that half of Fly.io's tokens is still covered.
+  { id: "flyio_bearer_token", label: "Fly.io API token", confidence: "high",
+    re: /\bfo1_[\w-]{43}\b/g },
+  // Prefix confirmed via Cerebras' own docs (inference-docs.cerebras.ai:
+  // "API Key (starts with csk-)"), but Cerebras has not published an exact
+  // body length — same situation as notion_token's ntn_ format above, so
+  // the bound here is a floor and a generous ceiling, not a verified exact
+  // count.
+  { id: "cerebras_key", label: "Cerebras API key", confidence: "high",
+    re: /\bcsk-[A-Za-z0-9]{20,200}\b/g },
+  // Prefix confirmed via Render's own docs (render.com, appears 6 times in
+  // the full-text docs dump), body length not published — same
+  // floor/ceiling treatment as Cerebras above.
+  { id: "render_key", label: "Render API key", confidence: "high",
+    re: /\brnd_[A-Za-z0-9]{20,200}\b/g },
   { id: "vault_token", label: "HashiCorp Vault service token", confidence: "high",
     // Vault 1.10+ format only (hvs.<90-120 chars>). The pre-1.10 legacy
     // format is a bare "s." + 18-40 chars — "s." is nowhere near specific

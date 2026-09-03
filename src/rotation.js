@@ -478,6 +478,29 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "This is the account-level token (sbp_); a project's anon and service_role keys rotate separately in that project's API settings.",
   },
+  // Fetched https://planetscale.com/docs/api/reference/service-tokens
+  // (2026-09-03): tokens are managed and revoked from the organization's
+  // Service tokens page in the PlanetScale dashboard.
+  planetscale_secret: {
+    label: "PlanetScale service token",
+    consolePath: "app.planetscale.com > organization Settings > Service tokens",
+    steps: [
+      "Open Service tokens under your organization's settings",
+      "Delete the leaked token",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; the token stops authenticating on the next request.",
+  },
+  planetscale_id: {
+    label: "PlanetScale service token id (paired with a leaked secret)",
+    consolePath: "app.planetscale.com > organization Settings > Service tokens",
+    steps: [
+      "This is the id half of the service token also found on this line",
+      "Delete the leaked token from Service tokens; the id dies with it",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "The id cannot be revoked on its own: deleting the paired token is what invalidates it.",
+  },
   // Fetched https://developer.hashicorp.com/vault/docs/commands/token/revoke
   // (2026-09-02): "token revoke revokes authentication tokens and their
   // children", -accessor and -mode flags.
@@ -567,6 +590,55 @@ const ROTATION_GUIDANCE = {
       "Create a replacement and update whatever used the old one",
     ],
     revokeNote: "Deletion is immediate; the token stops authenticating on the next request.",
+  },
+  // Fetched https://vercel.com/docs/accounts/access-tokens (2026-09-03):
+  // tokens are managed and deleted from Account Settings > Tokens.
+  vercel_token: {
+    label: "Vercel personal access token",
+    consolePath: "vercel.com/account/tokens",
+    steps: [
+      "Open Account Settings > Tokens",
+      "Delete the leaked token",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; the token stops authenticating on the next request.",
+  },
+  // Fetched https://fly.io/docs/security/tokens/ (2026-09-03): tokens are
+  // managed via flyctl or the dashboard's Tokens page; revoking is
+  // immediate.
+  flyio_bearer_token: {
+    label: "Fly.io API token",
+    consolePath: "fly.io/dashboard > your organization > Tokens (or: flyctl tokens revoke)",
+    steps: [
+      "Open Tokens under your organization in the Fly.io dashboard",
+      "Revoke the leaked token",
+      "Create a replacement (flyctl tokens create, or the dashboard)",
+    ],
+    revokeNote: "Revocation is immediate; the token stops authenticating on the next request.",
+  },
+  // Fetched https://inference-docs.cerebras.ai (2026-09-03): keys are
+  // managed and deleted from the Cerebras Cloud platform's API Keys page.
+  cerebras_key: {
+    label: "Cerebras API key",
+    consolePath: "cloud.cerebras.ai > API Keys",
+    steps: [
+      "Open API Keys in the Cerebras Cloud platform",
+      "Delete the leaked key",
+      "Create a replacement and update the applications using it",
+    ],
+    revokeNote: "Deletion is immediate; the key stops authenticating on the next request.",
+  },
+  // Fetched https://render.com's own docs (llms-full.txt dump, 2026-09-03):
+  // API keys are managed and revoked from Account Settings > API Keys.
+  render_key: {
+    label: "Render API key",
+    consolePath: "dashboard.render.com/u/settings#api-keys",
+    steps: [
+      "Open Account Settings > API Keys in the Render dashboard",
+      "Revoke the leaked key",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Revocation is immediate; the key stops authenticating on the next request.",
   },
 
   // ── Comms / SaaS ──────────────────────────────────────────────────────
@@ -974,6 +1046,15 @@ function renderRotation(findings, acks, dismissed = {}) {
         // usable credential pair, not just that a secret exists somewhere.
         pairedSecretPreview: null,
         pairedAccessKeyPreview: null,
+        // Same idea, generic: for any OTHER paired-credential vendor (see
+        // pairing.js's findNearbyCandidate, generalized from the AWS
+        // mechanism above), pairedOtherPreview is the other half's redacted
+        // preview and pairedOtherLabel is a short noun for what that other
+        // half IS ("id", "secret", ...) — kept separate from the AWS-named
+        // fields above since "paired with access key" is wrong wording for,
+        // say, PlanetScale's id/secret pair.
+        pairedOtherPreview: null,
+        pairedOtherLabel: null,
         // A JWT's own `exp` claim, decoded locally (see jwtExpiry.js): the
         // one credential type residoo can say "still valid" or "expired"
         // about with zero network calls, since expiry is inside the signed
@@ -1015,6 +1096,10 @@ function renderRotation(findings, acks, dismissed = {}) {
     if (e.pairedAccessKeyPreview === null && typeof f.pairedAccessKeyPreview === "string") {
       e.pairedAccessKeyPreview = f.pairedAccessKeyPreview;
     }
+    if (e.pairedOtherPreview === null && typeof f.pairedOtherPreview === "string") {
+      e.pairedOtherPreview = f.pairedOtherPreview;
+      e.pairedOtherLabel = typeof f.pairedOtherLabel === "string" ? f.pairedOtherLabel : null;
+    }
     if (e.jwtExpiresAtMs === null && typeof f.jwtExpiresAtMs === "number") {
       e.jwtExpiresAtMs = f.jwtExpiresAtMs;
     }
@@ -1041,7 +1126,7 @@ function renderRotation(findings, acks, dismissed = {}) {
   const isConfirmedDead = (e) => e.verified === "invalid" || (e.jwtExpiresAtMs !== null && e.jwtExpiresAtMs < Date.now());
   const priorityScore = (e) => {
     if (e.verified === "active") return -2;
-    if (e.pairedSecretPreview !== null || e.pairedAccessKeyPreview !== null) return -1;
+    if (e.pairedSecretPreview !== null || e.pairedAccessKeyPreview !== null || e.pairedOtherPreview !== null) return -1;
     if (isConfirmedDead(e)) return 1;
     return 0;
   };

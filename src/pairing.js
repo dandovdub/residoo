@@ -23,6 +23,11 @@
  * other mechanism here: no rule is added to the default set, and a bare
  * 40-char base64 string anywhere else on a line, with no access key nearby,
  * is still silently ignored exactly as before this feature existed.
+ *
+ * findNearbyCandidate below is the same mechanism generalized: PlanetScale
+ * (see scan.js) needs an identical pairing step, just with the anchor and
+ * candidate roles swapped (the SECRET is the prefixed, independently
+ * detected value; the unprefixed id is what gets found nearby).
  */
 
 const WINDOW = 400; // chars searched on each side of the access-key match
@@ -51,33 +56,48 @@ function looksZeroEntropy(value) {
 }
 
 /**
- * Find an AWS secret access key candidate paired with an already-matched
- * access key id or session token on this line. `akiaValue` and `akiaIndex`
- * locate the paired match so the search can be windowed around it and so
- * the access key's own text is never re-matched as its own pair.
+ * Find a candidate value paired with an already-matched anchor value on
+ * this line, within `window` characters on either side. `anchorValue` and
+ * `anchorIndex` locate the anchor so the search can exclude the anchor's
+ * own text from matching itself.
  *
  * Returns the candidate string, or null when there is none, or when more
  * than one distinct candidate sits in the window. Ambiguous pairing is
  * reported as nothing at all: for a finding whose whole point is "this is
  * high confidence because of what it's next to," guessing wrong is worse
  * than staying silent.
+ *
+ * Generic over which value is the anchor and which is the candidate: AWS
+ * anchors on the prefixed access key id and searches for the unprefixed
+ * secret; PlanetScale (see scan.js) anchors on the prefixed secret and
+ * searches for the unprefixed id — same mechanism, opposite roles, so one
+ * function serves both rather than two near-identical copies.
  */
-function findPairedSecret(line, akiaValue, akiaIndex) {
-  const start = Math.max(0, akiaIndex - WINDOW);
-  const end = Math.min(line.length, akiaIndex + akiaValue.length + WINDOW);
+function findNearbyCandidate(line, anchorValue, anchorIndex, candidateRe, window) {
+  const start = Math.max(0, anchorIndex - window);
+  const end = Math.min(line.length, anchorIndex + anchorValue.length + window);
   const around = line.slice(start, end);
-  CANDIDATE_RE.lastIndex = 0;
+  candidateRe.lastIndex = 0;
   let m;
   let found = null;
-  while ((m = CANDIDATE_RE.exec(around)) !== null) {
+  while ((m = candidateRe.exec(around)) !== null) {
     const value = m[0];
-    if (value !== akiaValue && !looksZeroEntropy(value)) {
+    if (value !== anchorValue && !looksZeroEntropy(value)) {
       if (found !== null && found !== value) return null;
       found = value;
     }
-    if (m.index === CANDIDATE_RE.lastIndex) CANDIDATE_RE.lastIndex++;
+    if (m.index === candidateRe.lastIndex) candidateRe.lastIndex++;
   }
   return found;
 }
 
-module.exports = { findPairedSecret };
+/**
+ * Find an AWS secret access key candidate paired with an already-matched
+ * access key id or session token on this line. See findNearbyCandidate for
+ * the shared mechanism this wraps with AWS's own candidate shape and window.
+ */
+function findPairedSecret(line, akiaValue, akiaIndex) {
+  return findNearbyCandidate(line, akiaValue, akiaIndex, CANDIDATE_RE, WINDOW);
+}
+
+module.exports = { findPairedSecret, findNearbyCandidate };
