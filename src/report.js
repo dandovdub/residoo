@@ -85,7 +85,14 @@ function makeProgressReporter(noColor) {
     const label = `scanning ${source}… ${count} file${count === 1 ? "" : "s"}  ${safeBasename(file)}`;
     write(paint(c.bold + c.cyan, SPINNER_FRAMES[frame]) + " " + paint(c.dim, label), 2 + label.length);
   };
-  const stop = () => { if (lastLineLen > 0) process.stderr.write("\r" + " ".repeat(lastLineLen) + "\r"); };
+  // Idempotent: a caller may legitimately stop() more than once (scan.js's
+  // onBeforeVerify calls it before --verify's own stderr lines, and the
+  // normal post-scan call still follows); lastLineLen resets to 0 so a
+  // second call is a true no-op, not a second blank-line clear.
+  const stop = () => {
+    if (lastLineLen > 0) process.stderr.write("\r" + " ".repeat(lastLineLen) + "\r");
+    lastLineLen = 0;
+  };
   return { onProgress, stop };
 }
 

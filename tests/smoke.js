@@ -683,6 +683,145 @@ async function main() {
       capturedHeaders.Authorization === undefined);
   }
 
+  // ── src/verify.js: the 19 vendors added after researching ~65 candidates ───
+  // All share verifyByStatusCode; most use the default classification
+  // (200 active, 401/403 invalid, anything else error), and three
+  // (Pinecone, SendGrid, GitLab) document 403 as "real key, out-of-scope
+  // call" rather than dead, verified individually below since a shared
+  // loop over the default table would incorrectly fail those three.
+  {
+    const {
+      verifyHuggingFaceToken, verifyReplicateToken, verifyDigitalOceanToken, verifyPineconeKey,
+      verifySendgridKey, verifyGroqKey, verifyXaiKey, verifyOpenRouterKey, verifyStripeKey,
+      verifyNpmToken, verifyNotionToken, verifyGitlabToken, verifySupabaseToken, verifyElevenLabsKey,
+      verifyCircleciToken, verifyAirtableToken, verifyCloudflareToken, verifyHerokuKey, verifyNetlifyToken,
+    } = require("../src/verify");
+    const statusResponse = (status) => ({ status });
+
+    const STANDARD_VENDORS = [
+      { name: "Hugging Face", fn: verifyHuggingFaceToken, key: "hf_fake" },
+      { name: "Replicate", fn: verifyReplicateToken, key: "r8_fake" },
+      { name: "DigitalOcean", fn: verifyDigitalOceanToken, key: "dop_v1_fake" },
+      { name: "Groq", fn: verifyGroqKey, key: "gsk_fake" },
+      { name: "xAI", fn: verifyXaiKey, key: "xai-fake" },
+      { name: "OpenRouter", fn: verifyOpenRouterKey, key: "sk-or-v1-fake" },
+      { name: "Stripe", fn: verifyStripeKey, key: "sk_live_fake" },
+      { name: "npm", fn: verifyNpmToken, key: "npm_fake" },
+      { name: "Notion", fn: verifyNotionToken, key: "ntn_fake" },
+      { name: "Supabase", fn: verifySupabaseToken, key: "sbp_fake" },
+      { name: "ElevenLabs", fn: verifyElevenLabsKey, key: "sk_fake" },
+      { name: "CircleCI", fn: verifyCircleciToken, key: "CCIPAT_fake" },
+      { name: "Airtable", fn: verifyAirtableToken, key: "pat_fake" },
+      { name: "Cloudflare", fn: verifyCloudflareToken, key: "cfat_fake" },
+      { name: "Heroku", fn: verifyHerokuKey, key: "HRKU-AA-fake" },
+      { name: "Netlify", fn: verifyNetlifyToken, key: "nfp_fake" },
+    ];
+    for (const { name, fn, key } of STANDARD_VENDORS) {
+      const active = await fn(key, { fetchFn: async () => statusResponse(200) });
+      check(`${name}: HTTP 200 is reported active`, active.status === "active");
+      const invalid = await fn(key, { fetchFn: async () => statusResponse(401) });
+      check(`${name}: HTTP 401 is reported invalid`, invalid.status === "invalid");
+      const errored = await fn(key, { fetchFn: async () => statusResponse(500) });
+      check(`${name}: HTTP 500 is reported as error, never invalid`, errored.status === "error");
+      const networkErr = await fn(key, { fetchFn: async () => { throw new Error("down"); } });
+      check(`${name}: a network failure is an error, not invalid`, networkErr.status === "error");
+      const leak = await fn("THE_REAL_SECRET_VALUE_" + name, { fetchFn: async () => statusResponse(401) });
+      check(`${name}: the key itself never appears in the result`, !JSON.stringify(leak).includes("THE_REAL_SECRET_VALUE"));
+    }
+
+    // These three document 403 as "real credential, wrong scope for this
+    // call" — treating it as invalid would silently misreport a live
+    // credential as dead, exactly the dangerous-direction failure this
+    // whole feature exists to avoid.
+    const THREE_OH_THREE_MEANS_ALIVE = [
+      { name: "Pinecone", fn: verifyPineconeKey, key: "pcsk_fake" },
+      { name: "SendGrid", fn: verifySendgridKey, key: "SG.fake" },
+      { name: "GitLab", fn: verifyGitlabToken, key: "glpat-fake" },
+    ];
+    for (const { name, fn, key } of THREE_OH_THREE_MEANS_ALIVE) {
+      const scoped = await fn(key, { fetchFn: async () => statusResponse(403) });
+      check(`${name}: HTTP 403 is reported active (real key, out of scope for this call), not invalid`,
+        scoped.status === "active");
+      const invalid = await fn(key, { fetchFn: async () => statusResponse(401) });
+      check(`${name}: HTTP 401 is still reported invalid`, invalid.status === "invalid");
+    }
+
+    let stripeHeaders = null;
+    await verifyStripeKey("sk_live_realsecretvalue", { fetchFn: async (url, opts) => { stripeHeaders = opts.headers; return statusResponse(200); } });
+    check("verifyStripeKey: uses HTTP Basic auth (key as username, blank password), not a Bearer header",
+      stripeHeaders.Authorization.startsWith("Basic ") &&
+      Buffer.from(stripeHeaders.Authorization.slice(6), "base64").toString() === "sk_live_realsecretvalue:" &&
+      !stripeHeaders.Authorization.includes("Bearer"));
+
+    let pineconeHeaders = null;
+    await verifyPineconeKey("pcsk_fake", { fetchFn: async (url, opts) => { pineconeHeaders = opts.headers; return statusResponse(200); } });
+    check("verifyPineconeKey: uses an Api-Key header, not Bearer", pineconeHeaders["Api-Key"] === "pcsk_fake" && pineconeHeaders.Authorization === undefined);
+
+    let gitlabHeaders = null;
+    await verifyGitlabToken("glpat-fake", { fetchFn: async (url, opts) => { gitlabHeaders = opts.headers; return statusResponse(200); } });
+    check("verifyGitlabToken: uses a PRIVATE-TOKEN header, not Bearer", gitlabHeaders["PRIVATE-TOKEN"] === "glpat-fake" && gitlabHeaders.Authorization === undefined);
+
+    let notionHeaders = null;
+    await verifyNotionToken("ntn_fake", { fetchFn: async (url, opts) => { notionHeaders = opts.headers; return statusResponse(200); } });
+    check("verifyNotionToken: sends the required Notion-Version header alongside Bearer",
+      notionHeaders.Authorization === "Bearer ntn_fake" && typeof notionHeaders["Notion-Version"] === "string");
+
+    let circleciHeaders = null;
+    await verifyCircleciToken("CCIPAT_fake", { fetchFn: async (url, opts) => { circleciHeaders = opts.headers; return statusResponse(200); } });
+    check("verifyCircleciToken: uses a Circle-Token header, not Bearer", circleciHeaders["Circle-Token"] === "CCIPAT_fake" && circleciHeaders.Authorization === undefined);
+
+    let herokuHeaders = null;
+    await verifyHerokuKey("HRKU-AA-fake", { fetchFn: async (url, opts) => { herokuHeaders = opts.headers; return statusResponse(200); } });
+    check("verifyHerokuKey: sends the required Accept: vnd.heroku+json header alongside Bearer",
+      herokuHeaders.Authorization === "Bearer HRKU-AA-fake" && herokuHeaders.Accept.includes("vnd.heroku+json"));
+  }
+
+  // ── src/verify.js: Linear (GraphQL+body), Telegram (body signal), ──────────
+  // ── Discord (URL-is-the-credential, 404-means-dead) — each bespoke ─────────
+  {
+    const { verifyLinearKey, verifyTelegramToken, verifyDiscordWebhook } = require("../src/verify");
+    const jsonRes = (status, body) => ({ status, json: async () => body });
+
+    let linearHeaders = null, linearBody = null;
+    const linearActive = await verifyLinearKey("lin_api_fake", {
+      fetchFn: async (url, opts) => {
+        linearHeaders = opts.headers; linearBody = JSON.parse(opts.body);
+        return jsonRes(200, { data: { viewer: { id: "usr_123" } } });
+      },
+    });
+    check("verifyLinearKey: reports active when data.viewer is populated", linearActive.status === "active");
+    check("verifyLinearKey: sends the key as a bare Authorization header, NOT prefixed with Bearer",
+      linearHeaders.Authorization === "lin_api_fake");
+    check("verifyLinearKey: sends a real GraphQL viewer query", /viewer/.test(linearBody.query));
+
+    const linear401 = await verifyLinearKey("lin_api_fake", { fetchFn: async () => jsonRes(401, {}) });
+    check("verifyLinearKey: HTTP 401 is reported invalid", linear401.status === "invalid");
+
+    const linearGraphQLError = await verifyLinearKey("lin_api_fake", {
+      fetchFn: async () => jsonRes(200, { errors: [{ message: "Authentication required" }] }),
+    });
+    check("verifyLinearKey: HTTP 200 with no data.viewer (a GraphQL-level error) is reported as error, not active",
+      linearGraphQLError.status === "error");
+
+    const telegramActive = await verifyTelegramToken("123456:ABCfake", {
+      fetchFn: async (url) => { check("verifyTelegramToken: embeds the token in the URL path", url.includes("123456:ABCfake")); return jsonRes(200, { ok: true, result: { id: 1, is_bot: true } }); },
+    });
+    check("verifyTelegramToken: ok:true is reported active", telegramActive.status === "active");
+    const telegramInvalid = await verifyTelegramToken("123456:ABCfake", {
+      fetchFn: async () => jsonRes(200, { ok: false, error_code: 401, description: "Unauthorized" }),
+    });
+    check("verifyTelegramToken: ok:false with error_code is reported invalid, even though HTTP status is 200",
+      telegramInvalid.status === "invalid");
+
+    const discordActive = await verifyDiscordWebhook("https://discord.com/api/webhooks/123/abc", { fetchFn: async () => ({ status: 200 }) });
+    check("verifyDiscordWebhook: HTTP 200 is reported active", discordActive.status === "active");
+    const discordDead = await verifyDiscordWebhook("https://discord.com/api/webhooks/123/abc", { fetchFn: async () => ({ status: 404 }) });
+    check("verifyDiscordWebhook: HTTP 404 (Discord's own dead-webhook signal) is reported invalid", discordDead.status === "invalid");
+    const discord401 = await verifyDiscordWebhook("https://discord.com/api/webhooks/123/abc", { fetchFn: async () => ({ status: 401 }) });
+    check("verifyDiscordWebhook: HTTP 401 (not Discord's documented signal) is reported as error, not invalid",
+      discord401.status === "error");
+  }
+
   // ── scan + --verify: real spawnSync, real subprocess, fake `aws` binary ────
   // One level up from the unit tests above: this exercises scan.js's OWN
   // wiring (dedup by access key, the MAX_AWS_VERIFICATIONS cap, attaching

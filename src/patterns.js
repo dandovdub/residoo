@@ -105,12 +105,44 @@ const PATTERNS = [
     re: /\bpplx-[A-Za-z0-9]{40,200}\b/g },
   { id: "replicate_token", label: "Replicate API token", confidence: "high",
     re: /\br8_[0-9A-Za-z_-]{37}\b/g },
+  // Confirmed via ElevenLabs' own docs (elevenlabs.io/docs/api-reference/authentication):
+  // sk_ + 48 hex. Distinct from the sk-/sk_live_/sk_test_ families above —
+  // underscore not hyphen, and no "_live_"/"_test_" substring, so it cannot
+  // collide with any of them.
+  { id: "elevenlabs_key", label: "ElevenLabs API key", confidence: "high",
+    re: /\bsk_[a-f0-9]{48}\b/g },
 
   // ── Cloud / infra ──────────────────────────────────────────────────────
   { id: "digitalocean_token", label: "DigitalOcean access token", confidence: "high",
     re: /\b(?:dop|doo|dor)_v1_[a-f0-9]{64}\b/g },
   { id: "supabase_token", label: "Supabase personal access token", confidence: "high",
     re: /\bsbp_[a-z0-9]{40}\b/g },
+  // Current CircleCI PAT format only (CCIPAT_<22 alnum>_<40 hex>, confirmed
+  // via circleci.com/docs/api/v2). The legacy format is a bare 40-char hex
+  // string with no prefix at all — nowhere near specific enough to be a
+  // vendor signal, so deliberately left out, same reasoning as Vault's
+  // legacy "s." format above.
+  { id: "circleci_token", label: "CircleCI personal API token", confidence: "high",
+    re: /\bCCIPAT_[A-Za-z0-9]{22}_[a-f0-9]{40}\b/g },
+  // Confirmed via airtable.com/developers/web/api: pat + 14 alnum + "." + 64 hex.
+  { id: "airtable_token", label: "Airtable personal access token", confidence: "high",
+    re: /\bpat[A-Za-z0-9]{14}\.[a-f0-9]{64}\b/g },
+  // Current Cloudflare API Token format only (cfat_/cfut_, confirmed via
+  // developers.cloudflare.com). The legacy format is a bare 40-char string
+  // with no prefix, left out for the same reason as CircleCI's legacy form.
+  { id: "cloudflare_api_token", label: "Cloudflare API token", confidence: "high",
+    re: /\bcf[au]t_[a-zA-Z0-9]{40}[a-f0-9]{8}\b/g },
+  // Current Heroku API key format only (HRKU-AA + 58 chars, confirmed via
+  // Heroku's own help docs). The legacy format is a bare UUID, left out:
+  // "any UUID-shaped string" is exactly the noisy, unspecific shape this
+  // file's header says to avoid.
+  { id: "heroku_api_key", label: "Heroku API key", confidence: "high",
+    re: /\bHRKU-AA[0-9a-zA-Z_-]{58}\b/g },
+  // Current Netlify PAT format only (nfp_ + 36, confirmed via trufflehog's
+  // live netlify/v2 detector). The legacy format is a bare 43-45 char
+  // opaque string with no prefix, left out for the same reason as above.
+  { id: "netlify_token", label: "Netlify personal access token", confidence: "high",
+    re: /\bnfp_[a-zA-Z0-9_]{36}\b/g },
   { id: "vault_token", label: "HashiCorp Vault service token", confidence: "high",
     // Vault 1.10+ format only (hvs.<90-120 chars>). The pre-1.10 legacy
     // format is a bare "s." + 18-40 chars — "s." is nowhere near specific

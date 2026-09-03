@@ -82,6 +82,30 @@ precise about rather than lumping together:
   different set of choices, and its README is honest about its own tradeoffs
   too. Worth a look if broader source coverage matters more to you than a
   minimal dependency footprint.
+- **On verifying a found value is still live**, not just shaped like one:
+  the field splits into two real postures, and residoo picked a side.
+  [trufflehog](https://github.com/trufflesecurity/trufflehog) verifies
+  **by default**, an opt-out (`--no-verification`) rather than an opt-in,
+  across 700+ vendor-specific checks; that means a plain, unconfigured
+  trufflehog run makes network calls. gitleaks never added verification at
+  all and is now feature-complete (security patches only); its declared
+  successor, [betterleaks](https://github.com/betterleaks/betterleaks),
+  added it the other way: **off by default**, one global `--validation`
+  flag, each rule's own validate expression deciding whether and how it
+  calls out, with repeated occurrences of the same value deduped to one
+  request. agentsweep has none either, and is explicit about it: its own
+  README scores trufflehog's verification with a checkmark and its own
+  with an X, and states it is "fully offline, with zero network calls
+  during scanning or redacting" apart from an optional PyPI version-check
+  ping. residoo's `--verify` follows betterleaks' posture, not
+  trufflehog's: off by default, an explicit flag, and 27 vendors today
+  (still short of trufflehog's 700+) rather than every vendor its own
+  detection can name, deduped the same way betterleaks dedupes, and gated
+  the same way patterns.js's own detection rules are: only added where a
+  real, cited endpoint exists, not assumed by analogy to a similar vendor.
+  See [verify.js](src/verify.js) and
+  [What it does not do](#what-it-does-not-do) for exactly what it touches
+  and when.
 
 This isn't a gap Anthropic is planning to close upstream, either: a
 [request to scrub secrets from `~/.claude/projects` natively](https://github.com/anthropics/claude-code/issues/50014)
@@ -125,17 +149,27 @@ won't be built into the tool that writes it.
   discarded. See `src/jwtExpiry.js`.
 - **`--verify`** (opt-in, makes a real network call): asks a credential's own
   vendor whether it still authenticates, using the exact value found in your
-  transcript. Five vendors today: **AWS** (an access key id found paired with
+  transcript. 27 vendors today: **AWS** (an access key id found paired with
   its secret, checked via `sts:get-caller-identity`, the same free,
   read-only, permission-less call the AWS CLI and tools like aws-vault use
   for exactly this; shells out to your own `aws` CLI rather than
   reimplementing AWS request signing, since residoo ships zero runtime
   dependencies and a subtly wrong signing implementation would silently
-  report real keys as invalid, worse than not checking), and **Slack,
-  OpenAI, Anthropic, GitHub** (a direct API call to each vendor's own free
-  "list what I can see" endpoint, no CLI needed, no request signing to get
-  wrong). A verified-active credential is escalated to "rotate immediately";
-  a verified-invalid one is reported as already dead, no action needed, and
+  report real keys as invalid, worse than not checking), and **26 more via a
+  direct API call each, no CLI needed**: Slack, OpenAI, Anthropic, GitHub,
+  Hugging Face, Replicate, DigitalOcean, Pinecone, SendGrid, Groq, xAI,
+  OpenRouter, Stripe, npm, Notion, GitLab, Supabase (management tokens
+  only, project-scoped anon/service_role keys need a project URL residoo
+  doesn't have), ElevenLabs, CircleCI, Airtable, Cloudflare, Heroku,
+  Netlify, Linear, Telegram, and Discord webhooks. Every one of the 27 was
+  researched against that vendor's own current docs or a named open-source
+  scanner's real, running verifier code before being wired up, the same bar
+  as the first five; a real, sourced reason (no free endpoint, needs
+  external context the credential doesn't carry, or a paired credential
+  residoo doesn't yet detect together) is why some detected credential
+  types aren't wired to `--verify` at all, not an oversight. A
+  verified-active credential is escalated to "rotate immediately"; a
+  verified-invalid one is reported as already dead, no action needed, and
   sorted out of the way. Off by default; every environment variable the
   `aws` CLI reads is built from scratch, never inherited, so it can never
   fall back to your own real AWS profile. See `src/verify.js`.
@@ -150,10 +184,10 @@ won't be built into the tool that writes it.
   preview, never the real value, including in `--json` mode. A decoded or
   rejoined secret is redacted exactly like a plain one.
 - On an interactive terminal, prints who it is and where it lives before
-  scanning starts (`residoo v0.4.5 · find secrets your AI coding agent left
+  scanning starts (`residoo v0.4.6 · find secrets your AI coding agent left
   on disk` plus the repo URL), then a live spinner naming the current file
   as it scans. Every report also opens with the exact version and timestamp
-  it was run with (`residoo v0.4.5 · scanned 2026-01-01 12:00`; `--json`
+  it was run with (`residoo v0.4.6 · scanned 2026-01-01 12:00`; `--json`
   carries the same as `residooVersion`/`scannedAt`), so a report pasted or
   screenshotted later never leaves you guessing which build produced it.
   When there are findings, the report closes with a "Next steps" pointer to
@@ -384,7 +418,7 @@ As a GitHub Action (this repository doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.4.5
+  - uses: dandovdub/residoo@v0.4.6
 ```
 
 As a pre-commit hook:
@@ -392,7 +426,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.4.5
+    rev: v0.4.6
     hooks:
       - id: residoo
 ```

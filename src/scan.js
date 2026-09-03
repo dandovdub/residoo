@@ -9,6 +9,11 @@ const { decodeJwtExpiryMs } = require("./jwtExpiry");
 const {
   isAwsCliAvailable, verifyAwsCredential,
   verifySlackToken, verifyOpenAiKey, verifyAnthropicKey, verifyGithubToken,
+  verifyHuggingFaceToken, verifyReplicateToken, verifyDigitalOceanToken, verifyPineconeKey,
+  verifySendgridKey, verifyGroqKey, verifyXaiKey, verifyOpenRouterKey, verifyStripeKey, verifyNpmToken,
+  verifyNotionToken, verifyGitlabToken, verifySupabaseToken, verifyElevenLabsKey,
+  verifyCircleciToken, verifyAirtableToken, verifyCloudflareToken, verifyHerokuKey,
+  verifyNetlifyToken, verifyLinearKey, verifyTelegramToken, verifyDiscordWebhook,
 } = require("./verify");
 
 // Never verify more than this many distinct credentials of ONE vendor in a
@@ -20,17 +25,69 @@ const MAX_VERIFICATIONS_PER_VENDOR = 10;
 // Every vendor whose credential is a single, unpaired bearer token: no
 // AWS-style "two halves make one credential" pairing step, so these all
 // share one collection/verification path below (see pendingSimpleVerifications).
+// Deliberately NOT here despite being detected: google_api_key (a key can
+// belong to any Google product; testing it against one product's endpoint
+// would misreport a valid key for a DIFFERENT product as invalid) and
+// perplexity_key (no free, side-effect-free endpoint exists at all). See
+// verify.js's own header comment for the fuller reasoning, including the
+// vendors deferred rather than rushed (PlanetScale, Fly.io).
 const SIMPLE_VERIFY_FNS = {
   slack_token: verifySlackToken,
   openai_key: verifyOpenAiKey,
   anthropic_key: verifyAnthropicKey,
   github_pat: verifyGithubToken,
+  huggingface_token: verifyHuggingFaceToken,
+  replicate_token: verifyReplicateToken,
+  digitalocean_token: verifyDigitalOceanToken,
+  pinecone_key: verifyPineconeKey,
+  sendgrid_key: verifySendgridKey,
+  groq_key: verifyGroqKey,
+  xai_key: verifyXaiKey,
+  openrouter_key: verifyOpenRouterKey,
+  stripe_key: verifyStripeKey,
+  stripe_test_key: verifyStripeKey,
+  npm_token: verifyNpmToken,
+  notion_token: verifyNotionToken,
+  gitlab_pat: verifyGitlabToken,
+  supabase_token: verifySupabaseToken,
+  elevenlabs_key: verifyElevenLabsKey,
+  circleci_token: verifyCircleciToken,
+  airtable_token: verifyAirtableToken,
+  cloudflare_api_token: verifyCloudflareToken,
+  heroku_api_key: verifyHerokuKey,
+  netlify_token: verifyNetlifyToken,
+  linear_key: verifyLinearKey,
+  telegram_bot_token: verifyTelegramToken,
+  discord_webhook: verifyDiscordWebhook,
 };
 const SIMPLE_VERIFY_VENDOR_LABEL = {
   slack_token: "Slack's auth.test",
   openai_key: "OpenAI's models endpoint",
   anthropic_key: "Anthropic's models endpoint",
   github_pat: "GitHub's user endpoint",
+  huggingface_token: "Hugging Face's whoami endpoint",
+  replicate_token: "Replicate's account endpoint",
+  digitalocean_token: "DigitalOcean's account endpoint",
+  pinecone_key: "Pinecone's indexes endpoint",
+  sendgrid_key: "SendGrid's scopes endpoint",
+  groq_key: "Groq's models endpoint",
+  xai_key: "xAI's api-key endpoint",
+  openrouter_key: "OpenRouter's key endpoint",
+  stripe_key: "Stripe's balance endpoint",
+  stripe_test_key: "Stripe's balance endpoint",
+  npm_token: "npm's whoami endpoint",
+  notion_token: "Notion's users endpoint",
+  gitlab_pat: "GitLab's user endpoint",
+  supabase_token: "Supabase's projects endpoint",
+  elevenlabs_key: "ElevenLabs' user endpoint",
+  circleci_token: "CircleCI's me endpoint",
+  airtable_token: "Airtable's whoami endpoint",
+  cloudflare_api_token: "Cloudflare's token-verify endpoint",
+  heroku_api_key: "Heroku's account endpoint",
+  netlify_token: "Netlify's sites endpoint",
+  linear_key: "Linear's GraphQL API",
+  telegram_bot_token: "Telegram's getMe endpoint",
+  discord_webhook: "Discord's webhook-info endpoint",
 };
 
 // Rule ids that findPairedSecret's window search applies to (see pairing.js):
@@ -154,7 +211,7 @@ function safeName(file) { return path.basename(file); }
  * absolute path can itself carry a username or a project name the rest of
  * this report is careful never to print.
  */
-async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false } = {}) {
+async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, onBeforeVerify = null } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
   // The decode pass (see decode.js) only applies high-confidence, vendor-
   // prefixed rules to decoded bytes: random binary that decodes to printable
@@ -492,6 +549,20 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // distinct credential, one at a time (not concurrent), so this is the one
   // place a scan's wall-clock time depends on something other than disk
   // I/O; that tradeoff only exists when a caller explicitly asked for it.
+  //
+  // onBeforeVerify exists so a caller with its own stderr chatter (the
+  // progress spinner) can clear it first: this pass writes its own stderr
+  // lines below, and the spinner's own stop() doesn't run until scan()
+  // fully returns, which is AFTER those lines have already printed. Without
+  // this, the last spinner frame sits uncleared on screen and the first
+  // --verify line gets appended directly onto the end of it with no
+  // separator, a real rendering bug caught live. Only called when there is
+  // actually something to verify, so a plain --verify with nothing to check
+  // never clears a spinner line for no reason.
+  const anyPending = pendingAwsVerifications.size > 0 ||
+    [...pendingSimpleVerifications.values()].some((byValue) => byValue.size > 0);
+  if (verify && anyPending && typeof onBeforeVerify === "function") onBeforeVerify();
+
   // Same field names (verified/verifiedDetail) regardless of which vendor
   // produced the result: rotation.js and report.js render them identically,
   // and the finding's own ruleId already says which vendor answered.

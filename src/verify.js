@@ -199,13 +199,25 @@ async function verifySlackToken(token, { fetchFn = fetch, timeoutMs = DEFAULT_TI
  * Shared implementation for every vendor below Slack: a plain GET to a
  * free, side-effect-free, already-authenticated endpoint (each vendor's own
  * "list what I can see" call), where the HTTP status code alone says
- * whether the credential authenticated. 200 is active; 401/403 is a real
- * rejection; anything else (429 rate limited, 5xx, a network failure) is
- * inconclusive, never guessed as either active or invalid. Slack needed its
- * own function above because its auth.test always returns HTTP 200 and
- * signals failure inside the JSON body instead.
+ * whether the credential authenticated. 200 is active by default; 401/403
+ * is a real rejection by default; anything else (429 rate limited, 5xx, a
+ * network failure) is inconclusive, never guessed as either active or
+ * invalid. Slack needed its own function above because its auth.test
+ * always returns HTTP 200 and signals failure inside the JSON body
+ * instead.
+ *
+ * invalidStatuses/activeExtra override the defaults for the handful of
+ * vendors whose docs document a DIFFERENT meaning for a given code: Discord
+ * signals a dead webhook with 404, not 401/403; Pinecone, SendGrid, and
+ * GitLab each document 403 as "the credential is real but this specific
+ * call is out of scope," not "dead" — treating that as invalid would be
+ * exactly the false-negative-in-the-dangerous-direction failure this
+ * module exists to avoid, so those three pass 403 in activeExtra instead.
  */
-async function verifyByStatusCode(vendorName, url, buildHeaders, { fetchFn = fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+async function verifyByStatusCode(vendorName, url, buildHeaders, {
+  fetchFn = fetch, timeoutMs = DEFAULT_TIMEOUT_MS,
+  invalidStatuses = [401, 403], activeExtra = [],
+} = {}) {
   let res;
   try {
     res = await fetchFn(url, {
@@ -216,10 +228,10 @@ async function verifyByStatusCode(vendorName, url, buildHeaders, { fetchFn = fet
   } catch (e) {
     return { status: "error", detail: `could not reach ${vendorName} (${sanitizeDetail(e && e.message)})` };
   }
-  if (res.status === 200) {
+  if (res.status === 200 || activeExtra.includes(res.status)) {
     return { status: "active", detail: `${vendorName} accepted this key` };
   }
-  if (res.status === 401 || res.status === 403) {
+  if (invalidStatuses.includes(res.status)) {
     return { status: "invalid", detail: `${vendorName} rejected this key (HTTP ${res.status})` };
   }
   return { status: "error", detail: `could not verify: HTTP ${res.status} from ${vendorName}` };
@@ -260,7 +272,221 @@ function verifyGithubToken(token, opts) {
   return verifyByStatusCode("GitHub", githubUserUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
 }
 
+// ── The rest of this file: 18 more vendors added after researching ~65
+// candidates against real vendor docs and open-source scanner source (see
+// the project's verification coverage research). Each one below already
+// has a residoo detection rule (src/patterns.js) with a specific enough
+// prefix that wiring it to a vendor is safe; several confirmed-viable
+// vendors from that research are deliberately NOT here, for reasons worth
+// stating precisely rather than silently omitting:
+//   - google_api_key, perplexity_key: DETECTED, but not wired. A Google API
+//     key can belong to any Google product (Maps, Firebase, Gemini, ...),
+//     and residoo's detection can't tell which; testing it against
+//     Gemini's endpoint specifically would report a perfectly valid Maps
+//     key as "invalid" — the exact false-negative-in-the-dangerous-
+//     direction failure this file exists to avoid. Perplexity has no free,
+//     side-effect-free endpoint at all (only a paid /chat/completions).
+//   - Cohere, Mistral, Together AI, Fireworks, DeepSeek: not detected in
+//     the first place (see patterns.js's own comment on this), so wiring a
+//     verifier would be dead code — verification needs detection first.
+//   - PlanetScale, Fly.io: real, confirmed endpoints, deliberately deferred
+//     rather than rushed. PlanetScale's auth header needs BOTH the token
+//     id and the secret together, a paired-credential shape residoo has no
+//     detection rule for (only the secret's pscale_tkn_ prefix is
+//     detected). Fly.io needs one of two different Authorization header
+//     schemes depending on which of two token prefixes was found (a plain
+//     Bearer header for one, the literal string "FlyV1 <token>" for the
+//     other) layered on top of a GraphQL body check — real, but more
+//     engineering than the rest of this batch, better done as its own
+//     careful pass than folded in here.
+
+function huggingfaceUrl() { return process.env.RESIDOO_TEST_HUGGINGFACE_API_URL || "https://huggingface.co/api/whoami-v2"; }
+function sendgridUrl() { return process.env.RESIDOO_TEST_SENDGRID_API_URL || "https://api.sendgrid.com/v3/scopes"; }
+function replicateUrl() { return process.env.RESIDOO_TEST_REPLICATE_API_URL || "https://api.replicate.com/v1/account"; }
+function digitaloceanUrl() { return process.env.RESIDOO_TEST_DIGITALOCEAN_API_URL || "https://api.digitalocean.com/v2/account"; }
+function pineconeUrl() { return process.env.RESIDOO_TEST_PINECONE_API_URL || "https://api.pinecone.io/indexes"; }
+function groqUrl() { return process.env.RESIDOO_TEST_GROQ_API_URL || "https://api.groq.com/openai/v1/models"; }
+function xaiUrl() { return process.env.RESIDOO_TEST_XAI_API_URL || "https://api.x.ai/v1/api-key"; }
+function openrouterUrl() { return process.env.RESIDOO_TEST_OPENROUTER_API_URL || "https://openrouter.ai/api/v1/key"; }
+function stripeUrl() { return process.env.RESIDOO_TEST_STRIPE_API_URL || "https://api.stripe.com/v1/balance"; }
+function npmUrl() { return process.env.RESIDOO_TEST_NPM_API_URL || "https://registry.npmjs.org/-/whoami"; }
+function notionUrl() { return process.env.RESIDOO_TEST_NOTION_API_URL || "https://api.notion.com/v1/users"; }
+function gitlabUrl() { return process.env.RESIDOO_TEST_GITLAB_API_URL || "https://gitlab.com/api/v4/user"; }
+function supabaseUrl() { return process.env.RESIDOO_TEST_SUPABASE_API_URL || "https://api.supabase.com/v1/projects"; }
+function elevenlabsUrl() { return process.env.RESIDOO_TEST_ELEVENLABS_API_URL || "https://api.elevenlabs.io/v1/user"; }
+function circleciUrl() { return process.env.RESIDOO_TEST_CIRCLECI_API_URL || "https://circleci.com/api/v2/me"; }
+function airtableUrl() { return process.env.RESIDOO_TEST_AIRTABLE_API_URL || "https://api.airtable.com/v0/meta/whoami"; }
+function cloudflareUrl() { return process.env.RESIDOO_TEST_CLOUDFLARE_API_URL || "https://api.cloudflare.com/client/v4/user/tokens/verify"; }
+function herokuUrl() { return process.env.RESIDOO_TEST_HEROKU_API_URL || "https://api.heroku.com/account"; }
+function netlifyUrl() { return process.env.RESIDOO_TEST_NETLIFY_API_URL || "https://api.netlify.com/api/v1/sites"; }
+function linearUrl() { return process.env.RESIDOO_TEST_LINEAR_API_URL || "https://api.linear.app/graphql"; }
+function telegramUrl(token) {
+  const base = process.env.RESIDOO_TEST_TELEGRAM_API_URL || "https://api.telegram.org";
+  return `${base}/bot${token}/getMe`;
+}
+
+function verifyHuggingFaceToken(token, opts) {
+  return verifyByStatusCode("Hugging Face", huggingfaceUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
+}
+function verifyReplicateToken(token, opts) {
+  return verifyByStatusCode("Replicate", replicateUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
+}
+function verifyDigitalOceanToken(token, opts) {
+  return verifyByStatusCode("DigitalOcean", digitaloceanUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
+}
+/** 403 from SendGrid's own /v3/scopes means the key is real but lacks the scope for this call, not that it's dead — trufflehog's own detector treats it identically. */
+function verifySendgridKey(key, opts) {
+  return verifyByStatusCode("SendGrid", sendgridUrl(), () => ({ Authorization: `Bearer ${key}` }), { ...opts, activeExtra: [403] });
+}
+/** 403 from Pinecone means the key is real but lacks control-plane permissions, not that it's dead. */
+function verifyPineconeKey(key, opts) {
+  return verifyByStatusCode("Pinecone", pineconeUrl(), () => ({ "Api-Key": key }), { ...opts, activeExtra: [403] });
+}
+function verifyGroqKey(key, opts) {
+  return verifyByStatusCode("Groq", groqUrl(), () => ({ Authorization: `Bearer ${key}` }), opts);
+}
+function verifyXaiKey(key, opts) {
+  return verifyByStatusCode("xAI", xaiUrl(), () => ({ Authorization: `Bearer ${key}` }), opts);
+}
+function verifyOpenRouterKey(key, opts) {
+  return verifyByStatusCode("OpenRouter", openrouterUrl(), () => ({ Authorization: `Bearer ${key}` }), opts);
+}
+/** Stripe: HTTP Basic auth, the key as username and an empty password — NOT a Bearer header. */
+function verifyStripeKey(key, opts) {
+  return verifyByStatusCode("Stripe", stripeUrl(), () => ({
+    Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
+  }), opts);
+}
+function verifyNpmToken(token, opts) {
+  return verifyByStatusCode("npm", npmUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
+}
+/** Notion requires an explicit API version header on every request, regardless of endpoint. */
+function verifyNotionToken(token, opts) {
+  return verifyByStatusCode("Notion", notionUrl(), () => ({
+    Authorization: `Bearer ${token}`,
+    "Notion-Version": "2022-06-28",
+  }), opts);
+}
+/**
+ * GitLab's own docs recommend PRIVATE-TOKEN over a Bearer header for
+ * personal access tokens. 403 there means valid token, wrong scope for
+ * this specific call (trufflehog's own detector treats it the same way,
+ * except when the response body says the account itself is blocked — a
+ * rare enough edge case, and one where reporting "active" instead of
+ * "invalid" is the safe direction to be wrong in, that this doesn't
+ * special-case it further).
+ */
+function verifyGitlabToken(token, opts) {
+  return verifyByStatusCode("GitLab", gitlabUrl(), () => ({ "PRIVATE-TOKEN": token }), { ...opts, activeExtra: [403] });
+}
+/** The Supabase Management API personal access token (sbp_ prefix) only — project-scoped anon/service_role keys need a project URL residoo doesn't have and are not verifiable this way. */
+function verifySupabaseToken(token, opts) {
+  return verifyByStatusCode("Supabase", supabaseUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
+}
+function verifyElevenLabsKey(key, opts) {
+  return verifyByStatusCode("ElevenLabs", elevenlabsUrl(), () => ({ "xi-api-key": key }), opts);
+}
+function verifyCircleciToken(token, opts) {
+  return verifyByStatusCode("CircleCI", circleciUrl(), () => ({ "Circle-Token": token }), opts);
+}
+function verifyAirtableToken(token, opts) {
+  return verifyByStatusCode("Airtable", airtableUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
+}
+/**
+ * Cloudflare's own /user/tokens/verify endpoint exists for exactly this
+ * check (its whole purpose, per Cloudflare's docs, is confirming a
+ * token's validity), so treating any HTTP 200 from THIS SPECIFIC endpoint
+ * as active is a documented guarantee, not an approximation the way it
+ * would be for a generic "list resources" endpoint.
+ */
+function verifyCloudflareToken(token, opts) {
+  return verifyByStatusCode("Cloudflare", cloudflareUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
+}
+function verifyHerokuKey(key, opts) {
+  return verifyByStatusCode("Heroku", herokuUrl(), () => ({
+    Authorization: `Bearer ${key}`,
+    Accept: "application/vnd.heroku+json; version=3",
+  }), opts);
+}
+function verifyNetlifyToken(token, opts) {
+  return verifyByStatusCode("Netlify", netlifyUrl(), () => ({ Authorization: `Bearer ${token}` }), opts);
+}
+
+/**
+ * Linear: a GraphQL API, one POST endpoint for everything, not a plain GET.
+ * A GraphQL server can answer HTTP 200 even for some authorization-level
+ * failures (the error lives in the response body's `errors` field, not the
+ * status code), so this checks for a populated `data.viewer` instead of
+ * trusting status code alone — the same reasoning that gave Slack its own
+ * function above. Linear's own docs confirm no "Bearer" prefix on personal
+ * API keys (Bearer is reserved for OAuth tokens).
+ */
+async function verifyLinearKey(key, { fetchFn = fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  let res;
+  try {
+    res = await fetchFn(linearUrl(), {
+      method: "POST",
+      headers: { Authorization: key, "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "{ viewer { id } }" }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    return { status: "error", detail: `could not reach Linear (${sanitizeDetail(e && e.message)})` };
+  }
+  if (res.status === 401) return { status: "invalid", detail: "Linear rejected this key (HTTP 401)" };
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    return { status: "error", detail: `Linear returned a non-JSON response (HTTP ${res.status})` };
+  }
+  if (body && body.data && body.data.viewer && body.data.viewer.id) {
+    return { status: "active", detail: "Linear accepted this key" };
+  }
+  return { status: "error", detail: `could not verify: ${sanitizeDetail(JSON.stringify(body && body.errors)).slice(0, 120) || `HTTP ${res.status}`}` };
+}
+
+/**
+ * Telegram: the token is embedded directly in the URL path, not a header,
+ * and (like Slack) the response is always HTTP 200 with an `ok` boolean in
+ * the body signaling success or failure — never a 401.
+ */
+async function verifyTelegramToken(token, { fetchFn = fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  let res;
+  try {
+    res = await fetchFn(telegramUrl(token), { method: "GET", signal: AbortSignal.timeout(timeoutMs) });
+  } catch (e) {
+    return { status: "error", detail: `could not reach Telegram (${sanitizeDetail(e && e.message)})` };
+  }
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    return { status: "error", detail: `Telegram returned a non-JSON response (HTTP ${res.status})` };
+  }
+  if (body && body.ok === true) return { status: "active", detail: "Telegram accepted this bot token (getMe)" };
+  if (body && body.ok === false && typeof body.error_code === "number") {
+    return { status: "invalid", detail: `Telegram rejected this token (${sanitizeDetail(body.description) || body.error_code})` };
+  }
+  return { status: "error", detail: `could not verify: HTTP ${res.status} from Telegram` };
+}
+
+/**
+ * Discord webhooks: the credential IS a full URL, not a token to attach to
+ * a fixed endpoint elsewhere. A plain GET on that URL is Discord's own
+ * documented read-only "fetch webhook info" call, distinct from POSTing to
+ * it (which would send a real, visible message — never done here).
+ */
+function verifyDiscordWebhook(webhookUrl, opts) {
+  return verifyByStatusCode("Discord", webhookUrl, () => ({}), { ...opts, invalidStatuses: [404] });
+}
+
 module.exports = {
   isAwsCliAvailable, verifyAwsCredential, verifySlackToken,
   verifyOpenAiKey, verifyAnthropicKey, verifyGithubToken,
+  verifyHuggingFaceToken, verifyReplicateToken, verifyDigitalOceanToken, verifyPineconeKey,
+  verifySendgridKey, verifyGroqKey, verifyXaiKey, verifyOpenRouterKey, verifyStripeKey, verifyNpmToken,
+  verifyNotionToken, verifyGitlabToken, verifySupabaseToken, verifyElevenLabsKey,
+  verifyCircleciToken, verifyAirtableToken, verifyCloudflareToken, verifyHerokuKey,
+  verifyNetlifyToken, verifyLinearKey, verifyTelegramToken, verifyDiscordWebhook,
 };

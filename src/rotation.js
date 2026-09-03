@@ -435,6 +435,19 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "Disabling stops all API requests with that token immediately.",
   },
+  // Fetched https://elevenlabs.io/docs/api-reference/authentication
+  // (2026-09-03): keys are managed and deleted from the Profile + API keys
+  // page in the ElevenLabs dashboard.
+  elevenlabs_key: {
+    label: "ElevenLabs API key",
+    consolePath: "elevenlabs.io > Profile + API keys",
+    steps: [
+      "Open Profile + API keys in the ElevenLabs dashboard",
+      "Delete the leaked key",
+      "Create a replacement and update the applications using it",
+    ],
+    revokeNote: "A key grants full account access (voices, generations, billing); deletion is immediate.",
+  },
 
   // ── Cloud / infra ─────────────────────────────────────────────────────
   // docs.digitalocean.com/reference/api/create-personal-access-token/
@@ -490,6 +503,70 @@ const ROTATION_GUIDANCE = {
       "Update the workloads that used it",
     ],
     revokeNote: "Revoking immediately removes the token's access to every vault the service account could reach.",
+  },
+  // Fetched https://circleci.com/docs/managing-api-tokens/ (2026-09-03):
+  // Personal API Tokens tab under User Settings, revoke deletes it
+  // immediately.
+  circleci_token: {
+    label: "CircleCI personal API token",
+    consolePath: "circleci.com > User Settings > Personal API Tokens",
+    steps: [
+      "Open Personal API Tokens under your CircleCI user settings",
+      "Revoke the leaked token",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Revocation is immediate; the token stops authenticating on the next request.",
+  },
+  // Fetched https://airtable.com/developers/web/guides/personal-access-tokens
+  // (2026-09-03): tokens are managed and deleted from the Personal access
+  // tokens page in the Airtable developer hub (airtable.com/create/tokens).
+  airtable_token: {
+    label: "Airtable personal access token",
+    consolePath: "airtable.com/create/tokens",
+    steps: [
+      "Open the Personal access tokens page in the developer hub",
+      "Delete the leaked token",
+      "Create a replacement scoped only to what your integration needs",
+    ],
+    revokeNote: "Deletion is immediate and applies to every base the token could reach.",
+  },
+  // Fetched https://developers.cloudflare.com/fundamentals/api/get-started/create-token/
+  // (2026-09-03): tokens are managed and revoked from My Profile > API
+  // Tokens.
+  cloudflare_api_token: {
+    label: "Cloudflare API token",
+    consolePath: "dash.cloudflare.com > My Profile > API Tokens",
+    steps: [
+      "Open My Profile > API Tokens in the Cloudflare dashboard",
+      "Roll (regenerate) or delete the leaked token",
+      "Update whatever used the old token with the replacement",
+    ],
+    revokeNote: "Deleting is immediate; a scoped token only affects the zones/permissions it was granted.",
+  },
+  // Fetched https://help.heroku.com/PBGP6IDE (2026-09-03): API keys are
+  // regenerated from Account Settings, which invalidates the previous key.
+  heroku_api_key: {
+    label: "Heroku API key",
+    consolePath: "dashboard.heroku.com/account > API Key",
+    steps: [
+      "Open Account Settings in the Heroku dashboard",
+      "Regenerate the API key (this immediately invalidates the old one)",
+      "Update the CLI/CI configs and tools that used the old key",
+    ],
+    revokeNote: "Regeneration is the only way to invalidate a Heroku API key; there is no separate revoke action.",
+  },
+  // Fetched https://docs.netlify.com/api/get-started/#authentication
+  // (2026-09-03): personal access tokens are managed from User settings >
+  // Applications > Personal access tokens.
+  netlify_token: {
+    label: "Netlify personal access token",
+    consolePath: "app.netlify.com/user/applications#personal-access-tokens",
+    steps: [
+      "Open User settings > Applications > Personal access tokens",
+      "Delete the leaked token",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; the token stops authenticating on the next request.",
   },
 
   // ── Comms / SaaS ──────────────────────────────────────────────────────
