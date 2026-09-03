@@ -133,6 +133,11 @@ reproduction; everything needed to rerun it ships in this repo.
   Code itself, over a hand-rolled MCP server. See
   [MCP: query findings from inside Claude Code](#mcp-query-findings-from-inside-claude-code)
   below.
+- **`residoo cred`**: store a live credential in the OS keychain and run
+  one allow-listed command with it injected as an environment variable,
+  never seen by the caller. See
+  [Cred: run commands with injected credentials](#cred-run-commands-with-injected-credentials)
+  below.
 
 ## Beyond transcripts: configs and planted persistence
 
@@ -305,7 +310,7 @@ As a GitHub Action (this repo doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.6.0
+  - uses: dandovdub/residoo@v0.7.0
 ```
 
 As a pre-commit hook:
@@ -313,7 +318,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.6.0
+    rev: v0.7.0
     hooks:
       - id: residoo
 ```
@@ -456,16 +461,84 @@ or add it directly to `.mcp.json`:
 }
 ```
 
-Five tools, mirroring the CLI exactly: `residoo_scan` (a fresh scan,
-merged with rotation status), `residoo_check` (only what's new since the
-last check in this conversation, backed by the same engine as `watch`),
-`residoo_explain` (a rule's rotation runbook), and `residoo_ack` /
-`residoo_dismiss` (append to the local ledger). Every value returned is
-redacted the same way the CLI's own output is; nothing here makes a
-network call or touches the transcript files themselves. Like the rest of
-residoo, this is hand-rolled against the MCP spec directly, not built on
-`@modelcontextprotocol/sdk`: zero runtime dependencies stays true here
-too.
+Five read-only tools, mirroring the CLI exactly: `residoo_scan` (a fresh
+scan, merged with rotation status), `residoo_check` (only what's new
+since the last check in this conversation, backed by the same engine as
+`watch`), `residoo_explain` (a rule's rotation runbook), and
+`residoo_ack` / `residoo_dismiss` (append to the local ledger). Every
+value returned is redacted the same way the CLI's own output is; nothing
+here makes a network call or touches the transcript files themselves.
+Like the rest of residoo, this is hand-rolled against the MCP spec
+directly, not built on `@modelcontextprotocol/sdk`: zero runtime
+dependencies stays true here too. A sixth, opt-in tool exists for
+injected-credential execution, covered below.
+
+## Cred: run commands with injected credentials
+
+`residoo cred` stores a live, reusable credential in the OS keychain and
+runs one allow-listed command with it injected as environment variables:
+Claude never sees the raw value, before, during, or after:
+
+```bash
+residoo cred set aws-prod --env AWS_ACCESS_KEY_ID --env AWS_SECRET_ACCESS_KEY
+# hidden-typed input, once per --env flag; interactive TTY only, no
+# scripted entry, since a live credential is more sensitive than a vault
+# passphrase and should never be typeable into a script or env var.
+
+RESIDOO_CRED_ALLOWED_COMMANDS="aws=/usr/local/bin/aws" residoo mcp
+# now residoo_run_with_cred exists as an MCP tool; it does not exist at
+# all (won't appear in the tool list) until this is set.
+
+residoo cred run aws-prod -- aws s3 ls
+# same operation from a terminal, for testing without an MCP client.
+```
+
+**Why this is safer than it looks, stated precisely, not just asserted:**
+
+- `RESIDOO_CRED_ALLOWED_COMMANDS` (`name=/absolute/path,...`) is an
+  environment variable the operator sets outside any conversation, read
+  fresh on every single invocation. Empty or unset means **nothing may
+  run, by design**: this is the actual, sole security boundary.
+- The `command` a caller (human or model) supplies is used **only as a
+  lookup key** into that map, never as a path, never resolved via
+  `PATH`. This was not always true: a first draft matched by binary
+  *name* alone (checked fresh every call, but only verifying the name the
+  caller claimed, not the binary that actually ran), and an adversarial
+  review found two concrete ways around that: a caller-supplied path
+  smuggled straight past the check, and a same-named malicious binary
+  planted earlier on the server process's own inherited `PATH`. Both are
+  closed structurally now: `command` cannot cause any file other than the
+  operator-pinned absolute path to execute, full stop.
+- Arguments are always a structured list, never a shell string, so no
+  shell metacharacter ever gets interpreted.
+- The executed command's own stdout/stderr content is **never returned**,
+  only exit status and line counts, because that output is itself a
+  channel the injected secret could leak through in ways no redaction
+  pass can guarantee to catch (an echoed variable, a stack trace).
+- A hung command is killed after 30 seconds, not configurable by the
+  caller (letting a model choose its own timeout has no legitimate use
+  and only helps an attacker keep a process alive longer).
+- One line goes to `residoo mcp`'s own **stderr** per credential use
+  (timestamp, credential name, command, exit code, never the value or
+  the arguments). This is **not durable by default**: redirect the MCP
+  server's stderr at launch (`residoo mcp 2>> ~/.residoo-cred-audit.log`,
+  or your MCP client's equivalent) if you want a persistent trail.
+
+**Only ever allow-list narrow, single-purpose CLIs**, never a tool that
+can itself run arbitrary third-party code as part of normal operation
+(`npm`, `npx`, `pip`, `make`, `cargo`, any build tool). Watch out even for
+a seemingly narrow tool with its own plugin system: an allow-listed `gh`
+still receives the injected credential as an inherited environment
+variable in whatever `gh extension exec` or `gh alias` runs, which is
+untrusted the moment it's a third-party extension. This is a residual
+risk allow-listing alone doesn't remove, so narrow the tools you allow-list
+accordingly, and prefer credentials scoped as tightly as the vendor
+allows.
+
+Storage is macOS (`security`) or Linux (`secret-tool`) only, matching
+`--seal --keychain`'s own existing platform support; Windows is refused
+with a clear message rather than half-built. There is no `residoo cred
+list` in v1: you need to already know the name you set.
 
 ## Sources supported today
 

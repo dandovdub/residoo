@@ -163,6 +163,34 @@ MCP:
                           Zero runtime dependencies: the protocol is hand-
                           rolled, not the official SDK.
 
+Cred:
+  residoo cred set <name> --env <ENV_VAR_NAME> [--env <ENV_VAR_NAME_2> ...]
+                          store a live credential in the OS keychain
+                          (macOS/Linux only), one or more env-var names
+                          mapped to hidden-typed values. Interactive TTY
+                          only, no scripted entry: a live credential is
+                          more sensitive than a vault passphrase and
+                          should never be typeable into a script or env
+                          var visible elsewhere.
+  residoo cred remove <name>   delete a stored credential
+  residoo cred run <name> -- <command> [args...]
+                          run one ALLOW-LISTED command with that
+                          credential injected as environment variables.
+                          <command> is a name looked up in
+                          RESIDOO_CRED_ALLOWED_COMMANDS
+                          ("name=/absolute/path,..."), never a path
+                          itself; unset/empty means nothing may run, by
+                          design. Command output is never shown, only
+                          exit status and line counts, since the
+                          command's own output is a channel the injected
+                          secret could otherwise leak through. See the
+                          README for the full safety rationale, including
+                          why some allow-listed tools (anything with a
+                          plugin/extension system, e.g. gh) still carry
+                          residual risk.
+  residoo mcp exposes the same operation as the residoo_run_with_cred
+  tool, present only when RESIDOO_CRED_ALLOWED_COMMANDS is configured.
+
 Rotation:
   residoo explain <rule-id>     full rotation runbook for one detection rule
                                 (where to revoke, steps, what revocation does)
@@ -219,6 +247,15 @@ Sources checked on this machine: ${sourceStatusList()}
 function argValue(args, flag) {
   const i = args.indexOf(flag);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : null;
+}
+
+/** Every value of a flag that may be repeated (e.g. multiple --env), in order given. */
+function argValues(args, flag) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === flag && i + 1 < args.length) out.push(args[i + 1]);
+  }
+  return out;
 }
 
 async function getPassphrase({ confirmNew }) {
@@ -625,6 +662,135 @@ async function runMcp(args) {
   return 0;
 }
 
+/**
+ * `residoo cred`: store a live, reusable credential in the OS keychain and
+ * run an allow-listed command with it injected as environment variables,
+ * without the value ever touching disk, argv, or a scripted env var. See
+ * src/credRun.js's own doc comment for the full threat model. Genuinely
+ * different from every other residoo command: it is the one place this
+ * project stores something meant to be reused, and the one place it
+ * executes a command residoo did not itself choose the identity of.
+ */
+async function runCred(args) {
+  const sub = args[1];
+  if (sub === "set") return runCredSet(args.slice(2));
+  if (sub === "remove") return runCredRemove(args.slice(2));
+  if (sub === "run") return runCredRun(args.slice(2));
+  process.stderr.write(
+    "usage: residoo cred set <name> --env <ENV_VAR_NAME> [--env <ENV_VAR_NAME_2> ...]\n" +
+    "       residoo cred remove <name>\n" +
+    "       residoo cred run <name> -- <command> [args...]\n"
+  );
+  return 2;
+}
+
+async function runCredSet(args) {
+  const name = args[0] && !args[0].startsWith("--") ? args[0] : null;
+  if (!name) {
+    process.stderr.write("usage: residoo cred set <name> --env <ENV_VAR_NAME> [--env <ENV_VAR_NAME_2> ...]\n");
+    return 2;
+  }
+  const envNames = argValues(args, "--env");
+  if (envNames.length === 0) {
+    process.stderr.write("residoo cred set: at least one --env <ENV_VAR_NAME> is required.\n");
+    return 2;
+  }
+  const seen = new Set();
+  for (const n of envNames) {
+    if (seen.has(n)) {
+      process.stderr.write(`residoo cred set: --env "${n}" was given more than once.\n`);
+      return 2;
+    }
+    seen.add(n);
+  }
+
+  const keychain = require("./keychain");
+  if (!keychain.isSupported()) {
+    process.stderr.write(`residoo cred: ${keychain.unsupportedReason()}\n`);
+    return 2;
+  }
+
+  // allowEnvFallback: false is the whole point here -- RESIDOO_PASSPHRASE
+  // is for a vault passphrase, a different secret entirely; if it were
+  // consulted, every --env prompt below would silently short-circuit to
+  // that SAME value for anyone who has it set. This also means, by
+  // design, there is no scripted/CI way to enter a credential value: a
+  // live, reusable credential is more sensitive than a vault passphrase
+  // and should never be typeable into a script or env var visible
+  // elsewhere. residoo cred set requires a real interactive TTY.
+  const { promptHidden } = require("./prompt");
+  const envVars = [];
+  for (const envName of envNames) {
+    let value;
+    try {
+      value = await promptHidden(`Value for ${envName} (input hidden): `, { allowEnvFallback: false });
+    } catch (err) {
+      process.stderr.write(`residoo cred set: ${err instanceof Error ? err.message : String(err)}\n`);
+      return 2;
+    }
+    if (!value) {
+      process.stderr.write(`residoo cred set: no value entered for ${envName}.\n`);
+      return 2;
+    }
+    envVars.push({ name: envName, value });
+  }
+
+  keychain.store(name, JSON.stringify({ envVars }), null, keychain.CRED_SERVICE);
+  process.stdout.write(
+    `Stored credential "${name}" (${envVars.length} env var${envVars.length === 1 ? "" : "s"}: ${envNames.join(", ")}).\n` +
+    "To use it: set RESIDOO_CRED_ALLOWED_COMMANDS (see \"residoo cred run --help\" or the README),\n" +
+    `then run "residoo cred run ${name} -- <allow-listed-command> [args...]".\n`
+  );
+  return 0;
+}
+
+function runCredRemove(args) {
+  const name = args[0] && !args[0].startsWith("--") ? args[0] : null;
+  if (!name) {
+    process.stderr.write("usage: residoo cred remove <name>\n");
+    return 2;
+  }
+  const keychain = require("./keychain");
+  if (!keychain.isSupported()) {
+    process.stderr.write(`residoo cred: ${keychain.unsupportedReason()}\n`);
+    return 2;
+  }
+  try {
+    keychain.remove(name, null, keychain.CRED_SERVICE);
+  } catch (err) {
+    process.stderr.write(`residoo cred remove: "${name}" ${err instanceof Error ? err.message : String(err)}\n`);
+    return 2;
+  }
+  process.stdout.write(`Removed credential "${name}".\n`);
+  return 0;
+}
+
+function runCredRun(args) {
+  const name = args[0] && !args[0].startsWith("--") ? args[0] : null;
+  const sepIdx = args.indexOf("--");
+  if (!name || sepIdx < 0 || sepIdx + 1 >= args.length) {
+    process.stderr.write(
+      "usage: residoo cred run <name> -- <command> [args...]\n" +
+      "<command> must be a name from RESIDOO_CRED_ALLOWED_COMMANDS (e.g. \"aws\"),\n" +
+      "not a path -- see the README for the allow-list format and its safety rationale.\n"
+    );
+    return 2;
+  }
+  const [command, ...cmdArgs] = args.slice(sepIdx + 1);
+  const { runWithCredential } = require("./credRun");
+  const r = runWithCredential({ credentialName: name, command, args: cmdArgs });
+  if (!r.ok) {
+    process.stderr.write(`residoo cred run: ${r.reason}\n`);
+    return 2;
+  }
+  process.stdout.write(
+    `${r.timedOut ? "TIMED OUT" : `exit ${r.exitCode}`} (${r.succeeded ? "succeeded" : "failed"}). ` +
+    `stdout: ${r.stdoutLineCount} line(s), stderr: ${r.stderrLineCount} line(s).\n` +
+    "Command output is never shown by design -- see the README for why.\n"
+  );
+  return r.succeeded ? 0 : 1;
+}
+
 async function main(argv) {
   const args = argv.slice(2);
   if (args.includes("-h") || args.includes("--help") || args.length === 0) {
@@ -639,6 +805,7 @@ async function main(argv) {
   if (cmd === "dismiss") return runDismiss(args);
   if (cmd === "watch") return runWatch(args);
   if (cmd === "mcp") return runMcp(args);
+  if (cmd === "cred") return runCred(args);
   if (cmd !== "scan") {
     process.stderr.write(`Unknown command "${cmd}". Try "residoo --help".\n`);
     return 2;

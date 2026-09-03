@@ -2148,6 +2148,232 @@ async function main() {
     }
   }
 
+  // ── cred: injected-credential command execution (src/credRun.js) ───────────
+  // Built after an adversarial red-team pass found a first draft's central
+  // safety claim false as written: matching a caller-supplied command
+  // string against an allow-list by basename alone verifies the NAME the
+  // caller claims, not the binary that actually runs. Every test below that
+  // says "bypass" is a direct regression test for one of the two concrete
+  // exploits that finding produced -- not generic hardening.
+  {
+    const keychain = require("../src/keychain");
+    const { runWithCredential, parseAllowedCommands } = require("../src/credRun");
+    const { promptHidden } = require("../src/prompt");
+    const { spawnSync, execFileSync } = require("child_process");
+    const residooBin = path.join(__dirname, "..", "bin", "residoo.js");
+
+    // 2: duplicate --env rejected before any prompt, regardless of platform
+    // or keychain support -- this check must happen before promptHidden is
+    // ever called, so it must return fast even with no stdin/TTY at all. If
+    // the duplicate check were accidentally placed AFTER a prompt call,
+    // this would hang instead of returning quickly; the timeout below turns
+    // that regression into a clear failure rather than a stuck test run.
+    {
+      const res = spawnSync(process.execPath, [residooBin, "cred", "set", "dup-test", "--env", "A", "--env", "A"], {
+        encoding: "utf-8", input: "", timeout: 5000,
+      });
+      check("cred set: a repeated --env NAME is rejected before any prompt (fast, no hang)",
+        res.status === 2 && /more than once/i.test(res.stderr) && res.signal === null);
+    }
+
+    // 3: the allowEnvFallback:false regression test for the red-team's #2
+    // finding -- with RESIDOO_PASSPHRASE set (a real, likely population:
+    // anyone already scripting --seal) AND no TTY, promptHidden must still
+    // REFUSE rather than silently resolving to the passphrase value. Direct
+    // unit call, not a CLI spawn: this is exactly the function-level
+    // contract that matters, and process.stdin.isTTY is already false
+    // inside this test runner.
+    {
+      const savedPassphrase = process.env.RESIDOO_PASSPHRASE;
+      process.env.RESIDOO_PASSPHRASE = "some-vault-passphrase-not-a-credential";
+      let threw = false, resolvedToPassphrase = false;
+      try {
+        const v = await promptHidden("Value for TEST_VAR (input hidden): ", { allowEnvFallback: false });
+        resolvedToPassphrase = v === process.env.RESIDOO_PASSPHRASE;
+      } catch {
+        threw = true;
+      } finally {
+        if (savedPassphrase === undefined) delete process.env.RESIDOO_PASSPHRASE;
+        else process.env.RESIDOO_PASSPHRASE = savedPassphrase;
+      }
+      check("promptHidden({allowEnvFallback:false}) refuses (no TTY) rather than silently returning RESIDOO_PASSPHRASE",
+        threw && !resolvedToPassphrase);
+    }
+
+    // 5: fails closed with no allow-list configured at all.
+    {
+      const r = runWithCredential({ credentialName: "whatever", command: "aws", allowedCommandsRaw: "" });
+      check("cred run: fails closed when RESIDOO_CRED_ALLOWED_COMMANDS is unset/empty",
+        r.ok === false && /not allowed to run|not set/i.test(r.reason));
+    }
+
+    // 6: bypass (a) -- a path-separator-smuggled command must never reach
+    // the filesystem, even if no allow-list entry happens to share that name.
+    {
+      const r = runWithCredential({
+        credentialName: "whatever", command: "/tmp/somewhere/evil-aws",
+        allowedCommandsRaw: "aws=/usr/bin/true",
+      });
+      check("cred run: a command containing a path separator is rejected outright (bypass a)",
+        r.ok === false && /path/i.test(r.reason));
+    }
+
+    // Misconfigured allow-list entries (relative path) fail the WHOLE list
+    // closed, not just the bad entry -- a misconfiguration should be loud.
+    {
+      const { map, error } = parseAllowedCommands("aws=not-absolute");
+      check("cred: a non-absolute allow-list entry fails closed with a clear error, whole list rejected",
+        map.size === 0 && typeof error === "string" && /absolute/i.test(error));
+    }
+
+    if (!keychain.isSupported()) {
+      check("cred: unsupported platform refuses cleanly (matches --seal --keychain's own message)",
+        typeof keychain.unsupportedReason() === "string");
+    } else if (process.platform === "darwin") {
+      // Real round-trip and real subprocess tests, all scoped to a
+      // throwaway keychain FILE created and destroyed within this block --
+      // never the machine's real default keychain. Same isolation
+      // discipline as the --seal --keychain block above; not optional for
+      // a security tool's own test suite.
+      const testKcFile = path.join(tmp, "residoo-cred-smoke-test.keychain-db");
+      let kcCreated = false;
+      try {
+        execFileSync("security", ["create-keychain", "-p", crypto.randomBytes(16).toString("hex"), testKcFile], { stdio: "ignore" });
+        kcCreated = true;
+
+        const credDir = fs.mkdtempSync(path.join(tmp, "cred-fixtures-"));
+        const realAws = path.join(credDir, "real-aws");
+        fs.writeFileSync(realAws,
+          "#!/bin/sh\n" +
+          "echo \"fixture ran with AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID\"\n" +
+          "printf '%s' \"$AWS_CONFIG_FILE\" > \"" + path.join(credDir, "captured-config-file") + "\"\n" +
+          "exit 0\n"
+        );
+        fs.chmodSync(realAws, 0o755);
+        const poisonedDir = path.join(credDir, "poisoned");
+        fs.mkdirSync(poisonedDir);
+        const poisonedAws = path.join(poisonedDir, "aws");
+        fs.writeFileSync(poisonedAws, "#!/bin/sh\necho \"MALICIOUS: would exfiltrate $AWS_ACCESS_KEY_ID\"\nexit 1\n");
+        fs.chmodSync(poisonedAws, 0o755);
+        const hangForever = path.join(credDir, "hang");
+        fs.writeFileSync(hangForever, "#!/bin/sh\nwhile true; do sleep 1; done\n");
+        fs.chmodSync(hangForever, 0o755);
+
+        const secretName = "smoke-cred-" + crypto.randomBytes(4).toString("hex");
+        const secretValue = "AKIASMOKETESTFIXTUREVALUE";
+        const blob = JSON.stringify({ envVars: [{ name: "AWS_ACCESS_KEY_ID", value: secretValue }] });
+
+        // 1: storage round-trip, module-level, matching the existing
+        // keychain round-trip test's own directness -- proves the additive
+        // service param and the JSON blob shape work correctly.
+        keychain.store(secretName, blob, testKcFile, keychain.CRED_SERVICE);
+        const stored = keychain.retrieve(secretName, testKcFile, keychain.CRED_SERVICE);
+        check("cred: store/retrieve round-trips the credential JSON blob under the residoo-cred service",
+          JSON.parse(stored).envVars[0].value === secretValue);
+
+        // Directly exercise runWithCredential against the throwaway
+        // keychain by pointing RESIDOO_TEST_KEYCHAIN_FILE at it for the
+        // duration of these direct (in-process) calls.
+        const savedTestKc = process.env.RESIDOO_TEST_KEYCHAIN_FILE;
+        process.env.RESIDOO_TEST_KEYCHAIN_FILE = testKcFile;
+        try {
+          // 7/9: a successful run returns ONLY exit/succeeded/timedOut/line
+          // counts -- never the fixture's own stdout text, never the secret.
+          const okRun = runWithCredential({
+            credentialName: secretName, command: "aws", args: [],
+            allowedCommandsRaw: `aws=${realAws}`,
+          });
+          check("cred run: a successful run returns exitCode/succeeded/timedOut/line counts only",
+            okRun.ok === true && okRun.succeeded === true && okRun.exitCode === 0 &&
+            okRun.stdoutLineCount === 1 && !("stdout" in okRun) && !("stderr" in okRun));
+          check("cred run: the response never contains the fixture's own output text or the raw secret",
+            !JSON.stringify(okRun).includes("fixture ran") && !JSON.stringify(okRun).includes(secretValue));
+
+          // 10: the aws-specific hardening actually lands in the child's
+          // env. Output is suppressed by design, so the fixture writes the
+          // one value under test to a side-channel FILE only this test
+          // reads -- not something a real MCP client could ever access.
+          const capturedConfigFile = fs.readFileSync(path.join(credDir, "captured-config-file"), "utf-8");
+          check("cred run: the aws logical command forces AWS_CONFIG_FILE=/dev/null in the child's env",
+            capturedConfigFile === "/dev/null");
+
+          // 6 continued: PATH-order poisoning (bypass b) -- a malicious
+          // same-named binary earlier on PATH must never run; only the
+          // pinned absolute path does. Proven by exit code: the poisoned
+          // fixture exits 1, the real one exits 0.
+          const savedPath = process.env.PATH;
+          process.env.PATH = poisonedDir + path.delimiter + process.env.PATH;
+          let poisonRun;
+          try {
+            poisonRun = runWithCredential({
+              credentialName: secretName, command: "aws", args: [],
+              allowedCommandsRaw: `aws=${realAws}`,
+            });
+          } finally {
+            process.env.PATH = savedPath;
+          }
+          check("cred run: a same-named malicious binary earlier on PATH never runs (bypass b closed) -- only the pinned path does",
+            poisonRun.ok === true && poisonRun.succeeded === true && poisonRun.exitCode === 0);
+
+          // 8: timeout + SIGKILL escalation actually bounds a hung command,
+          // using the test-only injectable timeoutMs (never exposed via
+          // CLI/MCP) so this doesn't cost a real 30s wait.
+          const t0 = Date.now();
+          const hungRun = runWithCredential({
+            credentialName: secretName, command: "hang", args: [],
+            allowedCommandsRaw: `hang=${hangForever}`,
+            timeoutMs: 300,
+          });
+          const elapsedMs = Date.now() - t0;
+          check("cred run: a hung command is killed via the timeout and reported as timedOut, within a bounded window",
+            hungRun.ok === true && hungRun.timedOut === true && hungRun.exitCode === null && elapsedMs < 5000);
+        } finally {
+          if (savedTestKc === undefined) delete process.env.RESIDOO_TEST_KEYCHAIN_FILE;
+          else process.env.RESIDOO_TEST_KEYCHAIN_FILE = savedTestKc;
+        }
+
+        // 9/11: full MCP-level check -- the tool is present only when
+        // configured, absent (and correctly 404ing, not a bespoke error)
+        // when not, and the raw secret never appears anywhere in the
+        // connection's stdout across a real tool call.
+        const mcpEnvBase = { ...process.env, RESIDOO_TEST_KEYCHAIN_FILE: testKcFile };
+        const mcpSeq = [
+          { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } },
+          { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+          { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "residoo_run_with_cred", arguments: { credentialName: secretName, command: "aws", args: [] } } },
+        ];
+        const mcpInput = mcpSeq.map((l) => JSON.stringify(l)).join("\n") + "\n";
+
+        const withoutAllowlist = spawnSync(process.execPath, [residooBin, "mcp"], { input: mcpInput, encoding: "utf-8", env: mcpEnvBase });
+        const withoutLines = withoutAllowlist.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+        const listWithout = withoutLines.find((m) => m.id === 2);
+        const callWithout = withoutLines.find((m) => m.id === 3);
+        check("mcp: residoo_run_with_cred is absent from tools/list when RESIDOO_CRED_ALLOWED_COMMANDS is unset",
+          !listWithout.result.tools.some((t) => t.name === "residoo_run_with_cred"));
+        check("mcp: calling it anyway while unconfigured 404s via the standard -32602 Unknown tool path, not a bespoke error",
+          !callWithout.result && callWithout.error && callWithout.error.code === -32602);
+
+        const withAllowlist = spawnSync(process.execPath, [residooBin, "mcp"], {
+          input: mcpInput, encoding: "utf-8", env: { ...mcpEnvBase, RESIDOO_CRED_ALLOWED_COMMANDS: `aws=${realAws}` },
+        });
+        const withLines = withAllowlist.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+        const listWith = withLines.find((m) => m.id === 2);
+        const callWith = withLines.find((m) => m.id === 3);
+        check("mcp: residoo_run_with_cred is present in tools/list once configured",
+          listWith.result.tools.some((t) => t.name === "residoo_run_with_cred"));
+        const callWithPayload = callWith.result && !callWith.result.isError ? JSON.parse(callWith.result.content[0].text) : null;
+        check("mcp: a real residoo_run_with_cred call succeeds and returns only status/line-count fields",
+          !!callWithPayload && callWithPayload.succeeded === true && callWithPayload.stdoutLineCount === 1);
+        check("mcp: the raw credential value never appears anywhere in stdout across the whole connection",
+          !withAllowlist.stdout.includes(secretValue) && !withoutAllowlist.stdout.includes(secretValue));
+
+        keychain.remove(secretName, testKcFile, keychain.CRED_SERVICE);
+      } finally {
+        if (kcCreated) { try { execFileSync("security", ["delete-keychain", testKcFile], { stdio: "ignore" }); } catch { /* best-effort */ } }
+      }
+    }
+  }
+
   // ── rotation: guidance coverage, fingerprints, ack round-trip (module) ────
   // The guidance map is a contract: every detection rule must map to real
   // rotation guidance, because a finding with no exit path is exactly the

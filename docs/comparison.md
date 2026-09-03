@@ -101,19 +101,30 @@ a macOS GUI app ($9.99, App Store) scanning the same class of target
 (Claude Code, Cursor, VS Code Copilot, Windsurf, Codex, and more local
 agent session state) for leaked secrets, with a pitch nearly identical to
 residoo's own: local-only, no telemetry, no cloud sync. It also ships an
-MCP server for Claude Code, and residoo now does too, but the two aren't
-doing the same thing with it. Sieve's MCP integration lets Claude run
-commands with vault-stored credentials injected at execution time, so
-Claude never sees the raw value even while using it. residoo's MCP server
-(`residoo mcp`, see the [MCP section](../README.md#mcp-query-findings-from-inside-claude-code)
-above) is deliberately narrower: query findings, get rotation guidance,
-and acknowledge/dismiss them, all read-only against the local ledger,
-nothing intercepted or injected. That's a real scope difference, not a
-parity claim: residoo's own "nothing destructive, ever" stance is the
-reason, and closing that gap would be a separate, larger decision, not an
-oversight. Sieve is also GUI-only and macOS-only, with no CLI, CI, or
-cross-platform story, and (as of its last update) no continuous/watch
-mode either.
+MCP server for Claude Code, and now so does residoo, including the same
+injected-credential-execution idea Sieve's own tool schema documents:
+Claude runs a command with a stored credential injected as an environment
+variable, never seeing the raw value before, during, or after.
+
+The two implementations differ in ways that matter, based on what Sieve's
+own public tool schema (its `sieve-mcp` stub repo) actually shows: Sieve's
+tool takes a single `command` string, implying shell interpretation, and
+documents no allow-list or execution-time enforcement mechanism anywhere.
+residoo's `residoo_run_with_cred` (see
+[Cred](../README.md#cred-run-commands-with-injected-credentials) above)
+takes a structured argument list, never a shell string, and the command
+name is resolved *only* against an operator-configured, absolute-path-pinned
+allow-list read fresh on every call, closing a real vulnerability class
+(CVE-2026-12537, Gemini CLI, CVSS 10.0: an allow-list checked at setup but
+never enforced at execution time let a prompt-injected agent read a
+credential from the environment) that a first, less careful draft of this
+same residoo feature was itself found to be exposed to during an
+adversarial design review before it ever shipped. Both tools suppress the
+executed command's own output for the same reason: it's a channel the
+injected secret could otherwise leak through.
+
+Sieve is GUI-only and macOS-only, with no CLI, CI, or cross-platform
+story, and (as of its last update) no continuous/watch mode either.
 
 ## Verifying a found value is still live
 

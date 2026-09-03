@@ -31,8 +31,17 @@ const { execFileSync } = require("child_process");
  * THIS machine's (or account's) secure store. It is not portable the way a
  * passphrase is — unseal it on a different machine and there is nothing to
  * retrieve. Use a passphrase instead when a vault needs to travel.
+ *
+ * `service` (4th param on store/retrieve/remove, added for `residoo cred`,
+ * see src/credRun.js) is an ADDITIVE, trailing-optional parameter that
+ * defaults to SERVICE below -- every pre-existing call site (cli.js's
+ * seal/unseal, this project's own tests) is byte-for-byte unaffected by its
+ * addition. `residoo cred` passes CRED_SERVICE explicitly so credential
+ * entries are visually distinct from sealed-vault keys in the OS keychain
+ * UI, and so the two account-name spaces can never collide.
  */
 const SERVICE = "residoo-vault";
+const CRED_SERVICE = "residoo-cred";
 
 /**
  * Test-only escape hatch, macOS only: when RESIDOO_TEST_KEYCHAIN_FILE is
@@ -81,12 +90,12 @@ function unsupportedReason() {
  * developer's actual keychain. The real feature (seal/unseal) never passes
  * this — it always targets the default keychain, which is the whole point.
  */
-function store(account, secret, keychainFile) {
+function store(account, secret, keychainFile, service = SERVICE) {
   if (process.platform === "darwin") {
     // -U updates the entry in place if `account` already exists, rather
     // than erroring on a name collision.
     const kf = keychainFile || testKeychainFile();
-    const args = ["add-generic-password", "-a", account, "-s", SERVICE, "-w", secret, "-U"];
+    const args = ["add-generic-password", "-a", account, "-s", service, "-w", secret, "-U"];
     if (kf) args.push(kf);
     execFileSync("security", args, { stdio: "ignore" });
     return;
@@ -95,24 +104,27 @@ function store(account, secret, keychainFile) {
     // secret-tool reads the secret from stdin, never a CLI argument, so it
     // never appears in a process listing or shell history.
     execFileSync("secret-tool", [
-      "store", "--label", "residoo sealed vault key", "service", SERVICE, "account", account,
+      "store", "--label", "residoo sealed vault key", "service", service, "account", account,
     ], { input: secret, stdio: ["pipe", "ignore", "ignore"] });
     return;
   }
   throw new Error(unsupportedReason());
 }
 
-/** Retrieve a secret previously stored under `account`. Throws if not found or unsupported. See store() re: keychainFile. */
-function retrieve(account, keychainFile) {
+/**
+ * Retrieve a secret previously stored under `account`. Throws if not found
+ * or unsupported. See store() re: keychainFile/service.
+ */
+function retrieve(account, keychainFile, service = SERVICE) {
   if (process.platform === "darwin") {
     const kf = keychainFile || testKeychainFile();
-    const args = ["find-generic-password", "-a", account, "-s", SERVICE, "-w"];
+    const args = ["find-generic-password", "-a", account, "-s", service, "-w"];
     if (kf) args.push(kf);
     return execFileSync("security", args, { encoding: "utf8" }).trim();
   }
   if (process.platform === "linux") {
     return execFileSync("secret-tool", [
-      "lookup", "service", SERVICE, "account", account,
+      "lookup", "service", service, "account", account,
     ], { encoding: "utf8" }).trim();
   }
   throw new Error(unsupportedReason());
@@ -123,21 +135,21 @@ function retrieve(account, keychainFile) {
  * keychain entry is meant to outlive the command that created it); exists
  * for callers that manage a keychain entry's lifecycle themselves, and for
  * this project's own tests to clean up after a real round-trip check
- * without leaving entries behind. See store() re: keychainFile.
+ * without leaving entries behind. See store() re: keychainFile/service.
  */
-function remove(account, keychainFile) {
+function remove(account, keychainFile, service = SERVICE) {
   if (process.platform === "darwin") {
     const kf = keychainFile || testKeychainFile();
-    const args = ["delete-generic-password", "-a", account, "-s", SERVICE];
+    const args = ["delete-generic-password", "-a", account, "-s", service];
     if (kf) args.push(kf);
     execFileSync("security", args, { stdio: "ignore" });
     return;
   }
   if (process.platform === "linux") {
-    execFileSync("secret-tool", ["clear", "service", SERVICE, "account", account], { stdio: "ignore" });
+    execFileSync("secret-tool", ["clear", "service", service, "account", account], { stdio: "ignore" });
     return;
   }
   throw new Error(unsupportedReason());
 }
 
-module.exports = { isSupported, unsupportedReason, store, retrieve, remove };
+module.exports = { isSupported, unsupportedReason, store, retrieve, remove, CRED_SERVICE };

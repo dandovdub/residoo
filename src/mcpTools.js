@@ -7,6 +7,8 @@ const {
   ackFinding, dismissFinding, renderRotation,
 } = require("./rotation");
 const { sweepOnce } = require("./watch");
+const { runWithCredential, parseAllowedCommands } = require("./credRun");
+const keychain = require("./keychain");
 
 /**
  * The tool catalog for `residoo mcp` (see src/mcp.js for the protocol
@@ -261,6 +263,26 @@ function buildTools({ sources }) {
     });
   }
 
+  async function handleRunWithCred(args) {
+    const errs = rejectUnknownKeys(args, new Set(["credentialName", "command", "args"]));
+    if (typeof args.credentialName !== "string" || !args.credentialName) errs.push("credentialName is required and must be a string");
+    if (typeof args.command !== "string" || !args.command) errs.push("command is required and must be a string");
+    if (args.args !== undefined && (!Array.isArray(args.args) || !args.args.every((a) => typeof a === "string"))) {
+      errs.push("args must be an array of strings");
+    }
+    if (errs.length) return errorResult(`Invalid arguments: ${errs.join("; ")}`);
+
+    const r = runWithCredential({ credentialName: args.credentialName, command: args.command, args: args.args || [] });
+    if (!r.ok) return errorResult(r.reason);
+    return textResult({
+      exitCode: r.exitCode, succeeded: r.succeeded, timedOut: r.timedOut,
+      stdoutLineCount: r.stdoutLineCount, stderrLineCount: r.stderrLineCount,
+      summary: r.timedOut
+        ? "Command timed out and was killed. Command output is never returned, by design."
+        : `Exit ${r.exitCode}, ${r.succeeded ? "succeeded" : "failed"}. Command output is never returned, by design.`,
+    });
+  }
+
   const tools = new Map();
   tools.set("residoo_scan", {
     name: "residoo_scan",
@@ -334,6 +356,40 @@ function buildTools({ sources }) {
     },
     handler: (args) => resolveTool("dismiss", args),
   });
+
+  // Genuinely different from the 5 tools above: this one executes a real
+  // command with a live credential injected as environment variables --
+  // the first residoo MCP tool that is not purely detection/read-only. It
+  // is dynamically OMITTED from this Map entirely (not merely filtered
+  // from a tools/list response) when RESIDOO_CRED_ALLOWED_COMMANDS is
+  // unset/empty or the OS keychain isn't available, so an unconfigured
+  // server's tools/call on this name correctly 404s via src/mcp.js's
+  // already-established -32602 "Unknown tool" path with zero new
+  // dispatcher logic. This omission is a discovery/clutter reduction
+  // ONLY -- the actual, sole security boundary is the fail-closed
+  // allow-list check inside runWithCredential itself (src/credRun.js),
+  // which must never be removed on the theory that this omission already
+  // covers it. Matches the existing pattern of capturing state once per
+  // server invocation (see `sources` above): an operator who changes the
+  // allow-list while a server is already running needs to restart it.
+  const { map: allowedCommands } = parseAllowedCommands(process.env.RESIDOO_CRED_ALLOWED_COMMANDS);
+  if (allowedCommands.size > 0 && keychain.isSupported()) {
+    tools.set("residoo_run_with_cred", {
+      name: "residoo_run_with_cred",
+      description: "Run ONE allow-listed command with ONE stored credential injected as environment variables -- you never see the raw value, before, during, or after. This is unlike every other residoo tool: it executes a real command, and that command (and anything IT spawns) can see the injected credential in its own environment for as long as it runs. `command` is a NAME looked up in an operator-configured allow-list (RESIDOO_CRED_ALLOWED_COMMANDS), never a path -- it can never cause any file other than an operator-pinned one to run, and this tool does not exist at all (you will not see it in the tool list) unless an operator has deliberately configured that allow-list outside this conversation. `credentialName` must be one you already know was set up with `residoo cred set` -- there is no way to list credential names from here. The command's own stdout/stderr content is NEVER returned, only exit status and line counts, because that output is itself a channel the injected secret could leak through. Never ask a human to paste a raw credential value into this conversation to use this tool -- credentials are entered directly into the OS keychain via `residoo cred set`, outside any conversation, specifically so no AI tool call ever sees them.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          credentialName: { type: "string", description: "Name of a credential previously stored with `residoo cred set`. Not discoverable from here -- ask the user which name to use." },
+          command: { type: "string", description: "A name from the operator's RESIDOO_CRED_ALLOWED_COMMANDS allow-list (e.g. \"aws\"), never a path. Rejected outright if it contains a path separator." },
+          args: { type: "array", items: { type: "string" }, default: [], description: "Arguments passed to the command verbatim, as a structured list (never a shell string)." },
+        },
+        required: ["credentialName", "command"],
+        additionalProperties: false,
+      },
+      handler: handleRunWithCred,
+    });
+  }
 
   return tools;
 }

@@ -8,10 +8,19 @@ const { Writable } = require("stream");
  * RESIDOO_PASSPHRASE env var for scripted/CI use, and refuses to prompt when
  * stdin isn't a TTY (a scanner hanging silently in a pipeline waiting for
  * input nobody can see is worse than failing with instructions).
+ *
+ * `allowEnvFallback` (default true) exists ONLY for `residoo cred set`
+ * (src/credRun.js), which asks for a DIFFERENT hidden value once per
+ * `--env` flag: with the default RESIDOO_PASSPHRASE short-circuit left on,
+ * anyone who already has that variable set (a real, likely population --
+ * anyone scripting --seal) would have every `--env` prompt silently
+ * short-circuit to the SAME passphrase value, with no error, corrupting the
+ * stored credential. `cred set` is the one caller that passes
+ * `{allowEnvFallback: false}` to opt out; every other caller is unaffected.
  */
-function promptHidden(question) {
+function promptHidden(question, { allowEnvFallback = true } = {}) {
   return new Promise((resolve, reject) => {
-    if (process.env.RESIDOO_PASSPHRASE) { resolve(process.env.RESIDOO_PASSPHRASE); return; }
+    if (allowEnvFallback && process.env.RESIDOO_PASSPHRASE) { resolve(process.env.RESIDOO_PASSPHRASE); return; }
     if (!process.stdin.isTTY) {
       reject(new Error("No TTY for a passphrase prompt. Set RESIDOO_PASSPHRASE in the environment for non-interactive use."));
       return;
