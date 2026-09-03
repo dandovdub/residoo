@@ -305,6 +305,24 @@ function verifyGithubToken(token, opts) {
 // dozens of apparent matches inside an unrelated real file that just
 // happened to contain a lot of embedded base64 data. See patterns.js's own
 // comment on flyio_bearer_token for the measured false-positive rate.
+//
+// A second, independent research pass (11 candidate vendors, each
+// researched and then adversarially cross-checked by a separate reviewer
+// before being trusted) added three more: Neon (verifyNeonKey), MongoDB
+// Atlas Service Account credentials (verifyMongoDbAtlasCredential, a third
+// paired vendor alongside AWS and PlanetScale), and PostHog
+// (verifyPostHogKey). The other eight were rejected, each for a documented,
+// vendor-specific reason rather than lack of trying:
+//   - Clerk, Auth0, Upstash, Turso, Railway, Segment, Algolia: no
+//     distinguishing, documented credential prefix could be confirmed from
+//     the vendor's own current docs (some have a prefix on one credential
+//     type but no working verify endpoint for it, or a prefix that isn't
+//     actually vendor-specific enough to trust).
+//   - Convex: the researcher's own first pass recommended adding it, but
+//     the adversarial reviewer refuted that recommendation on independent
+//     re-checking of the same sources — the exact reason this project runs
+//     research and verification as two separate, disagreeing passes rather
+//     than trusting one agent's first read of the docs.
 
 function huggingfaceUrl() { return process.env.RESIDOO_TEST_HUGGINGFACE_API_URL || "https://huggingface.co/api/whoami-v2"; }
 function sendgridUrl() { return process.env.RESIDOO_TEST_SENDGRID_API_URL || "https://api.sendgrid.com/v3/scopes"; }
@@ -426,6 +444,64 @@ function planetscaleUrl() { return process.env.RESIDOO_TEST_PLANETSCALE_API_URL 
  */
 function verifyPlanetScaleToken(id, secret, opts) {
   return verifyByStatusCode("PlanetScale", planetscaleUrl(), () => ({ Authorization: `${id}:${secret}` }), opts);
+}
+
+function mongodbAtlasUrl() { return process.env.RESIDOO_TEST_MONGODB_ATLAS_API_URL || "https://cloud.mongodb.com/api/oauth/token"; }
+/**
+ * MongoDB Atlas Service Account credentials: also a paired credential (like
+ * AWS and PlanetScale), but the actual verify call is an OAuth2 client-
+ * credentials token exchange, not a plain bearer-token GET -- POST, Basic-
+ * auth-encoded clientId:clientSecret, grant_type=client_credentials in the
+ * body -- so it needs its own function rather than verifyByStatusCode,
+ * which is GET-only.
+ *
+ * A bare 403 is NOT treated as "invalid" here: MongoDB Atlas's own docs
+ * confirm it also returns 403 when the caller's IP isn't on the service
+ * account's access list, which says nothing about whether the credential
+ * itself is still alive -- the same "real but out of scope" ambiguity
+ * GitLab/CircleCI/Airtable get elsewhere via activeExtra, except MongoDB
+ * signals it in the response BODY, not a separate status code. Only the
+ * documented invalid_client body is treated as a genuine "this credential
+ * is dead" signal; every other 403 stays "error", never a false "invalid" --
+ * the false-negative-in-the-dangerous-direction failure this whole module
+ * exists to avoid.
+ */
+async function verifyMongoDbAtlasCredential(clientId, clientSecret, { fetchFn = fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  let res;
+  try {
+    res = await fetchFn(mongodbAtlasUrl(), {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: "grant_type=client_credentials",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    return { status: "error", detail: `could not reach MongoDB Atlas (${sanitizeDetail(e && e.message)})` };
+  }
+  if (res.status === 200) return { status: "active", detail: "MongoDB Atlas accepted this service account" };
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {
+    // Non-JSON body: fall through to the generic error below.
+  }
+  if (res.status === 403 && body && body.error === "invalid_client") {
+    return { status: "invalid", detail: "MongoDB Atlas rejected this service account (invalid_client)" };
+  }
+  return { status: "error", detail: `could not verify: HTTP ${res.status} from MongoDB Atlas` };
+}
+
+function neonUrl() { return process.env.RESIDOO_TEST_NEON_API_URL || "https://console.neon.tech/api/v2/projects"; }
+function verifyNeonKey(key, opts) {
+  return verifyByStatusCode("Neon", neonUrl(), () => ({ Authorization: `Bearer ${key}` }), opts);
+}
+
+function posthogUrl() { return process.env.RESIDOO_TEST_POSTHOG_API_URL || "https://us.posthog.com/api/users/@me/"; }
+function verifyPostHogKey(key, opts) {
+  return verifyByStatusCode("PostHog", posthogUrl(), () => ({ Authorization: `Bearer ${key}` }), opts);
 }
 
 function vercelUrl() { return process.env.RESIDOO_TEST_VERCEL_API_URL || "https://api.vercel.com/v2/user"; }
@@ -557,5 +633,5 @@ module.exports = {
   verifyCircleciToken, verifyAirtableToken, verifyCloudflareToken, verifyHerokuKey,
   verifyNetlifyToken, verifyLinearKey, verifyTelegramToken, verifyDiscordWebhook,
   verifyPlanetScaleToken, verifyVercelToken, verifyCerebrasKey, verifyRenderKey,
-  verifyFlyioBearerToken,
+  verifyFlyioBearerToken, verifyMongoDbAtlasCredential, verifyNeonKey, verifyPostHogKey,
 };

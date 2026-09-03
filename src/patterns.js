@@ -186,6 +186,34 @@ const PATTERNS = [
   // floor/ceiling treatment as Cerebras above.
   { id: "render_key", label: "Render API key", confidence: "high",
     re: /\brnd_[A-Za-z0-9]{20,200}\b/g },
+  // Confirmed via Neon's own changelog (neon.com/docs/changelog/2025-01-31):
+  // keys created after that date are prefixed napi_ (personal), or
+  // neon_org_key_ / neon_project_key_ (org and project-scoped), specifically
+  // "to use secret scanning mechanisms that rely on identifiable markers" —
+  // about as direct an endorsement as a vendor gives. Length/charset are
+  // not published (only "randomly-generated 64-bit token," and the docs'
+  // own example is a transparently synthetic placeholder), so the bound
+  // here is a floor, same treatment as Cerebras/Render above. Keys created
+  // before 2025-01-31 have no prefix and are not covered — a real but
+  // bounded coverage gap, not a false negative in this rule's own logic.
+  { id: "neon_key", label: "Neon API key", confidence: "high",
+    re: /\b(?:napi_|neon_org_key_|neon_project_key_)[A-Za-z0-9]{20,}\b/g },
+  // MongoDB Atlas has two distinct credential systems; only one is a rule
+  // here. The legacy Programmatic API Key pair (Public Key / Private Key,
+  // HTTP Digest auth) has NO prefix at all -- an 8-char alnum string and a
+  // bare UUID, confirmed via MongoDB's own OpenAPI spec -- and is exactly
+  // the noisy, unspecific shape this file's header says to leave out. The
+  // newer Service Account pair does have a distinguishing prefix on BOTH
+  // halves (confirmed in the same OpenAPI spec): mdb_sa_sk_ for the client
+  // secret (this rule; length not published beyond the prefix, same
+  // floor-only treatment as Cerebras/Render) and mdb_sa_id_ for the client
+  // id (fully specified as exactly 24 hex characters by the spec's own
+  // schema pattern, matched only as a paired candidate near this secret --
+  // see pairing.js's findNearbyCandidate and PlanetScale's identical
+  // secret-is-the-anchor structure above -- never as a standalone rule,
+  // since verification needs both halves together).
+  { id: "mongodb_atlas_secret", label: "MongoDB Atlas Service Account secret", confidence: "high",
+    re: /\bmdb_sa_sk_[A-Za-z0-9]{16,}\b/g },
   { id: "vault_token", label: "HashiCorp Vault service token", confidence: "high",
     // Vault 1.10+ format only (hvs.<90-120 chars>). The pre-1.10 legacy
     // format is a bare "s." + 18-40 chars — "s." is nowhere near specific
@@ -220,6 +248,17 @@ const PATTERNS = [
     // Covers both current Sentry token shapes: org-scoped (sntrys_, base64
     // JWT-like body) and user-scoped (sntryu_, hex body).
     re: /\b(?:sntrys_eyJ[A-Za-z0-9+/=_]{100,4000}|sntryu_[a-f0-9]{64})\b/g },
+  // phx_ is PostHog's Personal API Key prefix, confirmed directly in
+  // PostHog's own docs (the masked example "phx_***1234" on the personal-
+  // api-keys page, and phx_ named explicitly in the API overview's GitHub
+  // secret-scanning section alongside sibling prefixes for its OTHER token
+  // types: phc_ is the PUBLIC project token and must never be targeted as a
+  // secret, phs_/pha_/phr_ are other PostHog token families not covered
+  // here). Exact length (~48 chars) is sourced from PostHog's own OSS
+  // source, not prose docs, so the bound below is a generous floor rather
+  // than a doc-confirmed exact count.
+  { id: "posthog_key", label: "PostHog personal API key", confidence: "high",
+    re: /\bphx_[A-Za-z0-9]{40,}\b/g },
 ];
 
 /**

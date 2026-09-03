@@ -2,28 +2,10 @@
 
 const path = require("path");
 const { fingerprintFinding, ROTATION_ORDER_ADVISORY } = require("./rotation");
-
-// Minimal raw ANSI — no chalk, no deps. A security tool asking you to trust
-// a pile of third-party packages before it's even scanned anything is a bad
-// first impression; residoo ships with zero runtime dependencies.
-const c = {
-  reset: "\x1b[0m", bold: "\x1b[1m", dim: "\x1b[2m",
-  red: "\x1b[31m", yellow: "\x1b[33m", green: "\x1b[32m", cyan: "\x1b[36m",
-};
-// Read fresh on every call, not once at require() time — a module-level
-// const would freeze whatever the environment was at require() time, before
-// cli.js has even parsed argv. `forceNoColor` is how cli.js's --no-color
-// flag actually reaches this function: as an explicit per-call argument, not
-// by mutating process.env.NO_COLOR. `main()` is an exported function, not
-// only a one-shot CLI entrypoint — a mutated env var would leak into any
-// later call in the same process (a test runner, a wrapper CLI reusing it)
-// and silently disable color for calls that never asked for that.
-function supportsColor(forceNoColor) {
-  return !forceNoColor && process.stdout.isTTY && process.env.NO_COLOR === undefined;
-}
-function makePaint(forceNoColor) {
-  return (code, s) => (supportsColor(forceNoColor) ? `${code}${s}${c.reset}` : s);
-}
+// c/makePaint moved to color.js so scan.js's --verify disclosure table
+// (written to stderr, not stdout) can use the same palette and
+// NO_COLOR/--no-color contract without duplicating it.
+const { c, makePaint } = require("./color");
 
 function ageDays(mtimeMs) {
   return Math.max(0, Math.floor((Date.now() - mtimeMs) / 86400000));
@@ -453,9 +435,28 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
   }
   push();
 
+  // A real table, not a run-on line: fixed-width count/confidence columns,
+  // and the label column padded to the widest label actually being shown
+  // (capped, so one extreme outlier like the paired MongoDB Atlas label
+  // doesn't drag every other row's notes off toward the right edge) so the
+  // distinct-value note and any encoding marks start in the same place on
+  // every row. The confidence tag now colors its own count too, not just
+  // the bracket, so severity reads at a glance down the left edge without
+  // having to read the bracket text on every line.
   const sorted = [...byRule.entries()].sort((a, b) => b[1].items.length - a[1].items.length);
+  const CONFIDENCE_COLOR = { high: c.red, medium: c.yellow, low: c.dim };
+  const CONFIDENCE_TAG = { high: "high", medium: "med ", low: "low " };
+  const LABEL_COL_CAP = 40;
+  const labelWidth = Math.min(
+    LABEL_COL_CAP,
+    Math.max(0, ...sorted.map(([, { label }]) => label.length))
+  );
+  if (sorted.length > 0) {
+    push(paint(c.dim, `  ${"COUNT".padStart(4)}  CONF   ${"RULE".padEnd(labelWidth)}`));
+  }
   for (const [ruleId, { label, confidence, items }] of sorted) {
-    const tag = confidence === "high" ? paint(c.red, "high") : confidence === "medium" ? paint(c.yellow, "med ") : paint(c.dim, "low ");
+    const color = CONFIDENCE_COLOR[confidence] || c.dim;
+    const tag = paint(color, CONFIDENCE_TAG[confidence] || "low ");
     const distinct = distinctCounts[ruleId];
     const distinctNote = distinct && distinct !== items.length
       ? paint(c.dim, `  (${distinct} distinct value${distinct === 1 ? "" : "s"}, re-exposed ${items.length - distinct}× across tool output)`)
@@ -469,7 +470,8 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
     if (encoded) marks.push(`${encoded} base64-wrapped`);
     if (split) marks.push(`${split} split across lines`);
     const markNote = marks.length ? paint(c.yellow, `  [${marks.join(", ")}]`) : "";
-    push(`  ${paint(c.bold, String(items.length).padStart(4))}  [${tag}]  ${label}${distinctNote}${markNote}`);
+    const paddedLabel = label.length <= labelWidth ? label.padEnd(labelWidth) : label;
+    push(`  ${paint(color + c.bold, String(items.length).padStart(4))}  [${tag}]  ${paddedLabel}${distinctNote}${markNote}`);
   }
 
   push();

@@ -640,6 +640,43 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "Revocation is immediate; the key stops authenticating on the next request.",
   },
+  // Fetched https://neon.com/docs/manage/api-keys (2026-09-03): keys are
+  // listed and revoked from the Neon console's Account/Organization
+  // Settings > API keys page; revocation is immediate per the docs' own
+  // "All API requests using the revoked key will fail" line.
+  neon_key: {
+    label: "Neon API key",
+    consolePath: "console.neon.tech > Account/Organization Settings > API keys",
+    steps: [
+      "Open API keys under Account or Organization Settings in the Neon console",
+      "Revoke the leaked key",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Revocation is immediate; the key stops authenticating on the next request.",
+  },
+  // Fetched MongoDB Atlas's own API/OpenAPI docs (2026-09-03): Service
+  // Accounts are managed from Organization Access Manager > Service
+  // Accounts, where a secret can be deleted independently of the account.
+  mongodb_atlas_secret: {
+    label: "MongoDB Atlas Service Account secret",
+    consolePath: "cloud.mongodb.com > Organization Access Manager > Service Accounts",
+    steps: [
+      "Open Service Accounts under your organization's Access Manager",
+      "Delete the leaked client secret from the service account",
+      "Create a replacement secret and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; the secret stops authenticating on the next request.",
+  },
+  mongodb_atlas_client_id: {
+    label: "MongoDB Atlas Service Account client id (paired with a leaked secret)",
+    consolePath: "cloud.mongodb.com > Organization Access Manager > Service Accounts",
+    steps: [
+      "This is the client id half of the service account also found on this line",
+      "Delete the leaked secret from the service account; the id alone cannot authenticate",
+      "Create a replacement secret and update whatever used the old one",
+    ],
+    revokeNote: "The id cannot authenticate alone: deleting the paired secret is what invalidates the pair.",
+  },
 
   // ── Comms / SaaS ──────────────────────────────────────────────────────
   // The user-facing support article (support.discord.com article 228383668)
@@ -721,6 +758,19 @@ const ROTATION_GUIDANCE = {
       "Revoke the leaked token and create a replacement",
     ],
     revokeNote: "The redacted preview cannot distinguish the two prefixes; check the original file for sntrys_ (organization) vs sntryu_ (personal).",
+  },
+  // Fetched https://posthog.com/docs/api (2026-09-03): personal API keys
+  // are listed and revoked from the user's own Personal API Keys settings
+  // page, independent of any single project.
+  posthog_key: {
+    label: "PostHog personal API key",
+    consolePath: "app.posthog.com > Settings > Personal API keys (or the EU/self-hosted equivalent)",
+    steps: [
+      "Open Personal API Keys under your account settings",
+      "Delete the leaked key",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; the key stops authenticating on the next request.",
   },
 
   // ── NOISY_PATTERNS (only reachable via --include-noisy) ───────────────

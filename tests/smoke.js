@@ -503,6 +503,34 @@ async function main() {
       psAloneRes.findings.find((f) => f.ruleId === "planetscale_secret").pairedOtherPreview === undefined);
   }
 
+  // ── scan: MongoDB Atlas Service Account paired-secret detection. Same
+  // mechanism and roles as PlanetScale (secret is the anchor, id is the
+  // candidate), except the id here carries its own distinguishing prefix
+  // too (mdb_sa_id_ + exactly 24 hex chars, fully specified) rather than
+  // being a bare unprefixed shape.
+  {
+    const mongoSecret = "mdb_sa_sk_" + "A1b2C3d4E5f6G7h8I9j0";
+    const mongoId = "mdb_sa_id_" + "1a2b3c4d5e6f7a8b9c0d1e2f";
+    const mdbRes = await scanOneFile("mongodb-atlas.jsonl",
+      JSON.stringify({ message: { content: `{"clientId":"${mongoId}","clientSecret":"${mongoSecret}"}` } }) + "\n");
+    const mdbSecretFind = mdbRes.findings.find((f) => f.ruleId === "mongodb_atlas_secret");
+    const mdbIdFind = mdbRes.findings.find((f) => f.ruleId === "mongodb_atlas_client_id");
+    check("MongoDB Atlas: the secret is detected on its own (it has a real prefix)",
+      !!mdbSecretFind && mdbSecretFind.confidence === "high");
+    check("MongoDB Atlas: a nearby id-shaped candidate produces a paired companion finding",
+      !!mdbIdFind && mdbIdFind.preview.includes(mongoId.slice(0, 4)));
+    check("MongoDB Atlas: the secret's own finding carries the id's redacted preview via the generic paired fields",
+      mdbSecretFind.pairedOtherPreview === mdbIdFind.preview && mdbSecretFind.pairedOtherLabel === "id");
+    check("MongoDB Atlas: the id's own finding carries the secret's redacted preview back, labeled 'secret'",
+      mdbIdFind.pairedOtherPreview === mdbSecretFind.preview && mdbIdFind.pairedOtherLabel === "secret");
+
+    const mdbAloneRes = await scanOneFile("mongodb-atlas-alone.jsonl",
+      JSON.stringify({ message: { content: "just the secret: " + mongoSecret + " nothing else nearby" } }) + "\n");
+    check("MongoDB Atlas: a secret with no nearby id-shaped candidate carries no pairedOtherPreview, and no companion finding is created",
+      !mdbAloneRes.findings.some((f) => f.ruleId === "mongodb_atlas_client_id") &&
+      mdbAloneRes.findings.find((f) => f.ruleId === "mongodb_atlas_secret").pairedOtherPreview === undefined);
+  }
+
   // ── scan: local JWT expiry decoding (see src/jwtExpiry.js) ─────────────────
   // Zero network calls, unlike --verify below: the exp claim is inside the
   // signed payload, so decoding it locally is a real answer, not a guess.
@@ -811,6 +839,35 @@ async function main() {
     check("verifyPlanetScaleToken: HTTP 200 is reported active", psActive.status === "active");
     const psInvalid = await verifyPlanetScaleToken("abc123def456", "pscale_tkn_fake", { fetchFn: async () => statusResponse(401) });
     check("verifyPlanetScaleToken: HTTP 401 is reported invalid", psInvalid.status === "invalid");
+
+    // MongoDB Atlas: an OAuth2 client-credentials POST, Basic auth, form
+    // body — the one paired vendor NOT using verifyByStatusCode's plain
+    // GET+Bearer shape, so its header/method/body all need checking, plus
+    // the ambiguous-403 guard (access_denied from an IP block must not be
+    // reported as "invalid" the way invalid_client is).
+    const { verifyMongoDbAtlasCredential } = require("../src/verify");
+    let mdbReq = null;
+    await verifyMongoDbAtlasCredential("mdb_sa_id_fake", "mdb_sa_sk_fake", {
+      fetchFn: async (url, opts) => { mdbReq = opts; return { status: 200, json: async () => ({ access_token: "x" }) }; },
+    });
+    check("verifyMongoDbAtlasCredential: POSTs with grant_type=client_credentials",
+      mdbReq.method === "POST" && mdbReq.body === "grant_type=client_credentials");
+    check("verifyMongoDbAtlasCredential: Authorization is HTTP Basic base64(clientId:clientSecret)",
+      mdbReq.headers.Authorization === `Basic ${Buffer.from("mdb_sa_id_fake:mdb_sa_sk_fake").toString("base64")}`);
+    const mdbActive = await verifyMongoDbAtlasCredential("mdb_sa_id_fake", "mdb_sa_sk_fake", {
+      fetchFn: async () => ({ status: 200, json: async () => ({ access_token: "x" }) }),
+    });
+    check("verifyMongoDbAtlasCredential: HTTP 200 is reported active", mdbActive.status === "active");
+    const mdbInvalid = await verifyMongoDbAtlasCredential("mdb_sa_id_fake", "mdb_sa_sk_fake", {
+      fetchFn: async () => ({ status: 403, json: async () => ({ error: "invalid_client", error_description: "Invalid credentials provided." }) }),
+    });
+    check("verifyMongoDbAtlasCredential: HTTP 403 with body error=invalid_client is reported invalid",
+      mdbInvalid.status === "invalid");
+    const mdbIpBlocked = await verifyMongoDbAtlasCredential("mdb_sa_id_fake", "mdb_sa_sk_fake", {
+      fetchFn: async () => ({ status: 403, json: async () => ({ error: "access_denied", error_description: "IP not on allow list" }) }),
+    });
+    check("verifyMongoDbAtlasCredential: HTTP 403 with a DIFFERENT body error (e.g. an IP-access-list block) is reported as error, never a false invalid",
+      mdbIpBlocked.status === "error");
   }
 
   // ── src/verify.js: Vercel, Cerebras, Render — the second research batch ────
@@ -836,6 +893,28 @@ async function main() {
       check(`${name}: HTTP 500 is reported as error, never invalid`, errored.status === "error");
       const leak = await fn("THE_REAL_SECRET_VALUE_" + name, { fetchFn: async () => statusResponse(401) });
       check(`${name}: the key itself never appears in the result`, !JSON.stringify(leak).includes("THE_REAL_SECRET_VALUE"));
+    }
+  }
+
+  // ── src/verify.js: Neon, PostHog — added after a workflow-driven research
+  // pass (11 candidates researched, each cross-checked by an independent
+  // adversarial reviewer before being trusted; only these two plus MongoDB
+  // Atlas above survived both stages). Same verifyByStatusCode shape as the
+  // vendors above.
+  {
+    const { verifyNeonKey, verifyPostHogKey } = require("../src/verify");
+    const statusResponse = (status) => ({ status });
+    const THIRD_BATCH_VENDORS = [
+      { name: "Neon", fn: verifyNeonKey, key: "napi_fake" },
+      { name: "PostHog", fn: verifyPostHogKey, key: "phx_fake" },
+    ];
+    for (const { name, fn, key } of THIRD_BATCH_VENDORS) {
+      const active = await fn(key, { fetchFn: async () => statusResponse(200) });
+      check(`${name}: HTTP 200 is reported active`, active.status === "active");
+      const invalid = await fn(key, { fetchFn: async () => statusResponse(401) });
+      check(`${name}: HTTP 401 is reported invalid`, invalid.status === "invalid");
+      const errored = await fn(key, { fetchFn: async () => statusResponse(500) });
+      check(`${name}: HTTP 500 is reported as error, never invalid`, errored.status === "error");
     }
   }
 
@@ -1022,6 +1101,59 @@ async function main() {
       !!psIdFind && psIdFind.verified === "active");
   }
 
+  // ── scan + --verify: MongoDB Atlas, real fetch, real local HTTP server ─────
+  // Same shape as the PlanetScale integration test above: proves scan.js's
+  // OWN pairing+dedup+dispatch wiring for MongoDB Atlas, through a real
+  // fetch POST + Basic-auth header + form body, into a local server, never
+  // the real network.
+  {
+    const http = require("http");
+    const calls = [];
+    const mdbId = "mdb_sa_id_" + "1a2b3c4d5e6f7a8b9c0d1e2f";
+    const mdbSecret = "mdb_sa_sk_" + "LIVEfakeA1b2C3d4E5f6";
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => { body += c; });
+      req.on("end", () => {
+        const auth = req.headers.authorization || "";
+        calls.push(auth);
+        const expected = "Basic " + Buffer.from(`${mdbId}:${mdbSecret}`).toString("base64");
+        res.setHeader("Content-Type", "application/json");
+        if (auth === expected && body === "grant_type=client_credentials") {
+          res.statusCode = 200;
+          res.end(JSON.stringify({ access_token: "x", token_type: "Bearer", expires_in: 3600 }));
+        } else {
+          res.statusCode = 403;
+          res.end(JSON.stringify({ error: "invalid_client", error_description: "Invalid credentials provided." }));
+        }
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+
+    const prevMdbUrl = process.env.RESIDOO_TEST_MONGODB_ATLAS_API_URL;
+    process.env.RESIDOO_TEST_MONGODB_ATLAS_API_URL = `http://127.0.0.1:${port}/api/oauth/token`;
+    let mdbVerifyRes;
+    try {
+      mdbVerifyRes = await scanOneFile("mongodb-atlas-verify.jsonl",
+        JSON.stringify({ message: { content: `{"clientId":"${mdbId}","clientSecret":"${mdbSecret}"}` } }) + "\n",
+        { verify: true });
+    } finally {
+      server.close();
+      if (prevMdbUrl === undefined) delete process.env.RESIDOO_TEST_MONGODB_ATLAS_API_URL;
+      else process.env.RESIDOO_TEST_MONGODB_ATLAS_API_URL = prevMdbUrl;
+    }
+
+    const mdbSecretFind = mdbVerifyRes.findings.find((f) => f.ruleId === "mongodb_atlas_secret");
+    const mdbIdFind = mdbVerifyRes.findings.find((f) => f.ruleId === "mongodb_atlas_client_id");
+    check("--verify (MongoDB Atlas): the server received a Basic auth header encoding clientId:clientSecret, and a client_credentials form body",
+      calls.includes("Basic " + Buffer.from(`${mdbId}:${mdbSecret}`).toString("base64")));
+    check("--verify (MongoDB Atlas): the secret's own finding is reported active",
+      !!mdbSecretFind && mdbSecretFind.verified === "active");
+    check("--verify (MongoDB Atlas): the paired id's own finding gets the SAME result, not left unverified",
+      !!mdbIdFind && mdbIdFind.verified === "active");
+  }
+
   // ── scan: detection for the second research batch (Vercel, Fly.io,
   // Cerebras, Render) actually fires on real-shaped content, end to end
   // through scan() — the regex collision checks done during implementation
@@ -1034,6 +1166,8 @@ async function main() {
       flyio_bearer_token: "fo1_" + rep("aB3xY9qZ1mN4pQ7rS2tU5vW8", 43),
       cerebras_key: "csk-" + rep("aB3xY9qZ1mN4pQ7rS2tU5vW8", 40),
       render_key: "rnd_" + rep("aB3xY9qZ1mN4pQ7rS2tU5vW8", 40),
+      neon_key: "napi_" + rep("aB3xY9qZ1mN4pQ7rS2tU5vW8", 25),
+      posthog_key: "phx_" + rep("aB3xY9qZ1mN4pQ7rS2tU5vW8", 45),
     };
     for (const [ruleId, value] of Object.entries(samples)) {
       const res = await scanOneFile(`${ruleId}.jsonl`, JSON.stringify({ message: { content: "token: " + value } }) + "\n");

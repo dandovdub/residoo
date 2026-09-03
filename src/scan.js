@@ -15,8 +15,9 @@ const {
   verifyCircleciToken, verifyAirtableToken, verifyCloudflareToken, verifyHerokuKey,
   verifyNetlifyToken, verifyLinearKey, verifyTelegramToken, verifyDiscordWebhook,
   verifyPlanetScaleToken, verifyVercelToken, verifyCerebrasKey, verifyRenderKey,
-  verifyFlyioBearerToken,
+  verifyFlyioBearerToken, verifyMongoDbAtlasCredential, verifyNeonKey, verifyPostHogKey,
 } = require("./verify");
+const { c, makePaint } = require("./color");
 
 // PlanetScale's id half: 12 lowercase alphanumeric characters, no prefix —
 // confirmed via planetscale.com/docs/api/reference/service-tokens. Searched
@@ -32,6 +33,18 @@ const PLANETSCALE_ID_RE = /\b[a-z0-9]{12}\b/g;
 // false ambiguous match.
 const PLANETSCALE_PAIR_WINDOW = 100;
 
+// MongoDB Atlas Service Account client id: fully specified by MongoDB's own
+// OpenAPI schema (mdb_sa_id_ + exactly 24 hex characters) — the ONE paired
+// candidate regex in this file precise enough to have a confirmed exact
+// length rather than a shape-only guess, since it carries its own
+// distinguishing prefix too (unlike AWS's secret or PlanetScale's id, which
+// have no prefix of their own and rely entirely on nearby-anchor context).
+const MONGODB_ATLAS_ID_RE = /\bmdb_sa_id_[a-fA-F0-9]{24}\b/g;
+// MongoDB's own docs show the id and secret as sibling fields in the same
+// JSON credentials block or adjacent env vars, not spread across a file —
+// same reasoning as PlanetScale's tighter window, not AWS's wider one.
+const MONGODB_ATLAS_PAIR_WINDOW = 150;
+
 // Never verify more than this many distinct credentials of ONE vendor in a
 // single scan: a pathological transcript with dozens of distinct
 // credentials should not turn --verify into a long burst of outbound calls.
@@ -45,10 +58,11 @@ const MAX_VERIFICATIONS_PER_VENDOR = 10;
 // belong to any Google product; testing it against one product's endpoint
 // would misreport a valid key for a DIFFERENT product as invalid) and
 // perplexity_key (no free, side-effect-free endpoint exists at all).
-// PlanetScale is ALSO not here despite being verified: it needs pairing
-// (see pendingPlanetScaleVerifications below), the same reason AWS isn't
-// here either. See verify.js's own header comment for the fuller
-// reasoning behind every vendor left out.
+// PlanetScale and MongoDB Atlas are ALSO not here despite being verified:
+// both need pairing (see pendingPlanetScaleVerifications and
+// pendingMongoDbAtlasVerifications below), the same reason AWS isn't here
+// either. See verify.js's own header comment for the fuller reasoning
+// behind every vendor left out.
 const SIMPLE_VERIFY_FNS = {
   slack_token: verifySlackToken,
   openai_key: verifyOpenAiKey,
@@ -81,6 +95,8 @@ const SIMPLE_VERIFY_FNS = {
   cerebras_key: verifyCerebrasKey,
   render_key: verifyRenderKey,
   flyio_bearer_token: verifyFlyioBearerToken,
+  neon_key: verifyNeonKey,
+  posthog_key: verifyPostHogKey,
 };
 const SIMPLE_VERIFY_VENDOR_LABEL = {
   slack_token: "Slack's auth.test",
@@ -114,6 +130,8 @@ const SIMPLE_VERIFY_VENDOR_LABEL = {
   cerebras_key: "Cerebras's models endpoint",
   render_key: "Render's owners endpoint",
   flyio_bearer_token: "Fly.io's GraphQL API",
+  neon_key: "Neon's projects endpoint",
+  posthog_key: "PostHog's users endpoint",
 };
 
 // Rule ids that findPairedSecret's window search applies to (see pairing.js):
@@ -237,7 +255,7 @@ function safeName(file) { return path.basename(file); }
  * absolute path can itself carry a username or a project name the rest of
  * this report is careful never to print.
  */
-async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, onBeforeVerify = null } = {}) {
+async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, onBeforeVerify = null, noColor = false } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
   // The decode pass (see decode.js) only applies high-confidence, vendor-
   // prefixed rules to decoded bytes: random binary that decodes to printable
@@ -271,6 +289,10 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // credential (see the planetscale_secret match branch below): keyed by
   // the secret value (the confirmed, prefixed anchor) -> { idValue, refs }.
   const pendingPlanetScaleVerifications = new Map();
+  // Same shape again, for MongoDB Atlas Service Account credentials (see
+  // the mongodb_atlas_secret match branch below): keyed by the secret value
+  // -> { idValue, refs }.
+  const pendingMongoDbAtlasVerifications = new Map();
   // --verify only (see verify.js): ruleId -> (token value -> { refs }), for
   // every SIMPLE_VERIFY_FNS vendor. Unlike AWS/PlanetScale, none of these
   // need pairing (the token itself is the complete credential), so this is
@@ -399,6 +421,30 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
               }
             }
           }
+          // MongoDB Atlas: same shape as PlanetScale (secret is the
+          // confirmed, prefixed anchor; the id is the nearby candidate),
+          // except the id here ALSO carries its own distinguishing prefix
+          // (mdb_sa_id_) rather than being a bare unprefixed shape — a
+          // stronger candidate signal than PlanetScale's or AWS's, but the
+          // same pairing mechanism and the same generic pairedOtherPreview/
+          // pairedOtherLabel display fields.
+          let mongoDbIdFinding = null;
+          let rawMongoDbId = null;
+          if (!suppressedReason && rule.id === "mongodb_atlas_secret") {
+            const pairedId = findNearbyCandidate(line, m[0], m.index, MONGODB_ATLAS_ID_RE, MONGODB_ATLAS_PAIR_WINDOW);
+            if (pairedId) {
+              const idSuppressedReason = suppressionReason(pairedId, null);
+              if (idSuppressedReason && !includeSuppressed) {
+                suppressedCount++;
+              } else {
+                rawMongoDbId = pairedId;
+                mongoDbIdFinding = record({ id: "mongodb_atlas_client_id", label: "MongoDB Atlas Service Account client id (paired with secret)" },
+                  pairedId, relFile, file, lineNo, mtimeMs,
+                  idSuppressedReason ? "low" : "high", idSuppressedReason,
+                  { paired: true, pairedOtherPreview: redact(m[0]), pairedOtherLabel: "secret" });
+              }
+            }
+          }
           // Local, offline JWT expiry (see jwtExpiry.js): only ever reads
           // the `exp` claim out of the decoded payload, nothing else, and
           // only for the unsuppressed default `jwt` rule, since a
@@ -413,6 +459,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
             {
               ...(pairedSecretPreview ? { pairedSecretPreview } : {}),
               ...(planetScaleIdFinding ? { pairedOtherPreview: redact(rawPlanetScaleId), pairedOtherLabel: "id" } : {}),
+              ...(mongoDbIdFinding ? { pairedOtherPreview: redact(rawMongoDbId), pairedOtherLabel: "id" } : {}),
               ...(jwtExtra || {}),
             });
 
@@ -439,6 +486,15 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
             }
             const psEntry = pendingPlanetScaleVerifications.get(m[0]);
             if (psEntry) psEntry.refs.push({ secretFinding: primaryFinding, idFinding: planetScaleIdFinding });
+          }
+          // --verify, MongoDB Atlas: same dedup-by-anchor-value shape as
+          // AWS/PlanetScale above, keyed by the secret this time.
+          if (verify && mongoDbIdFinding && rawMongoDbId) {
+            if (!pendingMongoDbAtlasVerifications.has(m[0]) && pendingMongoDbAtlasVerifications.size < MAX_VERIFICATIONS_PER_VENDOR) {
+              pendingMongoDbAtlasVerifications.set(m[0], { idValue: rawMongoDbId, refs: [] });
+            }
+            const mdbEntry = pendingMongoDbAtlasVerifications.get(m[0]);
+            if (mdbEntry) mdbEntry.refs.push({ secretFinding: primaryFinding, idFinding: mongoDbIdFinding });
           }
           // --verify, single-token vendors (Slack, OpenAI, Anthropic,
           // GitHub): none of these need pairing (the value IS the complete
@@ -629,6 +685,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // actually something to verify, so a plain --verify with nothing to check
   // never clears a spinner line for no reason.
   const anyPending = pendingAwsVerifications.size > 0 || pendingPlanetScaleVerifications.size > 0 ||
+    pendingMongoDbAtlasVerifications.size > 0 ||
     [...pendingSimpleVerifications.values()].some((byValue) => byValue.size > 0);
   if (verify && anyPending && typeof onBeforeVerify === "function") onBeforeVerify();
 
@@ -642,6 +699,12 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     }
   };
   const awsAvailable = pendingAwsVerifications.size === 0 || isAwsCliAvailable();
+  // stderr, not stdout: color.js's supportsColor checks whichever stream is
+  // passed to it, and this table is never written to stdout, so it must
+  // check stderr's own TTY status, not borrow stdout's (piping stdout to a
+  // file while stderr still reaches a real terminal is a real case: `scan
+  // --verify --json > out.json` should still color this table).
+  const paint = makePaint(noColor, process.stderr);
   if (verify && anyPending) {
     // One disclosure, not one per vendor: this used to print a full
     // "this is a real network request..." paragraph for EACH vendor in
@@ -668,6 +731,9 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     if (pendingPlanetScaleVerifications.size > 0) {
       rows.push(["PlanetScale", "organizations endpoint", [...pendingPlanetScaleVerifications.keys()].map(redact)]);
     }
+    if (pendingMongoDbAtlasVerifications.size > 0) {
+      rows.push(["MongoDB Atlas", "oauth/token endpoint", [...pendingMongoDbAtlasVerifications.keys()].map(redact)]);
+    }
     for (const [ruleId, byValue] of pendingSimpleVerifications) {
       if (byValue.size === 0) continue;
       const [vendor, endpoint] = SIMPLE_VERIFY_VENDOR_LABEL[ruleId].split("'s ");
@@ -676,10 +742,12 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     if (rows.length > 0) {
       const table = rows
         .map(([vendor, endpoint, previews]) =>
-          `    ${vendor} · ${endpoint}\n` + previews.map((p) => `        ${p}`).join("\n"))
+          `    ${paint(c.bold, vendor)} ${paint(c.dim, "·")} ${paint(c.dim, endpoint)}\n` +
+          previews.map((p) => `        ${p}`).join("\n"))
         .join("\n");
       process.stderr.write(
-        "residoo --verify: checking whether these credentials are still active. Real network " +
+        paint(c.yellow + c.bold, "residoo --verify:") +
+        " checking whether these credentials are still active. Real network " +
         "calls, using the exact value found in your transcript, one at a time. Nothing is cached " +
         "or sent anywhere but the endpoint listed below.\n\n" +
         table + "\n\n"
@@ -687,7 +755,8 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     }
     if (pendingAwsVerifications.size > 0 && !awsAvailable) {
       process.stderr.write(
-        "residoo --verify: the aws CLI was not found on PATH, so the " +
+        paint(c.yellow + c.bold, "residoo --verify:") +
+        " the aws CLI was not found on PATH, so the " +
         `${pendingAwsVerifications.size} AWS credential(s) found in this scan could not be checked. ` +
         "Install it (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) to use --verify.\n"
       );
@@ -712,6 +781,12 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   if (verify && pendingPlanetScaleVerifications.size > 0) {
     for (const [secretValue, { idValue, refs }] of pendingPlanetScaleVerifications) {
       const result = await verifyPlanetScaleToken(idValue, secretValue);
+      for (const ref of refs) applyVerifyResult([ref.secretFinding, ref.idFinding], result);
+    }
+  }
+  if (verify && pendingMongoDbAtlasVerifications.size > 0) {
+    for (const [secretValue, { idValue, refs }] of pendingMongoDbAtlasVerifications) {
+      const result = await verifyMongoDbAtlasCredential(idValue, secretValue);
       for (const ref of refs) applyVerifyResult([ref.secretFinding, ref.idFinding], result);
     }
   }

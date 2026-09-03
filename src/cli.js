@@ -57,7 +57,7 @@ const HELP = `residoo: find secrets leaking through your AI agent's session hist
   Scanning makes NO network calls by default and changes nothing on disk.
   Findings are redacted in every output format. The one opt-in exception is
   --verify, which asks a credential's own vendor whether it still
-  authenticates (32 vendors today, see below). Sealing (--seal) writes NEW
+  authenticates (35 vendors today, see below). Sealing (--seal) writes NEW
   encrypted files only. It never modifies or deletes anything that already
   exists.
 
@@ -102,22 +102,24 @@ Scan options:
   --verify                ask the credential's own vendor whether it still
                           authenticates, using the exact value found in
                           your transcript. THIS MAKES A REAL NETWORK CALL.
-                          Off by default. 32 vendors today. Two need a
+                          Off by default. 35 vendors today. Three need a
                           paired id+secret (see Rotation below): AWS,
                           checked via sts:get-caller-identity (needs the
                           aws CLI on PATH, residoo shells out to it rather
-                          than reimplementing AWS request signing), and
-                          PlanetScale, checked via a direct API call like
-                          every other non-AWS vendor here. The other 30 are
-                          each a single credential, one direct,
-                          dependency-free API call, no CLI needed: Slack,
-                          OpenAI, Anthropic, GitHub, Hugging Face,
+                          than reimplementing AWS request signing);
+                          PlanetScale and MongoDB Atlas (Service Account
+                          credentials only), each checked via a direct API
+                          call like every other non-AWS vendor here. The
+                          other 32 are each a single credential, one
+                          direct, dependency-free API call, no CLI needed:
+                          Slack, OpenAI, Anthropic, GitHub, Hugging Face,
                           Replicate, DigitalOcean, Pinecone, SendGrid,
                           Groq, xAI, OpenRouter, Stripe, npm, Notion,
                           GitLab, Supabase (management tokens only),
                           ElevenLabs, CircleCI, Airtable, Cloudflare,
                           Heroku, Netlify, Linear, Telegram, Discord
-                          webhooks, Vercel, Cerebras, Render, and Fly.io.
+                          webhooks, Vercel, Cerebras, Render, Fly.io,
+                          Neon, and PostHog.
                           A verified-invalid credential is reported as
                           already dead, not as something to rotate; a
                           JWT's own signed exp claim is checked locally
@@ -579,7 +581,7 @@ async function main(argv) {
 
   const progress = makeProgressReporter(noColor);
   const result = await scan({
-    sources, includeNoisy, includeSuppressed, verify,
+    sources, includeNoisy, includeSuppressed, verify, noColor,
     onProgress: progress.onProgress,
     // Clears the spinner's last frame before --verify's own stderr lines
     // print; without this the last spinner line sits uncleared on screen
