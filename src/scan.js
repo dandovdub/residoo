@@ -211,14 +211,16 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
         if (suppressedReason && !includeSuppressed) {
           suppressedCount++;
         } else {
-          record(rule, m[0], relFile, file, lineNo,
-            mtimeMs,
-            resolveConfidence(rule.id, m[0], rule.confidence, suppressedReason),
-            suppressedReason);
-          // Feature 3: paired-secret detection (see pairing.js). Only
-          // attempted for an UNSUPPRESSED access-key finding — pairing a
-          // vendor-example or placeholder access key with a random-looking
-          // neighbor would be a false amplification, not a real finding.
+          // Feature 3: paired-secret detection (see pairing.js), computed
+          // BEFORE the access-key-id finding is recorded so that finding can
+          // carry the paired secret's own redacted preview. An access key id
+          // alone cannot authenticate anything (see pairing.js's docstring);
+          // it is only a usable credential once its secret is known too, so
+          // a report showing several access-key-id findings needs to say,
+          // on each one's own line, which one actually has a secret sitting
+          // next to it in the transcript, not just that a secret exists
+          // somewhere in the scan.
+          let pairedSecretPreview = null;
           if (!suppressedReason && AWS_PAIR_RULE_IDS.has(rule.id)) {
             const paired = findPairedSecret(line, m[0], m.index);
             if (paired) {
@@ -226,12 +228,19 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
               if (pairedSuppressedReason && !includeSuppressed) {
                 suppressedCount++;
               } else {
+                pairedSecretPreview = redact(paired);
                 record({ id: "aws_secret_access_key_paired", label: "AWS Secret Access Key (paired with access key id)" },
                   paired, relFile, file, lineNo, mtimeMs,
-                  pairedSuppressedReason ? "low" : "high", pairedSuppressedReason, { paired: true });
+                  pairedSuppressedReason ? "low" : "high", pairedSuppressedReason,
+                  { paired: true, pairedAccessKeyPreview: redact(m[0]) });
               }
             }
           }
+          record(rule, m[0], relFile, file, lineNo,
+            mtimeMs,
+            resolveConfidence(rule.id, m[0], rule.confidence, suppressedReason),
+            suppressedReason,
+            pairedSecretPreview ? { pairedSecretPreview } : undefined);
         }
         if (m.index === rule.re.lastIndex) rule.re.lastIndex++; // guard zero-width matches
       }

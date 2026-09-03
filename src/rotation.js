@@ -889,6 +889,14 @@ function renderRotation(findings, acks, dismissed = {}) {
         ackedAt: st.ackedAt,
         ackNote: st.ackNote,
         lastSeenMs: null,
+        // An access key id and an AWS secret are only dangerous TOGETHER
+        // (see pairing.js): one is useless to an attacker without the
+        // other. These carry the OTHER half's redacted preview when
+        // scan.js found one sitting next to this value, so a report with
+        // several access-key-id findings can say which one is an actual
+        // usable credential pair, not just that a secret exists somewhere.
+        pairedSecretPreview: null,
+        pairedAccessKeyPreview: null,
       };
       byFp.set(st.fingerprint, e);
     }
@@ -905,10 +913,29 @@ function renderRotation(findings, acks, dismissed = {}) {
     if (typeof f.fileMTimeMs === "number" && (e.lastSeenMs === null || f.fileMTimeMs > e.lastSeenMs)) {
       e.lastSeenMs = f.fileMTimeMs;
     }
+    // Take the first pairing seen across this fingerprint's occurrences: if
+    // the same value ever appeared next to its pair on ANY line, that's
+    // enough to flag it, even if a later re-echo of the same value elsewhere
+    // (e.g. Claude confirming "got it") dropped the neighboring secret.
+    if (e.pairedSecretPreview === null && typeof f.pairedSecretPreview === "string") {
+      e.pairedSecretPreview = f.pairedSecretPreview;
+    }
+    if (e.pairedAccessKeyPreview === null && typeof f.pairedAccessKeyPreview === "string") {
+      e.pairedAccessKeyPreview = f.pairedAccessKeyPreview;
+    }
   }
 
+  // A paired entry is a DEMONSTRATED usable credential (see pairing.js); an
+  // unpaired access-key-id or secret finding of the same rule and status is
+  // only a shape that matched a pattern. Sorted first within its status tier
+  // so a real pair is never the one the display cap (see renderRotationSection)
+  // pushes into "N more"; the report's own priority order (see the group
+  // sort just below in renderRotationSection) already applies the same
+  // "what needs attention most" logic one level up.
+  const isPaired = (e) => e.pairedSecretPreview !== null || e.pairedAccessKeyPreview !== null;
   const entries = [...byFp.values()].sort((a, b) => {
     if (a.status !== b.status) return STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
+    if (isPaired(a) !== isPaired(b)) return isPaired(a) ? -1 : 1;
     if (a.ruleId !== b.ruleId) return a.ruleId < b.ruleId ? -1 : 1;
     return a.fingerprint < b.fingerprint ? -1 : 1;
   });

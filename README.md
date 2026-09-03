@@ -110,7 +110,13 @@ won't be built into the tool that writes it.
   a rule on its own) with a nearby confirmed access key id, and reports both
   at high confidence: the pairing is the vendor-specific signal, not the
   shape alone. Ambiguous pairings (more than one candidate nearby) are
-  reported as nothing rather than a guess. See `src/pairing.js`.
+  reported as nothing rather than a guess. See `src/pairing.js`. An access key
+  id alone cannot authenticate anything; it takes the paired secret too. So
+  when a scan turns up several access-key-id findings, the one with an actual
+  secret sitting next to it in the transcript is called out in red as a
+  demonstrated usable credential and sorted to the top of its group in the
+  Rotation section, ahead of the ones that are, on their own, not yet proven
+  exploitable.
 - With `--include-noisy`, filters the broad generic-secret rules by how
   machine-random the matched value actually looks (a lightweight, offline
   approximation of BPE-tokenization rarity checks): ordinary English, a
@@ -122,10 +128,10 @@ won't be built into the tool that writes it.
   preview, never the real value, including in `--json` mode. A decoded or
   rejoined secret is redacted exactly like a plain one.
 - On an interactive terminal, prints who it is and where it lives before
-  scanning starts (`residoo v0.4.2 · find secrets your AI coding agent left
+  scanning starts (`residoo v0.4.3 · find secrets your AI coding agent left
   on disk` plus the repo URL), then a live spinner naming the current file
   as it scans. Every report also opens with the exact version and timestamp
-  it was run with (`residoo v0.4.2 · scanned 2026-01-01 12:00`; `--json`
+  it was run with (`residoo v0.4.3 · scanned 2026-01-01 12:00`; `--json`
   carries the same as `residooVersion`/`scannedAt`), so a report pasted or
   screenshotted later never leaves you guessing which build produced it.
   When there are findings, the report closes with a "Next steps" pointer to
@@ -349,7 +355,7 @@ As a GitHub Action (this repository doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.4.2
+  - uses: dandovdub/residoo@v0.4.3
 ```
 
 As a pre-commit hook:
@@ -357,7 +363,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.4.2
+    rev: v0.4.3
     hooks:
       - id: residoo
 ```

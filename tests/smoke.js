@@ -457,6 +457,23 @@ async function main() {
       JSON.stringify({ message: { content: docExampleKey + " " + pairedSecret } }) + "\n");
     check("paired: a suppressed vendor-example access key never triggers pairing",
       !vendorExRes.findings.some((f) => f.ruleId === "aws_secret_access_key_paired"));
+
+    // An access key id alone cannot authenticate anything; it takes the
+    // paired secret too (see pairing.js's own docstring). Real user
+    // confusion: several access-key-id findings pending at once, no way to
+    // tell which one is an actual demonstrated pair versus a lone id. Both
+    // directions of the cross-reference are checked here since the report
+    // uses whichever side it is currently rendering.
+    const akiaFind = pairRes.findings.find((f) => f.ruleId === "aws_access_key_id");
+    check("paired: the access-key-id finding itself carries the paired secret's redacted preview",
+      !!akiaFind && typeof akiaFind.pairedSecretPreview === "string" &&
+      !akiaFind.pairedSecretPreview.includes(pairedSecret));
+    check("paired: the secret's own finding carries the access key's redacted preview back",
+      !!pairFind && typeof pairFind.pairedAccessKeyPreview === "string" &&
+      !pairFind.pairedAccessKeyPreview.includes(plantedAwsKey));
+    const akiaAloneFind = aloneRes.findings.find((f) => f.ruleId === "aws_access_key_id");
+    check("paired: an access-key-id with no nearby secret carries no pairedSecretPreview",
+      !!akiaAloneFind && akiaAloneFind.pairedSecretPreview === undefined);
   }
 
   // ── scan: rarity-based filtering for generic secrets (see src/rarity.js) ───
@@ -1404,6 +1421,40 @@ async function main() {
     // rule types too. The line must say so.
     check("the elision line names how many OTHER rule types it spans, not just a bare count",
       outBig.includes("and 5 more across 3 rule types"));
+  }
+
+  // ── report.js: a paired AWS credential is called out, not just listed ─────
+  // Real user pushback: several pending "AWS Access Key ID" findings, but an
+  // access key id alone cannot authenticate anything (see pairing.js); only
+  // the one with a secret actually sitting next to it in the transcript is a
+  // demonstrated usable credential. That one must be visually distinct and
+  // never buried behind unpaired ones when the display caps out.
+  {
+    const { renderRotation } = require("../src/rotation");
+    const { renderRotationSection } = require("../src/report");
+
+    const lone1 = { ruleId: "aws_access_key_id", label: "AWS Access Key ID", preview: "AKIA…aaaa  (20 chars)", relFile: "a.jsonl", file: "/x/a.jsonl", line: 1 };
+    const paired = { ruleId: "aws_access_key_id", label: "AWS Access Key ID", preview: "AKIA…pppp  (20 chars)", relFile: "p.jsonl", file: "/x/p.jsonl", line: 1, pairedSecretPreview: "90c7…6e88  (40 chars)" };
+    const lone2 = { ruleId: "aws_access_key_id", label: "AWS Access Key ID", preview: "AKIA…zzzz  (20 chars)", relFile: "z.jsonl", file: "/x/z.jsonl", line: 1 };
+    const secretSide = { ruleId: "aws_secret_access_key_paired", label: "AWS Secret Access Key (paired with access key id)", preview: "90c7…6e88  (40 chars)", relFile: "p.jsonl", file: "/x/p.jsonl", line: 1, pairedAccessKeyPreview: "AKIA…pppp  (20 chars)" };
+
+    const rotPair = renderRotation([lone1, paired, lone2, secretSide], {}, {});
+    const akiaGroup = rotPair.entries.filter((e) => e.ruleId === "aws_access_key_id");
+    check("the paired access key sorts FIRST within its group, ahead of unpaired ones (never lost to elision)",
+      akiaGroup[0].preview === paired.preview);
+    check("unpaired access-key entries carry no pairedSecretPreview",
+      akiaGroup.find((e) => e.preview === lone1.preview).pairedSecretPreview === null);
+
+    const outPair = renderRotationSection(rotPair, { noColor: true });
+    check("the paired entry's line names the paired secret's own redacted preview",
+      outPair.includes("paired with secret 90c7") && outPair.includes("full working credential"));
+    check("the secret's own entry names the access key back, symmetric with the access-key side",
+      outPair.includes("paired with access key AKIA"));
+    // Only a DEMONSTRATED pair earns the warning line, not every finding of
+    // a rule type that sometimes pairs: exactly one "paired with secret"
+    // line for the one entry that actually has one, none for the other two.
+    check("exactly one entry carries the pairing warning, not all three access keys",
+      (outPair.match(/paired with secret/g) || []).length === 1);
   }
 
   // ── CLI: rotation report, ack round-trip, --allow-acked exit codes ────────

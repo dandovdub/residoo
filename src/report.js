@@ -231,6 +231,19 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
       const lastSeenNote = typeof e.lastSeenMs === "number" ? `last seen ~${ageDays(e.lastSeenMs)}d ago` : null;
       push(`    ${STATUS_TAG[e.status]}  ${e.preview}  ${paint(c.dim, fileNote)}` +
         (lastSeenNote ? `  ${paint(c.dim, lastSeenNote)}` : ""));
+      // An access key id and its AWS secret are each meaningless alone (see
+      // pairing.js): the id names WHICH key, the secret authenticates it,
+      // and an attacker needs both. Called out in red/bold, the same
+      // treatment as the ordering advisory above, because a value with this
+      // line under it is a demonstrated full working credential, not just a
+      // shape that matched a pattern; a plain access-key-id or secret finding
+      // with NO pairing note is still worth checking, but nothing here
+      // proves it is actually exploitable on its own.
+      if (e.pairedSecretPreview) {
+        push(paint(c.red + c.bold, `               ⚠ paired with secret ${e.pairedSecretPreview} · full working credential, rotate this one first`));
+      } else if (e.pairedAccessKeyPreview) {
+        push(paint(c.red + c.bold, `               ⚠ paired with access key ${e.pairedAccessKeyPreview} · full working credential`));
+      }
       if (e.status === "acked") {
         push(paint(c.dim, `               acknowledged ${e.ackedAt || "(no timestamp)"}${e.ackNote ? `: ${e.ackNote}` : ""} · ${e.fingerprint}`));
       } else if (e.status === "dismissed") {
