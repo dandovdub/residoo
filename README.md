@@ -123,18 +123,22 @@ won't be built into the tool that writes it.
   in the Rotation section, instead of just "last seen." Only `exp` is ever
   read; every other claim in the payload is decoded transiently and
   discarded. See `src/jwtExpiry.js`.
-- **`--verify`** (opt-in, makes a real network call): for an AWS access key
-  id found paired with its secret, asks AWS itself whether the pair still
-  authenticates via `sts:get-caller-identity`, the same free, read-only,
-  permission-less call the AWS CLI and tools like aws-vault use for exactly
-  this. Shells out to your own `aws` CLI rather than reimplementing AWS
-  request signing (residoo ships zero runtime dependencies, and a subtly
-  wrong signing implementation would silently report real keys as invalid,
-  worse than not checking). A verified-active pair is escalated to "rotate
-  immediately"; a verified-invalid one is reported as already dead, no
-  action needed, and sorted out of the way. Off by default; every environment
-  variable the `aws` CLI reads is built from scratch, never inherited, so it
-  can never fall back to your own real AWS profile. See `src/verify.js`.
+- **`--verify`** (opt-in, makes a real network call): asks a credential's own
+  vendor whether it still authenticates, using the exact value found in your
+  transcript. Five vendors today: **AWS** (an access key id found paired with
+  its secret, checked via `sts:get-caller-identity`, the same free,
+  read-only, permission-less call the AWS CLI and tools like aws-vault use
+  for exactly this; shells out to your own `aws` CLI rather than
+  reimplementing AWS request signing, since residoo ships zero runtime
+  dependencies and a subtly wrong signing implementation would silently
+  report real keys as invalid, worse than not checking), and **Slack,
+  OpenAI, Anthropic, GitHub** (a direct API call to each vendor's own free
+  "list what I can see" endpoint, no CLI needed, no request signing to get
+  wrong). A verified-active credential is escalated to "rotate immediately";
+  a verified-invalid one is reported as already dead, no action needed, and
+  sorted out of the way. Off by default; every environment variable the
+  `aws` CLI reads is built from scratch, never inherited, so it can never
+  fall back to your own real AWS profile. See `src/verify.js`.
 - With `--include-noisy`, filters the broad generic-secret rules by how
   machine-random the matched value actually looks (a lightweight, offline
   approximation of BPE-tokenization rarity checks): ordinary English, a
@@ -146,10 +150,10 @@ won't be built into the tool that writes it.
   preview, never the real value, including in `--json` mode. A decoded or
   rejoined secret is redacted exactly like a plain one.
 - On an interactive terminal, prints who it is and where it lives before
-  scanning starts (`residoo v0.4.4 · find secrets your AI coding agent left
+  scanning starts (`residoo v0.4.5 · find secrets your AI coding agent left
   on disk` plus the repo URL), then a live spinner naming the current file
   as it scans. Every report also opens with the exact version and timestamp
-  it was run with (`residoo v0.4.4 · scanned 2026-01-01 12:00`; `--json`
+  it was run with (`residoo v0.4.5 · scanned 2026-01-01 12:00`; `--json`
   carries the same as `residooVersion`/`scannedAt`), so a report pasted or
   screenshotted later never leaves you guessing which build produced it.
   When there are findings, the report closes with a "Next steps" pointer to
@@ -335,7 +339,14 @@ with the way out:
   versus how many are already resolved. A machine with a lot of history can
   report hundreds of raw findings that are really a handful of distinct
   values echoed repeatedly; the summary is built around what's actually left
-  to triage, not the raw count.
+  to triage, not the raw count. A value `--verify` confirmed dead, or a JWT
+  whose own signed `exp` claim is already past, is subtracted from "needs
+  review" the same way an acked or dismissed one is, since residoo already
+  knows it needs no action, not just that nobody has said so yet. This is a
+  strictly per-VALUE fact: it is never rolled up into a whole rule's
+  confidence tag in the breakdown below, since `--verify` only ever checks
+  the specific values it can (a paired AWS credential, a bearer token), and
+  a rule's other, unchecked findings say nothing either way.
 - **The rotation list is grouped by credential type**, so the rotation URL
   prints once per type instead of once per finding. Each distinct value's own
   line shows its redacted preview, which file it's in, and when it was last
@@ -373,7 +384,7 @@ As a GitHub Action (this repository doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.4.4
+  - uses: dandovdub/residoo@v0.4.5
 ```
 
 As a pre-commit hook:
@@ -381,7 +392,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.4.4
+    rev: v0.4.5
     hooks:
       - id: residoo
 ```
@@ -398,12 +409,14 @@ documented in [docs/ci.md](docs/ci.md).
 - **No network calls in the default path, and none at all unless you
   explicitly pass `--upload-cloudroam` or `--verify`.** A secret scanner that
   phones home is not a tool you should trust with your secrets. Verify this
-  yourself: the one `fetch` call in the codebase is in `src/sealvault.js`,
-  reachable only behind `--upload-cloudroam`, and sends only encrypted bytes.
-  `--verify` is the other opt-in exception, and makes no `fetch` call at all:
-  it shells out to your own `aws` CLI with the exact AWS credential a scan
-  found, asking AWS's own `sts:get-caller-identity` whether it still
-  authenticates (see `src/verify.js`). Neither runs unless you pass the flag.
+  yourself: every network-capable call in the codebase lives behind one of
+  those two flags. `src/sealvault.js` holds the one `fetch` call reachable
+  from `--upload-cloudroam`, and sends only encrypted bytes. `src/verify.js`
+  holds everything reachable from `--verify`: a `fetch` call per vendor
+  (Slack, OpenAI, Anthropic, GitHub), each sending nothing but the exact
+  credential a scan found to that credential's own vendor, plus a subprocess
+  call to your own `aws` CLI for AWS credentials, never a `fetch`. Neither
+  file's code runs unless you pass the matching flag.
 - **Nothing destructive, ever.** Scanning is read-only. Sealing creates *new*
   files and modifies or deletes nothing, not even the plaintext it just
   encrypted a copy of. That last step is deliberately left to a human.

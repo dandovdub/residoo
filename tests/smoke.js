@@ -593,6 +593,96 @@ async function main() {
       !JSON.stringify(leakCheck).includes("supersecretvalue"));
   }
 
+  // ── src/verify.js: verifySlackToken, injected fetchFn only ─────────────────
+  // Same discipline as the AWS unit tests above: an in-process fake fetch,
+  // never a real HTTP request to slack.com.
+  {
+    const { verifySlackToken } = require("../src/verify");
+    const jsonResponse = (status, body) => ({
+      status, json: async () => body,
+    });
+
+    const active = await verifySlackToken("xoxb-fake", {
+      fetchFn: async () => jsonResponse(200, { ok: true, team: "T1", user: "U1" }),
+    });
+    check("verifySlackToken: ok:true is reported active", active.status === "active");
+
+    const revoked = await verifySlackToken("xoxb-fake", {
+      fetchFn: async () => jsonResponse(200, { ok: false, error: "token_revoked" }),
+    });
+    check("verifySlackToken: token_revoked is reported invalid, not error", revoked.status === "invalid");
+
+    const badAuth = await verifySlackToken("xoxb-fake", {
+      fetchFn: async () => jsonResponse(200, { ok: false, error: "invalid_auth" }),
+    });
+    check("verifySlackToken: invalid_auth is reported invalid", badAuth.status === "invalid");
+
+    const rateLimited = await verifySlackToken("xoxb-fake", {
+      fetchFn: async () => jsonResponse(429, { ok: false, error: "ratelimited" }),
+    });
+    check("verifySlackToken: an unrecognized/transient error (ratelimited) is reported as error, never invalid",
+      rateLimited.status === "error");
+
+    const networkFail = await verifySlackToken("xoxb-fake", {
+      fetchFn: async () => { throw new Error("fetch failed: getaddrinfo ENOTFOUND"); },
+    });
+    check("verifySlackToken: a network failure is an error, not invalid (inability to check is not proof of death)",
+      networkFail.status === "error");
+
+    const badJson = await verifySlackToken("xoxb-fake", {
+      fetchFn: async () => ({ status: 200, json: async () => { throw new Error("not json"); } }),
+    });
+    check("verifySlackToken: a non-JSON response is an error, never throws out of verifySlackToken",
+      badJson.status === "error");
+
+    const tokenLeakCheck = await verifySlackToken("xoxb-SUPERSECRETTOKENVALUE", {
+      fetchFn: async () => jsonResponse(200, { ok: false, error: "token_revoked" }),
+    });
+    check("verifySlackToken: the token itself never appears in the result",
+      !JSON.stringify(tokenLeakCheck).includes("SUPERSECRETTOKENVALUE"));
+  }
+
+  // ── src/verify.js: OpenAI / Anthropic / GitHub, injected fetchFn only ──────
+  // All three share verifyByStatusCode (see verify.js): the HTTP status
+  // code alone is the signal, no JSON body to parse. One shared table of
+  // checks run against all three, plus one Anthropic-specific check for its
+  // distinct header shape (x-api-key + anthropic-version, not a Bearer
+  // Authorization header).
+  {
+    const { verifyOpenAiKey, verifyAnthropicKey, verifyGithubToken } = require("../src/verify");
+    const statusResponse = (status) => ({ status });
+    const VENDORS = [
+      { name: "OpenAI", fn: verifyOpenAiKey, key: "sk-fake" },
+      { name: "Anthropic", fn: verifyAnthropicKey, key: "sk-ant-fake" },
+      { name: "GitHub", fn: verifyGithubToken, key: "ghp_fake" },
+    ];
+    for (const { name, fn, key } of VENDORS) {
+      const active = await fn(key, { fetchFn: async () => statusResponse(200) });
+      check(`${name}: HTTP 200 is reported active`, active.status === "active");
+      const invalid401 = await fn(key, { fetchFn: async () => statusResponse(401) });
+      check(`${name}: HTTP 401 is reported invalid`, invalid401.status === "invalid");
+      const invalid403 = await fn(key, { fetchFn: async () => statusResponse(403) });
+      check(`${name}: HTTP 403 is reported invalid`, invalid403.status === "invalid");
+      const rateLimited = await fn(key, { fetchFn: async () => statusResponse(429) });
+      check(`${name}: HTTP 429 (rate limited) is reported as error, never invalid`, rateLimited.status === "error");
+      const serverErr = await fn(key, { fetchFn: async () => statusResponse(500) });
+      check(`${name}: HTTP 500 is reported as error, never invalid`, serverErr.status === "error");
+      const networkErr = await fn(key, { fetchFn: async () => { throw new Error("network down"); } });
+      check(`${name}: a network failure is an error, not invalid`, networkErr.status === "error");
+      const leak = await fn("THE_REAL_SECRET_VALUE", { fetchFn: async () => statusResponse(401) });
+      check(`${name}: the key itself never appears in the result`, !JSON.stringify(leak).includes("THE_REAL_SECRET_VALUE"));
+    }
+
+    let capturedHeaders = null;
+    await verifyAnthropicKey("sk-ant-fake", {
+      fetchFn: async (url, opts) => { capturedHeaders = opts.headers; return statusResponse(200); },
+    });
+    check("verifyAnthropicKey: sends x-api-key and anthropic-version, NOT an Authorization Bearer header",
+      capturedHeaders["x-api-key"] === "sk-ant-fake" &&
+      typeof capturedHeaders["anthropic-version"] === "string" &&
+      capturedHeaders.Authorization === undefined);
+  }
+
   // ── scan + --verify: real spawnSync, real subprocess, fake `aws` binary ────
   // One level up from the unit tests above: this exercises scan.js's OWN
   // wiring (dedup by access key, the MAX_AWS_VERIFICATIONS cap, attaching
@@ -638,7 +728,7 @@ async function main() {
     try {
       verifyRes = await scanOneFile("verify.jsonl",
         JSON.stringify({ message: { content: liveKey + " " + verifySecret + " and re-echoed again: " + liveKey + " " + verifySecret + " also " + deadKey + " " + verifySecret } }) + "\n",
-        { verifyAws: true });
+        { verify: true });
     } finally {
       if (prevAwsCli === undefined) delete process.env.RESIDOO_TEST_AWS_CLI;
       else process.env.RESIDOO_TEST_AWS_CLI = prevAwsCli;
@@ -651,19 +741,155 @@ async function main() {
     const liveAkia = verifyRes.findings.find((f) => f.ruleId === "aws_access_key_id" && f.preview === redact(liveKey));
     const liveSecrets = verifyRes.findings.filter((f) => f.ruleId === "aws_secret_access_key_paired" && f.pairedAccessKeyPreview === redact(liveKey));
     check("--verify: an AWS-accepted pair is reported active on the access-key finding",
-      !!liveAkia && liveAkia.awsVerified === "active");
+      !!liveAkia && liveAkia.verified === "active");
     check("--verify: the SAME status reaches the paired secret's own finding too",
-      liveSecrets.length > 0 && liveSecrets.every((f) => f.awsVerified === "active"));
+      liveSecrets.length > 0 && liveSecrets.every((f) => f.verified === "active"));
 
     const deadAkia = verifyRes.findings.find((f) => f.ruleId === "aws_access_key_id" && f.preview === redact(deadKey));
     check("--verify: an AWS-rejected pair is reported invalid, not active",
-      !!deadAkia && deadAkia.awsVerified === "invalid");
+      !!deadAkia && deadAkia.verified === "invalid");
 
     const calls = fs.readFileSync(callLogPath, "utf-8").trim().split("\n").filter(Boolean);
     check("--verify: the re-echoed live key is verified ONCE, not once per occurrence (deduped)",
       calls.filter((k) => k === liveKey).length === 1);
     check("--verify: a distinct key (dead) gets its own, separate verification call",
       calls.filter((k) => k === deadKey).length === 1);
+  }
+
+  // ── scan + --verify: Slack, real fetch, real local HTTP server ─────────────
+  // Same idea as the AWS subprocess test above, adapted to an HTTP call
+  // instead of a spawned process: a real local server (127.0.0.1, this
+  // test's own process) stands in for slack.com via RESIDOO_TEST_SLACK_API_URL,
+  // so the real fetch + header + JSON-parsing path runs for real without
+  // ever reaching the network.
+  {
+    const http = require("http");
+    const calls = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => { body += c; });
+      req.on("end", () => {
+        const auth = req.headers.authorization || "";
+        const token = auth.replace(/^Bearer /, "");
+        calls.push(token);
+        res.setHeader("Content-Type", "application/json");
+        if (token.indexOf("DEAD") !== -1) {
+          res.end(JSON.stringify({ ok: false, error: "token_revoked" }));
+        } else {
+          res.end(JSON.stringify({ ok: true, team: "T1", user: "U1" }));
+        }
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+
+    // Not a repeated-character tail: that shape is exactly what scan.js's
+    // own zero-entropy placeholder filter (see zeroEntropyTail) suppresses
+    // by default, which would silently drop these findings before --verify
+    // ever saw them.
+    const liveSlack = "xoxb-LIVE0000-" + "aQ7mK2xR9vL4nP6z";
+    const deadSlack = "xoxb-DEAD0000-" + "bT3wJ8yH1sD5gF0c";
+    const prevSlackUrl = process.env.RESIDOO_TEST_SLACK_API_URL;
+    process.env.RESIDOO_TEST_SLACK_API_URL = `http://127.0.0.1:${port}/api/auth.test`;
+    let slackRes;
+    try {
+      slackRes = await scanOneFile("slack.jsonl",
+        JSON.stringify({ message: { content: liveSlack + " re-echoed: " + liveSlack + " and " + deadSlack } }) + "\n",
+        { verify: true });
+    } finally {
+      server.close();
+      if (prevSlackUrl === undefined) delete process.env.RESIDOO_TEST_SLACK_API_URL;
+      else process.env.RESIDOO_TEST_SLACK_API_URL = prevSlackUrl;
+    }
+
+    const liveFinds = slackRes.findings.filter((f) => f.ruleId === "slack_token" && f.preview === redact(liveSlack));
+    const deadFind = slackRes.findings.find((f) => f.ruleId === "slack_token" && f.preview === redact(deadSlack));
+    check("--verify (Slack): an accepted token is reported active",
+      liveFinds.length > 0 && liveFinds.every((f) => f.verified === "active"));
+    check("--verify (Slack): a re-echoed token gets the SAME status on every occurrence, not just the first",
+      liveFinds.length === 2);
+    check("--verify (Slack): a revoked token is reported invalid",
+      !!deadFind && deadFind.verified === "invalid");
+    check("--verify (Slack): the live token is checked ONCE despite two occurrences (deduped)",
+      calls.filter((t) => t === liveSlack).length === 1);
+    check("--verify (Slack): the dead token gets its own separate call",
+      calls.filter((t) => t === deadSlack).length === 1);
+  }
+
+  // ── scan + --verify: OpenAI, one more vendor through the SAME generic
+  // pendingSimpleVerifications path scan.js shares across Slack/OpenAI/
+  // Anthropic/GitHub. Slack's own test above already proves the mechanism
+  // end to end; this proves the dispatch table (SIMPLE_VERIFY_FNS) actually
+  // routes an openai_key finding to verifyOpenAiKey and not, say, Slack's
+  // checker or nothing at all.
+  {
+    const http = require("http");
+    let openAiCalls = 0;
+    const server = http.createServer((req, res) => {
+      openAiCalls++;
+      const active = (req.headers.authorization || "").includes("LIVE");
+      res.statusCode = active ? 200 : 401;
+      res.end("{}");
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+
+    const liveOpenAi = "sk-LIVE00" + "Q7mK2xR9vL4nP6zT3wJ8yH1sD5g";
+    const prevOpenAiUrl = process.env.RESIDOO_TEST_OPENAI_API_URL;
+    process.env.RESIDOO_TEST_OPENAI_API_URL = `http://127.0.0.1:${port}/v1/models`;
+    let openAiRes;
+    try {
+      openAiRes = await scanOneFile("openai.jsonl",
+        JSON.stringify({ message: { content: "key: " + liveOpenAi } }) + "\n",
+        { verify: true });
+    } finally {
+      server.close();
+      if (prevOpenAiUrl === undefined) delete process.env.RESIDOO_TEST_OPENAI_API_URL;
+      else process.env.RESIDOO_TEST_OPENAI_API_URL = prevOpenAiUrl;
+    }
+
+    const openAiFind = openAiRes.findings.find((f) => f.ruleId === "openai_key" && f.preview === redact(liveOpenAi));
+    check("--verify (OpenAI): the dispatch table routes an openai_key finding to verifyOpenAiKey (reported active)",
+      !!openAiFind && openAiFind.verified === "active");
+    check("--verify (OpenAI): the local test server actually received the call",
+      openAiCalls === 1);
+  }
+
+  // ── rotation.js + report.js: confirmedDead (verified-invalid / expired) ────
+  // Real user pushback: the top-level "N of M need review" count and the
+  // Rotation section's own pending count both looked stale next to what
+  // --verify or a JWT's own exp claim already proved. Deliberately checked
+  // as a per-VALUE count here, never rolled into a per-RULE confidence tag
+  // (a caught mistake: a rule's OTHER, unverified findings say nothing
+  // either way, and a per-rule downgrade would misrepresent them as safe).
+  {
+    const { renderRotation } = require("../src/rotation");
+    const { render } = require("../src/report");
+
+    const now = Date.now();
+    const verifiedDead = { ruleId: "aws_access_key_id", label: "AWS Access Key ID", preview: "AKIA…dead  (20 chars)", relFile: "a.jsonl", file: "/x/a.jsonl", line: 1, verified: "invalid", verifiedDetail: "AWS rejected these credentials" };
+    const verifiedLive = { ruleId: "aws_access_key_id", label: "AWS Access Key ID", preview: "AKIA…live  (20 chars)", relFile: "b.jsonl", file: "/x/b.jsonl", line: 1, verified: "active", verifiedDetail: "AWS accepted these credentials" };
+    const jwtExpired = { ruleId: "jwt", label: "JWT-shaped token", preview: "eyJh…dead  (100 chars)", relFile: "c.jsonl", file: "/x/c.jsonl", line: 1, jwtExpiresAtMs: now - 3600000 };
+    const jwtValid = { ruleId: "jwt", label: "JWT-shaped token", preview: "eyJh…live  (100 chars)", relFile: "d.jsonl", file: "/x/d.jsonl", line: 1, jwtExpiresAtMs: now + 3600000 };
+    const unverified = { ruleId: "openai_key", label: "OpenAI API key", preview: "sk-p…zzzz  (48 chars)", relFile: "e.jsonl", file: "/x/e.jsonl", line: 1 };
+
+    const rot = renderRotation([verifiedDead, verifiedLive, jwtExpired, jwtValid, unverified], {}, {});
+    check("rotation.counts.confirmedDead counts only the proven-dead pending entries (verified-invalid + expired JWT)",
+      rot.counts.confirmedDead === 2 && rot.counts.pending === 5);
+
+    const findings = [verifiedDead, verifiedLive, jwtExpired, jwtValid, unverified].map((f, i) => ({
+      ...f, confidence: "high", suppressedReason: null, source: "smoke", fileMTimeMs: now,
+    }));
+    const out = render(
+      { findings, filesScanned: 5, sourcesScanned: ["smoke"], bytesScanned: 100, distinctCounts: {}, unreadableFiles: [] },
+      { noColor: true, integrity: null, rotation: rot },
+    );
+    check("Recommended actions subtracts confirmedDead from 'needs review' (5 pending - 2 dead = 3)",
+      out.includes("3 of 5 distinct values need review"));
+    check("Recommended actions explains the confirmedDead count as its own resolved category",
+      out.includes("2 confirmed inactive (verified rejected, or expired)"));
+    check("the By-rule table's confidence tag is UNTOUCHED by verification (aws_access_key_id stays [high], never downgraded)",
+      /\[.*high.*\]\s+AWS Access Key ID/.test(out.replace(/\x1b\[[0-9;]*m/g, "")));
   }
 
   // ── scan: rarity-based filtering for generic secrets (see src/rarity.js) ───

@@ -143,9 +143,15 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
   // raw values, while these entries dedupe fingerprints (which include the
   // basename, so one value in two differently-named files is two rotations to
   // track). Two counts under one word would read as a contradiction.
+  // "pending" keeps its literal ledger meaning here (not yet acked or
+  // dismissed): every entry below tagged pending really is, status-wise.
+  // confirmedDead is folded into this note, not into the count itself, so
+  // this line explains rather than contradicts "Recommended actions"
+  // above, which DOES subtract it from what still needs a look.
   const resolvedNote = [
     counts.acked > 0 ? `${counts.acked} acknowledged` : null,
     counts.dismissed > 0 ? `${counts.dismissed} dismissed` : null,
+    counts.confirmedDead > 0 ? `${counts.confirmedDead} confirmed inactive` : null,
   ].filter(Boolean).join(", ");
   push(paint(c.bold, "Rotation:") +
     ` ${counts.pending} of ${counts.distinct} rotation${counts.distinct === 1 ? "" : "s"} pending` +
@@ -411,17 +417,26 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
   // everything else is either already handled or a re-exposure of a value
   // already accounted for.
   if (rotation && rotation.counts.distinct > 0) {
-    const { pending, distinct, acked, dismissed } = rotation.counts;
+    const { pending, distinct, acked, dismissed, confirmedDead } = rotation.counts;
+    // confirmedDead is a PER-VALUE fact (a real --verify rejection, or a
+    // JWT's own signed exp claim already past), never an aggregate guess
+    // about a whole rule (see the Rotation section note: a rule's other,
+    // unverified findings say nothing either way). Subtracted here, not
+    // folded into `pending` itself, so --fail-on-find/--allow-acked and
+    // every other consumer of pending's original meaning are unaffected;
+    // this only changes what this one summary line tells a human to do.
+    const needsReview = pending - confirmedDead;
     push();
     push(paint(c.bold, "Recommended actions:"));
-    if (pending > 0) {
-      push(`  ${paint(c.yellow, "→")} ${pending} of ${distinct} distinct value${distinct === 1 ? "" : "s"} ${pending === 1 ? "needs" : "need"} review: rotate the real ones (residoo ack), dismiss the rest (residoo dismiss)`);
+    if (needsReview > 0) {
+      push(`  ${paint(c.yellow, "→")} ${needsReview} of ${distinct} distinct value${distinct === 1 ? "" : "s"} ${needsReview === 1 ? "needs" : "need"} review: rotate the real ones (residoo ack), dismiss the rest (residoo dismiss)`);
     } else {
       push(`  ${paint(c.green, "✓")} Nothing new to review; every distinct value here has already been triaged`);
     }
     const resolvedParts = [
       acked > 0 ? `${acked} acknowledged` : null,
       dismissed > 0 ? `${dismissed} dismissed` : null,
+      confirmedDead > 0 ? `${confirmedDead} confirmed inactive (verified rejected, or expired)` : null,
     ].filter(Boolean);
     if (resolvedParts.length > 0) {
       push(paint(c.dim, `    ${resolvedParts.join(", ")} already, no action needed (see Rotation below for which)`));

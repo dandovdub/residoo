@@ -6,13 +6,32 @@ const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("
 const { findPairedSecret } = require("./pairing");
 const { looksRandom } = require("./rarity");
 const { decodeJwtExpiryMs } = require("./jwtExpiry");
-const { isAwsCliAvailable, verifyAwsCredential } = require("./verify");
+const {
+  isAwsCliAvailable, verifyAwsCredential,
+  verifySlackToken, verifyOpenAiKey, verifyAnthropicKey, verifyGithubToken,
+} = require("./verify");
 
-// Never verify more than this many distinct AWS pairs in one scan: a
-// pathological transcript with dozens of distinct paired credentials should
-// not turn --verify into a long burst of outbound AWS calls. Real scans see
-// 0-2; this is a backstop, not the expected path.
-const MAX_AWS_VERIFICATIONS = 10;
+// Never verify more than this many distinct credentials of ONE vendor in a
+// single scan: a pathological transcript with dozens of distinct
+// credentials should not turn --verify into a long burst of outbound calls.
+// Real scans see 0-2 per vendor; this is a backstop, not the expected path.
+const MAX_VERIFICATIONS_PER_VENDOR = 10;
+
+// Every vendor whose credential is a single, unpaired bearer token: no
+// AWS-style "two halves make one credential" pairing step, so these all
+// share one collection/verification path below (see pendingSimpleVerifications).
+const SIMPLE_VERIFY_FNS = {
+  slack_token: verifySlackToken,
+  openai_key: verifyOpenAiKey,
+  anthropic_key: verifyAnthropicKey,
+  github_pat: verifyGithubToken,
+};
+const SIMPLE_VERIFY_VENDOR_LABEL = {
+  slack_token: "Slack's auth.test",
+  openai_key: "OpenAI's models endpoint",
+  anthropic_key: "Anthropic's models endpoint",
+  github_pat: "GitHub's user endpoint",
+};
 
 // Rule ids that findPairedSecret's window search applies to (see pairing.js):
 // AWS access key ids and STS session tokens both pair with the same shape
@@ -135,7 +154,7 @@ function safeName(file) { return path.basename(file); }
  * absolute path can itself carry a username or a project name the rest of
  * this report is careful never to print.
  */
-async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verifyAws = false } = {}) {
+async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
   // The decode pass (see decode.js) only applies high-confidence, vendor-
   // prefixed rules to decoded bytes: random binary that decodes to printable
@@ -165,6 +184,12 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // call; nothing in it is ever written to a finding until verification has
   // REPLACED the raw values with a status string.
   const pendingAwsVerifications = new Map();
+  // --verify only (see verify.js): ruleId -> (token value -> { refs }), for
+  // every SIMPLE_VERIFY_FNS vendor. Unlike AWS, none of these need pairing
+  // (the token itself is the complete credential), so this is simpler: one
+  // entry per distinct value per rule, `refs` accumulating every finding
+  // object that value produced.
+  const pendingSimpleVerifications = new Map();
 
   // One place raw matched text turns into a recorded finding: counts the
   // distinct value and pushes the redacted record. `extra` carries the
@@ -268,7 +293,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           const jwtExtra = (!suppressedReason && rule.id === "jwt")
             ? { jwtExpiresAtMs: decodeJwtExpiryMs(m[0]) }
             : null;
-          const akiaFinding = record(rule, m[0], relFile, file, lineNo,
+          const primaryFinding = record(rule, m[0], relFile, file, lineNo,
             mtimeMs,
             resolveConfidence(rule.id, m[0], rule.confidence, suppressedReason),
             suppressedReason,
@@ -282,12 +307,30 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           // re-echoed across several lines gets several finding objects, and
           // the eventual result is applied to every one of them, not only
           // the first.
-          if (verifyAws && secretFinding && rawPairedSecret) {
-            if (!pendingAwsVerifications.has(m[0]) && pendingAwsVerifications.size < MAX_AWS_VERIFICATIONS) {
+          if (verify && secretFinding && rawPairedSecret) {
+            if (!pendingAwsVerifications.has(m[0]) && pendingAwsVerifications.size < MAX_VERIFICATIONS_PER_VENDOR) {
               pendingAwsVerifications.set(m[0], { secretValue: rawPairedSecret, refs: [] });
             }
             const entry = pendingAwsVerifications.get(m[0]);
-            if (entry) entry.refs.push({ akiaFinding, secretFinding });
+            if (entry) entry.refs.push({ akiaFinding: primaryFinding, secretFinding });
+          }
+          // --verify, single-token vendors (Slack, OpenAI, Anthropic,
+          // GitHub): none of these need pairing (the value IS the complete
+          // credential), so queue every unsuppressed match directly, same
+          // dedup-by-value / accumulate-all-refs shape as the AWS map above,
+          // just one level deeper (keyed by rule id too, since several
+          // vendors share this path).
+          if (verify && !suppressedReason && SIMPLE_VERIFY_FNS[rule.id]) {
+            let byValue = pendingSimpleVerifications.get(rule.id);
+            if (!byValue) {
+              byValue = new Map();
+              pendingSimpleVerifications.set(rule.id, byValue);
+            }
+            if (!byValue.has(m[0]) && byValue.size < MAX_VERIFICATIONS_PER_VENDOR) {
+              byValue.set(m[0], { refs: [] });
+            }
+            const entry = byValue.get(m[0]);
+            if (entry) entry.refs.push(primaryFinding);
           }
         }
         if (m.index === rule.re.lastIndex) rule.re.lastIndex++; // guard zero-width matches
@@ -446,16 +489,22 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
 
   // --verify: runs once, here, after every file has been scanned, never
   // interleaved with the matching pass above. A real network call per
-  // distinct pairing, one at a time (not concurrent), so this is the one
+  // distinct credential, one at a time (not concurrent), so this is the one
   // place a scan's wall-clock time depends on something other than disk
   // I/O; that tradeoff only exists when a caller explicitly asked for it.
-  if (verifyAws && pendingAwsVerifications.size > 0) {
-    const applyResult = (refs, result) => {
+  // Same field names (verified/verifiedDetail) regardless of which vendor
+  // produced the result: rotation.js and report.js render them identically,
+  // and the finding's own ruleId already says which vendor answered.
+  const applyVerifyResult = (refs, result) => {
+    for (const ref of refs) {
+      ref.verified = result.status;
+      ref.verifiedDetail = result.detail;
+    }
+  };
+  if (verify && pendingAwsVerifications.size > 0) {
+    const applyPair = (refs, result) => {
       for (const ref of refs) {
-        ref.akiaFinding.awsVerified = result.status;
-        ref.akiaFinding.awsVerifiedDetail = result.detail;
-        ref.secretFinding.awsVerified = result.status;
-        ref.secretFinding.awsVerifiedDetail = result.detail;
+        applyVerifyResult([ref.akiaFinding, ref.secretFinding], result);
       }
     };
     if (!isAwsCliAvailable()) {
@@ -465,7 +514,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
         "Install it (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) to use --verify.\n"
       );
       const result = { status: "error", detail: "aws CLI not found on PATH" };
-      for (const { refs } of pendingAwsVerifications.values()) applyResult(refs, result);
+      for (const { refs } of pendingAwsVerifications.values()) applyPair(refs, result);
     } else {
       process.stderr.write(
         `residoo --verify: calling AWS sts:get-caller-identity for ${pendingAwsVerifications.size} ` +
@@ -474,7 +523,22 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       );
       for (const [accessKeyValue, { secretValue, refs }] of pendingAwsVerifications) {
         const result = verifyAwsCredential(accessKeyValue, secretValue);
-        applyResult(refs, result);
+        applyPair(refs, result);
+      }
+    }
+  }
+  if (verify) {
+    for (const [ruleId, byValue] of pendingSimpleVerifications) {
+      if (byValue.size === 0) continue;
+      const verifyFn = SIMPLE_VERIFY_FNS[ruleId];
+      process.stderr.write(
+        `residoo --verify: calling ${SIMPLE_VERIFY_VENDOR_LABEL[ruleId]} for ${byValue.size} ` +
+        "token(s) found in this scan. This is a real network request, using the exact " +
+        "token found in your transcript, one at a time.\n"
+      );
+      for (const [value, { refs }] of byValue) {
+        const result = await verifyFn(value);
+        applyVerifyResult(refs, result);
       }
     }
   }

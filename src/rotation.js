@@ -903,12 +903,13 @@ function renderRotation(findings, acks, dismissed = {}) {
         // payload. null for every non-JWT finding, and for a JWT that
         // failed to decode or carries no exp claim.
         jwtExpiresAtMs: null,
-        // --verify only (see verify.js): whether AWS itself accepted this
-        // exact credential. null unless the scan was run with --verify AND
-        // this value is one half of a demonstrated pair; residoo makes no
-        // network calls otherwise.
-        awsVerified: null,
-        awsVerifiedDetail: null,
+        // --verify only (see verify.js): whether the credential's own
+        // vendor (AWS, Slack) still accepts it. null unless the scan was
+        // run with --verify AND this value is one residoo knows how to
+        // check; residoo makes no network calls otherwise. Same two fields
+        // regardless of vendor: the ruleId already says which one answered.
+        verified: null,
+        verifiedDetail: null,
       };
       byFp.set(st.fingerprint, e);
     }
@@ -922,7 +923,7 @@ function renderRotation(findings, acks, dismissed = {}) {
     // credential was rotated or revoked, only that residoo hasn't seen it
     // paste anywhere more recently than this. residoo makes no network
     // calls in the default path, so this alone never checks a provider for
-    // whether a key is still live (see awsVerified above for the opt-in
+    // whether a key is still live (see verified above for the opt-in
     // exception, and jwtExpiresAtMs for the zero-network JWT case).
     if (typeof f.fileMTimeMs === "number" && (e.lastSeenMs === null || f.fileMTimeMs > e.lastSeenMs)) {
       e.lastSeenMs = f.fileMTimeMs;
@@ -940,26 +941,31 @@ function renderRotation(findings, acks, dismissed = {}) {
     if (e.jwtExpiresAtMs === null && typeof f.jwtExpiresAtMs === "number") {
       e.jwtExpiresAtMs = f.jwtExpiresAtMs;
     }
-    if (e.awsVerified === null && typeof f.awsVerified === "string") {
-      e.awsVerified = f.awsVerified;
-      e.awsVerifiedDetail = typeof f.awsVerifiedDetail === "string" ? f.awsVerifiedDetail : null;
+    if (e.verified === null && typeof f.verified === "string") {
+      e.verified = f.verified;
+      e.verifiedDetail = typeof f.verifiedDetail === "string" ? f.verifiedDetail : null;
     }
   }
 
   // Within a status tier, order by how demonstrated-urgent an entry is, not
   // just its rule id: a real pair (see pairing.js) is a DEMONSTRATED usable
-  // credential, and --verify confirming AWS still accepts it is stronger
-  // evidence still; either way this entry must never be the one the display
-  // cap (see renderRotationSection) pushes into "N more." Proven dead
-  // credentials sort the other direction, LOWER than an ordinary unpaired
-  // finding: --verify confirming AWS rejected it, or a JWT's own signed exp
-  // claim already in the past, is proof this specific value needs no
-  // action, not just an absence of proof it does.
+  // credential, and --verify confirming the vendor still accepts it is
+  // stronger evidence still; either way this entry must never be the one
+  // the display cap (see renderRotationSection) pushes into "N more."
+  //
+  // isConfirmedDead is the other direction, PROOF rather than a guess:
+  // --verify got a real "no" from the vendor, or a JWT's own signed exp
+  // claim is already in the past (decoded locally, no network call, always
+  // attempted; see jwtExpiry.js). Deliberately NOT "unverified" or "no
+  // pairing found": those mean residoo doesn't know, a weaker claim than
+  // residoo knows this one specific value needs no action. Sorts LOWER
+  // than an ordinary finding within its tier, and (see confirmedDead below)
+  // is subtracted from what the report tells a human still needs a look.
+  const isConfirmedDead = (e) => e.verified === "invalid" || (e.jwtExpiresAtMs !== null && e.jwtExpiresAtMs < Date.now());
   const priorityScore = (e) => {
-    if (e.awsVerified === "active") return -2;
+    if (e.verified === "active") return -2;
     if (e.pairedSecretPreview !== null || e.pairedAccessKeyPreview !== null) return -1;
-    if (e.awsVerified === "invalid") return 1;
-    if (e.jwtExpiresAtMs !== null && e.jwtExpiresAtMs < Date.now()) return 1;
+    if (isConfirmedDead(e)) return 1;
     return 0;
   };
   const entries = [...byFp.values()].sort((a, b) => {
@@ -970,7 +976,16 @@ function renderRotation(findings, acks, dismissed = {}) {
     return a.fingerprint < b.fingerprint ? -1 : 1;
   });
 
-  return { counts, entries };
+  // A per-VALUE fact, never rolled up into a per-RULE label: only the
+  // specific values residoo actually checked (or that carry their own
+  // signed exp claim) ever count here, so this can never overstate what was
+  // proven about the rest of a rule's unverified findings. Counted only
+  // among PENDING entries: one already acked or dismissed is excluded from
+  // "needs review" for its own reason already, and double-subtracting would
+  // make the arithmetic in the report not add up.
+  const confirmedDead = entries.filter((e) => e.status === "pending" && isConfirmedDead(e)).length;
+
+  return { counts: { ...counts, confirmedDead }, entries };
 }
 
 module.exports = {
