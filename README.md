@@ -10,6 +10,7 @@
 
 [![npm version](https://img.shields.io/npm/v/residoo)](https://www.npmjs.com/package/residoo)
 [![CI](https://github.com/dandovdub/residoo/actions/workflows/ci.yml/badge.svg)](https://github.com/dandovdub/residoo/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dandovdub/residoo/badge)](https://scorecard.dev/viewer/?uri=github.com/dandovdub/residoo)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node >=18](https://img.shields.io/badge/node-%3E%3D18-339933)](package.json)
 [![runtime dependencies: 0](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)](package.json)

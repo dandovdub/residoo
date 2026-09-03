@@ -83,7 +83,16 @@ the kind of thing worth impersonating.
   built it; check the provenance badge on the npm page. One honest
   exception, stated rather than hidden: the very first release (v0.1.0)
   was a manual upload to claim the name, so provenance starts at the first
-  CI-published version after it.
+  CI-published version after it. Concretely, this is npm's own [Trusted
+  Publishing](https://docs.npmjs.com/trusted-publishers): no stored token
+  anywhere, GitHub mints a short-lived, workflow-scoped OIDC credential per
+  release, and the resulting provenance statement is signed and published
+  to the public [Sigstore transparency log](https://search.sigstore.dev/),
+  independently checkable by anyone, not just trusted on residoo's word.
+  In [SLSA](https://slsa.dev/) terms that's Build Level 2 (a hosted,
+  authenticated build platform generates non-forgeable provenance); Level
+  3 (fully hermetic, isolated builds) isn't implemented yet, stated
+  plainly rather than implied.
 - The only PyPI package is **`residoo`**: a thin official launcher whose
   entire job is running the npm CLI via `npx`. Its source lives in this
   repository under `pypi/`. It exists partly so nobody else can hold the
