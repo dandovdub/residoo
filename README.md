@@ -40,6 +40,19 @@ Values are redacted in this report (first/last 4 characters only). Nothing
 scanned here left your machine; residoo makes no network calls.
 ```
 
+That's one snapshot. `residoo watch` runs the same engine continuously and
+alerts the moment a new secret lands, instead of waiting for you to
+remember to scan again; no other tool in the field has anything like it
+(see [Watch: continuous scanning](#watch-continuous-scanning)):
+
+```
+$ residoo watch
+watching 43 sources, 118 files · polling every 5s
+
+2026-09-03 14:02:11  [high]  AWS Access Key ID  AKIA****ABCD
+  claude-code · session-9f2c.jsonl:214 · rf1-8a3e91  Rotate: https://.../access_keys
+```
+
 > [!NOTE]
 > gitleaks and trufflehog scan **commits**. residoo scans the **conversation
 > transcripts** an AI agent leaves behind: a different, previously
