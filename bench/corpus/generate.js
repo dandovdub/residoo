@@ -41,7 +41,13 @@ const fs = require('fs');
 const path = require('path');
 
 const SEED = 20260902;
-const CORPUS_VERSION = '1.0.0';
+// 1.1.0: private-key-block now uses a real, structurally-valid (but
+// never-used) OpenSSH key body instead of random bytes, and a subset of
+// aws-access-key-id plants are now paired with a nearby secret key --
+// closing GitHub issues #10 and #11, both disclosed corpus-fidelity gaps
+// in bench/RESULTS.md. Same SEED; content differs from 1.0.0 because the
+// generator itself changed, not because determinism was broken.
+const CORPUS_VERSION = '1.1.0';
 
 const OUT_ROOT = path.resolve(process.argv[2] || __dirname);
 const DATA_ROOT = path.join(OUT_ROOT, 'data');
@@ -92,6 +98,58 @@ const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
 const b64url = (s) => Buffer.from(s, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const wrap76 = (s) => (s.match(/.{1,76}/g) || []).join('\n');
 
+/*
+ * Two real ed25519 OpenSSH private keys, each generated ONCE with
+ * `ssh-keygen -t ed25519 -N ""` on 2026-09-03, passphrase-file deleted
+ * immediately after extracting the PEM text. Neither was ever used for
+ * anything, associated with any real system or account, or derived from
+ * the seeded PRNG. Embedded as fixed literals -- the same "canonical fixed
+ * example" pattern this file already uses for AWS's AKIAIOSFODNN7EXAMPLE
+ * below -- specifically so the corpus stays byte-identical from SEED
+ * (this file's own determinism invariant, stated at the top) while giving
+ * a STRUCTURE-validating detector (confirmed: TruffleHog's PrivateKey
+ * detector parses the actual openssh-key-v1 binary format, not just the
+ * BEGIN/END markers) something that genuinely decodes as one, closing a
+ * corpus-fidelity gap disclosed in bench/RESULTS.md ("a corpus-fidelity
+ * gap, not a tool bug"). A per-seed *pure-PRNG* key would need a full
+ * from-scratch implementation of OpenSSH's key-blob encoding to stay
+ * deterministic; two fixed real keys are simpler, exactly as safe (an
+ * unused key authenticates nothing), and sufficient for a "does this
+ * parse as a structurally valid key" check either way. TWO, not one: the
+ * generator's own self-check caught this at first pass -- the family has
+ * two PLANT-PLAIN sites, and a single shared body produced a hard-failing
+ * "duplicate planted value", since two sites can't share one identity.
+ */
+const REAL_UNUSED_OPENSSH_ED25519_KEY_BODIES = [
+  [
+    'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW',
+    'QyNTUxOQAAACC8xxFRekKiQvKP1nV+H2szwYDfaqurrUTfq8gXkKojZAAAAKgidEsmInRL',
+    'JgAAAAtzc2gtZWQyNTUxOQAAACC8xxFRekKiQvKP1nV+H2szwYDfaqurrUTfq8gXkKojZA',
+    'AAAEDKT3IOwA3QwLRXOBpyE2gXuL3rPfXr9yhI/gH+rYAeFrzHEVF6QqJC8o/WdX4fazPB',
+    'gN9qq6utRN+ryBeQqiNkAAAAInJlc2lkb28tYmVuY2gtc3ludGhldGljLW5ldmVyLXVzZW',
+    'QBAgM=',
+  ],
+  [
+    'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW',
+    'QyNTUxOQAAACCHmUIKl5vC3mmXjcDnyvhhJZ1avQYgyltUiYzDxFE8lgAAAKgO+xTCDvsU',
+    'wgAAAAtzc2gtZWQyNTUxOQAAACCHmUIKl5vC3mmXjcDnyvhhJZ1avQYgyltUiYzDxFE8lg',
+    'AAAEArYwM/yxdTr5F+1xm0kcX2adESVR7DJGXjeNWA+CVcroeZQgqXm8LeaZeNwOfK+GEl',
+    'nVq9BiDKW1SJjMPEUTyWAAAAJHJlc2lkb28tYmVuY2gtc3ludGhldGljLW5ldmVyLXVzZW',
+    'QtMgE=',
+  ],
+];
+// Cycled by call order, not chosen randomly: with only 2 distinct bodies
+// and 2 call sites, a PRNG pick() risks the exact same collision the
+// generator just caught. A plain counter guarantees distinctness
+// regardless of how many times this family gets called, deterministically
+// (call order is fixed given a fixed SEED, per this file's own invariant).
+let privateKeyBodyCallCount = 0;
+function nextPrivateKeyBody() {
+  const body = REAL_UNUSED_OPENSSH_ED25519_KEY_BODIES[privateKeyBodyCallCount % REAL_UNUSED_OPENSSH_ED25519_KEY_BODIES.length];
+  privateKeyBodyCallCount++;
+  return body;
+}
+
 /* ------------------------------------------------------------------ *
  * Fake-secret factories, one per rule family. Pattern-true, never real.
  * Each returns { value, grep, envLine } where:
@@ -99,22 +157,60 @@ const wrap76 = (s) => (s.match(/.{1,76}/g) || []).join('\n');
  *   grep    a contiguous substring guaranteed to appear literally and
  *           unescaped on the raw JSONL line, for exact-match scoring
  *   envLine a natural way the value appears in env/config text
+ *   renderText  optional: the full text actually injected into the
+ *           transcript when it differs from `value` (multiline families).
+ *           Falls back to `value` when absent, so private-key-block (whose
+ *           identity and displayed text are the same PEM block) needs no
+ *           change. aws-access-key-id's paired case is the first family
+ *           where they differ: `value`/`grep` stay the bare access key id
+ *           (unchanged scored identity, so truth.json's "distinct AWS
+ *           credentials" count still means what it always meant), while
+ *           `renderText` is the id line PLUS a companion secret line --
+ *           the secret is never itself a separately-scored planted
+ *           instance; it rides on the id's existing plant via the
+ *           scorer's own file+line tier (bench/harness/score.js), which
+ *           credits or ignores same-line findings without penalizing
+ *           extras, so nothing needs to know about it as a distinct site.
  * ------------------------------------------------------------------ */
 
 const FAMILIES = {
-  'aws-access-key-id': () => {
+  // opts.paired (aws-access-key-id only): pair a nearby secret access key
+  // with the id, for a SUBSET of AWS plant sites (github.com issue #11).
+  // TruffleHog, Kingfisher, and Betterleaks all score 0/8 on this family
+  // today because their AWS detectors are pair-oriented by design (probe-
+  // verified in bench/RESULTS.md: a bare id alone is not reported; the
+  // same id IS reported once a secret-shaped value sits nearby) -- a
+  // defensible threat model the corpus never tested. residoo's own
+  // pairing.js exists for exactly this shape and was equally untested.
+  'aws-access-key-id': (opts) => {
     // Real AWS access key ids are base32 after the prefix (A-Z, 2-7).
     // A looser charset (0/1/8/9) would be pattern-FALSE: charset-correct
     // scanners rightly reject it and the corpus would penalize them unfairly.
     const v = 'AKIA' + chars(UP + '234567', 16);
-    return { value: v, grep: v, envLine: `AWS_ACCESS_KEY_ID=${v}` };
+    const envLine = `AWS_ACCESS_KEY_ID=${v}`;
+    if (opts && opts.paired) {
+      // 40 chars from A-Za-z0-9+/, no padding -- the real AWS secret-key
+      // shape, and the exact candidate shape residoo's own pairing.js
+      // (CANDIDATE_RE) searches for near a confirmed access key id.
+      const secret = chars(ALNUM + '+/', 40);
+      const renderText = `${envLine}\nAWS_SECRET_ACCESS_KEY=${secret}`;
+      return { value: v, grep: v, envLine, multiline: true, renderText, pairedSecret: secret };
+    }
+    return { value: v, grep: v, envLine };
   },
   'github-pat': () => {
     const v = 'ghp_' + chars(ALNUM, 36);
     return { value: v, grep: v, envLine: `GITHUB_TOKEN=${v}` };
   },
   'private-key-block': () => {
-    const body = [chars(B64URLCS.replace('-_', '') + '+/', 70), chars(ALNUM + '+/', 70), chars(ALNUM + '+/', 70), chars(ALNUM + '+/', 28) + '='];
+    // Was a purely random base64 body -- shape-true (right marker, right
+    // line width) but not structurally valid OpenSSH key material, which
+    // under-tested any STRUCTURE-validating detector (see the disclosure
+    // on REAL_UNUSED_OPENSSH_ED25519_KEY_BODIES above). Each plant site
+    // gets a DIFFERENT one of the two fixed bodies, cycled deterministically
+    // by call order (nextPrivateKeyBody), so the family's two distinct
+    // sites stay distinct values, same as every other family here.
+    const body = nextPrivateKeyBody();
     const v = '-----BEGIN OPENSSH PRIVATE KEY-----\n' + body.join('\n') + '\n-----END OPENSSH PRIVATE KEY-----';
     return { value: v, grep: body[1], envLine: v, multiline: true };
   },
@@ -411,22 +507,24 @@ const BENIGN_BUILDERS = [testRunBenign, readEditBenign, mcpBenign, qaBenign, err
  * value physically lives, plus metadata for the manifest.
  * ------------------------------------------------------------------ */
 
-function makeSecret(family) { return FAMILIES[family](); }
+function makeSecret(family, opts) { return FAMILIES[family](opts); }
 
 function envFileLines(sec, family) {
   const before = ['NODE_ENV=staging', 'PORT=4000', 'LOG_LEVEL=debug'];
   const after = ['FEATURE_FLAGS=checkout_v2,new_nav', 'CACHE_TTL=300'];
-  if (sec.multiline) return [...before, ...sec.value.split('\n'), ...after];
+  if (sec.multiline) return [...before, ...(sec.renderText || sec.value).split('\n'), ...after];
   return [...before, sec.envLine, ...after];
 }
 
 function emitPlain(s, task) {
-  const sec = makeSecret(task.family);
+  // Only aws-access-key-id's factory reads opts; every other family
+  // ignores the extra argument, same as any unused function parameter.
+  const sec = makeSecret(task.family, { paired: task.family === 'aws-access-key-id' });
   let recordIndex;
   let vehicle = task.vehicle;
   if (task.family === 'private-key-block' && vehicle === 'stdout') vehicle = 'file_read';
   if (vehicle === 'user_paste') {
-    const body = sec.multiline ? sec.value : sec.envLine;
+    const body = sec.multiline ? (sec.renderText || sec.value) : sec.envLine;
     recordIndex = s.user(`I keep getting 401s from ${pick(SVC)} on staging. Here is the relevant part of my config, does the format look right?\n\n${body}\n\nNothing else changed since Friday.`);
     s.assistantText('The value format looks correct. The 401 is more likely the clock skew on the staging box; check ntp first. Also consider rotating that credential since it was just pasted into this chat.');
   } else if (vehicle === 'file_read') {
@@ -447,7 +545,15 @@ function emitPlain(s, task) {
     recordIndex = s.bash(cmd, out);
     s.assistantText('Compared with prod: two variables differ, the flag list and the cache TTL. The credentials are environment specific as expected.');
   }
-  s.registerPlant({ class: task.class, family: task.family, vehicle, value: sec.value, grep: sec.grep, recordIndexes: [recordIndex], occurrences: 1, multiline: !!sec.multiline });
+  s.registerPlant({
+    class: task.class, family: task.family, vehicle, value: sec.value, grep: sec.grep,
+    recordIndexes: [recordIndex], occurrences: 1, multiline: !!sec.multiline,
+    // Documentation only, not a separately-scored site: the paired secret
+    // (when present) rides on this SAME plant via the scorer's file+line
+    // tier, since both lines land on the same physical JSONL record. See
+    // the FAMILIES doc comment above for the full reasoning.
+    ...(sec.pairedSecret ? { pairedSecret: sec.pairedSecret } : {}),
+  });
 }
 
 function emitJsonNested(s, task) {
@@ -715,6 +821,7 @@ function main() {
         ...(p.encoded ? { encoded: p.encoded } : {}),
         ...(p.placeholderStyle ? { placeholderStyle: p.placeholderStyle } : {}),
         ...(p.multiline ? { multiline: true } : {}),
+        ...(p.pairedSecret ? { pairedSecret: p.pairedSecret } : {}),
         file: rel, lines: p.recordIndexes.map((i) => i + 1),
         occurrences: p.occurrences, sessionId: s.sessionId,
       });
@@ -846,6 +953,9 @@ function main() {
       ...(p.multiline ? { multiline: true } : {}),
       ...(p.sessionId ? { sessionId: p.sessionId } : {}),
       ...(p.notes ? { notes: p.notes } : {}),
+      // Documentation only -- see the FAMILIES doc comment on aws-access-
+      // key-id's paired case: never a separately-scored planted instance.
+      ...(p.pairedSecret ? { pairedSecret: p.pairedSecret } : {}),
     })),
     chaff: chaffEntries,
   };

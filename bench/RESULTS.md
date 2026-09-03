@@ -395,7 +395,80 @@ row in the table above and every other tool's scored rows reproduced
 exactly (the committed scoreboard files are that third run, labeled
 0.3.2), so the table stands for both versions. npm latest is 0.3.2.
 
-## Egress during the scan (the second axis)
+## Corpus v1.1.0: two disclosed fidelity gaps closed (2026-09-03)
+
+Two corpus limitations disclosed earlier in this document ("residoo's own
+weaknesses" and the TruffleHog private-key note above) were filed as
+public issues (#10, #11) and closed by fixing the corpus generator itself,
+not any scanner:
+
+- **Private-key plants now use a real, structurally-valid (but never used)
+  OpenSSH key body**, generated once with `ssh-keygen`, instead of random
+  base64. The random body was shape-true (right marker, right line width)
+  but did not decode as `openssh-key-v1`, which is exactly what
+  TruffleHog's PrivateKey detector validates: a corpus-fidelity gap, not
+  a TruffleHog miss, per the disclosure earlier in this document. Two
+  distinct fixed keys are used (one per plant site), cycled by call order,
+  so the family's two sites keep the same "each planted value is unique"
+  property every other family already has.
+- **A subset of AWS access-key-id plants (2 of 8) are now paired with a
+  nearby secret access key**, matching how a real leaked env dump looks.
+  TruffleHog, Kingfisher, and Betterleaks all scored 0/8 on this family
+  because their AWS detectors are pair-oriented by design (probe-verified
+  earlier in this document: a bare id alone is not reported; the same id
+  IS reported once a secret sits nearby): a defensible threat model the
+  corpus never tested. residoo's own `pairing.js` mechanism was equally
+  untested by this family. The other 6 AWS sites stay bare-id-only, so the
+  "id alone" case is still covered.
+
+Both fixes keep the corpus's determinism invariant (same SEED, generator
+code changed intentionally, corpus version bumped 1.0.0 → 1.1.0, exactly
+what that version constant exists for). The full 12-invocation reproduce
+sequence was re-run (all 8 scored tools, 3 dual-mode egress observations,
+the ggshield refusal), confirming the egress positive control first.
+
+Outcomes, closing exactly the two disclosed gaps and nothing else assumed:
+
+| family | before | after |
+|---|---|---|
+| TruffleHog private-key | 0/2 | **2/2** |
+| TruffleHog aws | 0/8 | **2/8** |
+| Betterleaks aws | 0/8 | **2/8** |
+| Kingfisher aws | 0/8 | **2/8** |
+| detect-secrets aws | 4/8 | **5/8** |
+| residoo aws / private-key | 8/8 / 2/2 (already full) | unchanged |
+
+residoo's own row is unaffected end to end: still 45/45 (100%) distinct
+credentials across all claimed classes, 100% precision, none-observed
+egress. The two fixed gaps were never residoo's own weakness, and the
+new AWS pairing site was confirmed detected by residoo's own scan before
+the full rerun (`node bin/residoo.js scan --project bench/corpus/data`
+against the regenerated fixture, `pairedSecretPreview` present on both
+sites).
+
+**Disclosed honestly, not hidden**: regenerating the corpus reshuffles
+every value downstream of the two changed factories, since all randomness
+in the generator flows through one sequential seeded stream (stated in
+`bench/corpus/generate.js`'s own header): a corpus-VERSION change, like
+any other code change, is not expected to hold every unrelated byte fixed,
+only to be deterministic FROM that version's code and seed. Two visible,
+checked, and explained side effects:
+- Total chaff instance count moved 45 → 44 (a downstream random count
+  decision shifted with the reshuffled stream; not a chaff-generation
+  logic change).
+- detect-secrets' `transcript-split` value recall moved 3/3 → 2/3 for a
+  documented reason already disclosed above in this file: its split-class
+  credit comes from an entropy heuristic (`Base64HighEntropyString`)
+  sensitive to the exact random bytes at that site, which are now
+  different (still pattern-true, just different). TruffleHog's precision
+  moved 100% → 97% (1 new unplanted finding); checked directly against
+  both new AWS pair sites specifically, neither produced an extra
+  TruffleHog finding, and traced instead to an `NpmToken` finding on an
+  unrelated file, the same reshuffling effect on a different family's
+  now-different random content, not a consequence of the AWS or
+  private-key fixes.
+
+Every other row for every other tool reproduced unchanged.
 
 Monitored per scan, spawn to exit, by two dynamic layers: a refuse-and-log proxy trap
 (all proxy env pinned to it) and lsof polling of the scanner's own process tree at
