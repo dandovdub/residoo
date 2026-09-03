@@ -652,29 +652,36 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     // needs saying once; per-vendor detail becomes a compact count table.
     // Deliberately not gated on isTTY like the scan spinner: a script
     // piping through a pager or into a log still needs this disclosure.
+    //
+    // Three columns, not two: an earlier version of this table showed only
+    // the vendor name ("AWS  2"), which answers "how many" but drops the
+    // one thing a security-conscious user actually wants to check before
+    // agreeing to real outbound calls, namely WHICH endpoint each vendor's
+    // credential gets sent to. Every vendor's own SIMPLE_VERIFY_VENDOR_LABEL
+    // is already written "<Vendor>'s <endpoint>", so split it into the two
+    // columns rather than maintaining a second, parallel description.
     const rows = [];
     if (pendingAwsVerifications.size > 0 && awsAvailable) {
-      rows.push(["AWS", pendingAwsVerifications.size]);
+      rows.push(["AWS", "sts:get-caller-identity", pendingAwsVerifications.size]);
     }
     if (pendingPlanetScaleVerifications.size > 0) {
-      rows.push(["PlanetScale", pendingPlanetScaleVerifications.size]);
+      rows.push(["PlanetScale", "organizations endpoint", pendingPlanetScaleVerifications.size]);
     }
     for (const [ruleId, byValue] of pendingSimpleVerifications) {
       if (byValue.size === 0) continue;
-      // Vendor labels are consistently written "<Vendor>'s <endpoint
-      // description>" (see SIMPLE_VERIFY_VENDOR_LABEL above); take the
-      // part before "'s" rather than maintaining a second, parallel map
-      // of the same names.
-      const vendor = SIMPLE_VERIFY_VENDOR_LABEL[ruleId].split("'s ")[0];
-      rows.push([vendor, byValue.size]);
+      const [vendor, endpoint] = SIMPLE_VERIFY_VENDOR_LABEL[ruleId].split("'s ");
+      rows.push([vendor, endpoint, byValue.size]);
     }
     if (rows.length > 0) {
-      const width = Math.max(...rows.map(([label]) => label.length));
-      const table = rows.map(([label, count]) => `    ${label.padEnd(width)}  ${count}`).join("\n");
+      const vendorWidth = Math.max(...rows.map(([vendor]) => vendor.length));
+      const endpointWidth = Math.max(...rows.map(([, endpoint]) => endpoint.length));
+      const table = rows
+        .map(([vendor, endpoint, count]) => `    ${vendor.padEnd(vendorWidth)}  ${endpoint.padEnd(endpointWidth)}  ${count}`)
+        .join("\n");
       process.stderr.write(
         "residoo --verify: checking whether these credentials are still active. Real network " +
-        "calls, one per vendor's own API, using the exact value found in your transcript, one at " +
-        "a time. Nothing is cached or sent anywhere but the vendor that issued it.\n\n" +
+        "calls, using the exact value found in your transcript, one at a time. Nothing is cached " +
+        "or sent anywhere but the endpoint listed below.\n\n" +
         table + "\n\n"
       );
     }
