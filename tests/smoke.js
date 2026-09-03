@@ -1066,6 +1066,68 @@ async function main() {
       !!sarifEmpty && Array.isArray(sarifEmpty.runs[0].results) && sarifEmpty.runs[0].results.length === 0);
   }
 
+  // ── version/date banner + progress reporter (see src/report.js) ────────────
+  // Motivated directly by a real support question: "why don't I see the new
+  // dates feature" turned out to be an npx cache serving a stale version,
+  // which a build/date banner in the report itself would have made obvious
+  // without needing to ask at all.
+  {
+    const { version: pkgVersion } = require("../package.json");
+    const { render, renderJson, makeProgressReporter } = require("../src/report");
+    const emptyResultShape = { findings: [], filesScanned: 0, sourcesScanned: [], bytesScanned: 0, suppressedCount: 0, distinctCounts: {}, unreadableFiles: [] };
+    const bannerLine = render(emptyResultShape, { noColor: true }).split("\n")[0];
+    check("banner: plain report's first line names the exact running version",
+      new RegExp(`^residoo v${pkgVersion.replace(/\./g, "\\.")} · scanned \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$`).test(bannerLine));
+    check("banner: the timestamp is 'YYYY-MM-DD HH:MM' and within the last minute (real wall clock, not a placeholder)",
+      (() => {
+        const m = bannerLine.match(/scanned (\d{4}-\d{2}-\d{2} \d{2}:\d{2})$/);
+        if (!m) return false;
+        const parsed = new Date(m[1].replace(" ", "T") + ":00");
+        return Math.abs(Date.now() - parsed.getTime()) < 60_000;
+      })());
+    const jsonOut = JSON.parse(renderJson({ ...emptyResultShape }));
+    check("banner: --json carries the same version and a real ISO scannedAt",
+      jsonOut.residooVersion === pkgVersion &&
+      Math.abs(Date.now() - new Date(jsonOut.scannedAt).getTime()) < 60_000);
+
+    // Progress reporter: gated on stderr.isTTY, which cannot be faked as a
+    // real terminal in an automated test — mocked here (isTTY plus write)
+    // the same way, in spirit, project-artifacts.js's own tests mock
+    // node:sqlite's absence: exercising both branches of a feature-detected
+    // code path directly rather than only whichever one the test runner's
+    // own environment happens to hit.
+    const originalIsTTY = process.stderr.isTTY;
+    const originalWrite = process.stderr.write;
+    try {
+      let written = [];
+      process.stderr.isTTY = true;
+      process.stderr.write = (s) => { written.push(s); return true; };
+      const { onProgress, stop } = makeProgressReporter();
+      check("progress: onProgress is a function when stderr is a TTY", typeof onProgress === "function");
+      onProgress({ source: "claude-code" });
+      const afterFirst = written.length;
+      onProgress({ source: "claude-code" }); // fired immediately after: must be throttled away
+      check("progress: rapid successive calls are throttled, not one write per file",
+        afterFirst === 1 && written.length === afterFirst);
+      check("progress: the written frame never touches stdout, only stderr (mocked here)",
+        written.every((s) => typeof s === "string"));
+      stop();
+      check("progress: stop() clears the line (a final write consisting only of a blank overwrite)",
+        written.length === afterFirst + 1 && /^\r\s+\r$/.test(written[written.length - 1]));
+
+      written = [];
+      process.stderr.isTTY = false;
+      const nonTty = makeProgressReporter();
+      check("progress: off a TTY, onProgress is null (a true no-op, not a silently-discarding function)",
+        nonTty.onProgress === null);
+      nonTty.stop(); // must not throw
+      check("progress: off a TTY, stop() is a safe no-op that writes nothing", written.length === 0);
+    } finally {
+      process.stderr.isTTY = originalIsTTY;
+      process.stderr.write = originalWrite;
+    }
+  }
+
   // ── keychain: --seal --keychain / unseal --keychain (see src/keychain.js) ──
   // CI runs on ubuntu-latest without secret-tool installed, so this feature-
   // detects exactly like the sqlite-backed sources above rather than

@@ -29,6 +29,43 @@ function ageDays(mtimeMs) {
   return Math.max(0, Math.floor((Date.now() - mtimeMs) / 86400000));
 }
 
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/**
+ * A minimal progress indicator for the scan phase, wired to scan()'s own
+ * onProgress callback. Writes to STDERR only, never stdout: --json/--sarif
+ * consumers pipe stdout into a parser, and a spinner corrupting that would
+ * be a much worse bug than not having one. Gated on stderr actually being a
+ * TTY, so it is a complete no-op under redirection, piping, or CI, exactly
+ * the contexts where carriage-return spam in a captured log would be
+ * useless or actively annoying, not merely invisible. `stop()` clears the
+ * line so whatever prints next (the report, on stdout, is unaffected
+ * either way since this never touched stdout, but a plain-text stderr
+ * reader watching live should not see a stale line lingering) starts
+ * clean.
+ */
+function makeProgressReporter() {
+  if (!process.stderr.isTTY) return { onProgress: null, stop() {} };
+  let count = 0;
+  let lastWriteMs = 0;
+  let lastLineLen = 0;
+  let frame = 0;
+  const write = (s) => {
+    process.stderr.write("\r" + " ".repeat(lastLineLen) + "\r" + s);
+    lastLineLen = s.length;
+  };
+  const onProgress = ({ source }) => {
+    count++;
+    const now = Date.now();
+    if (now - lastWriteMs < 80) return; // throttled: avoid flicker on a fast scan
+    lastWriteMs = now;
+    frame = (frame + 1) % SPINNER_FRAMES.length;
+    write(`${SPINNER_FRAMES[frame]} scanning… ${count} file${count === 1 ? "" : "s"} checked (${source})`);
+  };
+  const stop = () => { if (lastLineLen > 0) process.stderr.write("\r" + " ".repeat(lastLineLen) + "\r"); };
+  return { onProgress, stop };
+}
+
 // File NAMES are attacker-controllable text headed for a terminal: in
 // --project mode a hostile checkout chooses its own filenames, and a name
 // carrying raw ESC bytes could clear the screen or overwrite the findings
@@ -160,10 +197,22 @@ function renderIntegrity(integrity, { noColor = false } = {}) {
   return lines.join("\n");
 }
 
+/** "YYYY-MM-DD HH:MM" in local time — matches the user's own system clock, not UTC. */
+function localTimestamp(d) {
+  const p2 = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+
 function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount = 0, distinctCounts = {}, unreadableFiles = [] }, { noColor = false, integrity = null, rotation = null } = {}) {
   const paint = makePaint(noColor);
   const lines = [];
   const push = (s = "") => lines.push(s);
+
+  // Which build ran and when, up front: a report pasted or screenshotted
+  // hours later (or a "why don't I see feature X" question) should never
+  // require asking "what version were you even running."
+  const { version } = require("../package.json");
+  push(paint(c.dim, `residoo v${version} · scanned ${localTimestamp(new Date())}`));
 
   const suppressedNote = suppressedCount > 0
     ? paint(c.dim, ` (${suppressedCount} more matched but looked like placeholder/example text; see --include-suppressed)`)
@@ -271,8 +320,11 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
 // way, since it is derived from already-redacted material and is what
 // "residoo ack" takes.
 function renderJson(result, integrity = null, rotation = null) {
+  const { version } = require("../package.json");
   return JSON.stringify(
     {
+      residooVersion: version,
+      scannedAt: new Date().toISOString(),
       summary: {
         findingCount: result.findings.length,
         filesScanned: result.filesScanned,
@@ -398,4 +450,4 @@ function renderSarif(result) {
   }, null, 2);
 }
 
-module.exports = { render, renderIntegrity, renderRotationSection, renderJson, renderSarif };
+module.exports = { render, renderIntegrity, renderRotationSection, renderJson, renderSarif, makeProgressReporter };

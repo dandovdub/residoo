@@ -5,7 +5,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { availableSources, ALL_SOURCES } = require("./sources");
 const { scan, emptyResult } = require("./scan");
-const { render, renderIntegrity, renderJson, renderSarif } = require("./report");
+const { render, renderIntegrity, renderJson, renderSarif, makeProgressReporter } = require("./report");
 const { checkIntegrity } = require("./integrity");
 const {
   ROTATION_GUIDANCE, guidanceFor, loadAcks, ackFinding, renderRotation,
@@ -494,7 +494,9 @@ async function main(argv) {
     return failOnFind && integrityWarnCount(integrity) > 0 ? 1 : 0;
   }
 
-  const result = await scan({ sources, includeNoisy, includeSuppressed });
+  const progress = makeProgressReporter();
+  const result = await scan({ sources, includeNoisy, includeSuppressed, onProgress: progress.onProgress });
+  progress.stop();
   const integrity = wantsIntegrity ? runIntegrity() : null;
   const rotation = renderRotation(result.findings, acks);
   process.stdout.write((wantsSarif
