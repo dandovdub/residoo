@@ -67,8 +67,16 @@ const PATTERNS = [
     re: /\beyJ[A-Za-z0-9_-]{10,2000}\.eyJ[A-Za-z0-9_-]{10,20000}\.[A-Za-z0-9_-]{10,2000}\b/g },
   { id: "connection_string_with_password", label: "Database connection string with embedded password", confidence: "high",
     re: /\b(postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:@\/]{1,255}:[^\s@\/]{3,255}@[^\s\/]{1,255}/g },
+  // \b alone missed a real shape: transcript text that embeds a literal
+  // newline as a JSON string escape ("\n", two characters: backslash then
+  // the letter n) leaves that trailing "n" glued directly to the "A" of
+  // "Authorization" with no actual whitespace between them on the scanned
+  // line, and \b never fires between two word characters. (?<=\\n) is the
+  // fix: it also accepts the position right after a literal "\n" escape as
+  // a valid left edge, alongside \b's normal boundary — found via this
+  // project's own benchmark (bench/RESULTS.md), not a hypothetical.
   { id: "bearer_header", label: "Authorization: Bearer header with a real-looking token", confidence: "medium",
-    re: /\bauthorization["']?\s*[:=]\s*["']?bearer\s+[A-Za-z0-9._-]{16,1000}/gi },
+    re: /(?:\b|(?<=\\n))authorization["']?\s*[:=]\s*["']?bearer\s+[A-Za-z0-9._-]{16,1000}/gi },
   { id: "refresh_token_field", label: "refresh_token field", confidence: "medium",
     re: /"refresh_token"\s*:\s*"[^"\s]{20,4000}"/gi },
   { id: "access_token_field", label: "access_token field", confidence: "medium",

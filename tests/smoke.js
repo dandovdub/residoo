@@ -1193,6 +1193,40 @@ async function main() {
     }
   }
 
+  // ── scan: bearer_header, and a real \b-defeating bug this project's own
+  // benchmark (bench/) caught: a transcript line that embeds a literal
+  // newline as a JSON string escape ("\n", two characters, backslash then
+  // the letter n) leaves that trailing "n" glued directly to the "A" of the
+  // next "Authorization" with no real whitespace between them on the
+  // scanned line, so \b never fires there (both sides are word characters).
+  // Fixed by also accepting the position right after a literal "\n" escape
+  // as a valid left edge (see patterns.js's own comment on this rule).
+  {
+    const ordinaryRes = await scanOneFile("bearer-plain.jsonl",
+      JSON.stringify({ message: { content: "curl -H 'Authorization: Bearer aB3xY9qZ1mN4pQ7rS2tU5vW8zzzz'" } }) + "\n");
+    check("bearer_header: fires on an ordinary, whitespace-preceded Authorization header",
+      ordinaryRes.findings.some((f) => f.ruleId === "bearer_header"));
+
+    // The exact shape that was missed: "...right?\n\nAuthorization: Bearer <token>\n\n..."
+    // inside a JSON string, where \n is the literal two-character escape,
+    // not a real newline -- residoo scans physical lines, so this whole
+    // thing is one line, and the "n" immediately before "Authorization" is
+    // what defeated \b.
+    const glueRes = await scanOneFile("bearer-glued-newline.jsonl",
+      JSON.stringify({ message: { content: "does the format look right?\n\nAuthorization: Bearer aB3xY9qZ1mN4pQ7rS2tU5vW8zzzz\n\nNothing else changed." } }) + "\n");
+    check("bearer_header: fires even when a literal JSON \\n escape glues directly onto 'Authorization' with no real whitespace (the benchmark-caught bug)",
+      glueRes.findings.some((f) => f.ruleId === "bearer_header"));
+
+    // Guard against the fix being too permissive: a real word ending in
+    // "...n" followed directly by "authorization" (no \n escape, no \b)
+    // must still not match -- the fix only widens the boundary for a
+    // literal backslash-n escape, not for arbitrary glued text.
+    const noFalseMatchRes = await scanOneFile("bearer-reauthorization.jsonl",
+      JSON.stringify({ message: { content: "some reauthorization: Bearer aB3xY9qZ1mN4pQ7rS2tU5vW8zzzz" } }) + "\n");
+    check("bearer_header: does NOT fire on 'reauthorization:' (word-glued, not \\n-glued) -- the fix is scoped, not a dropped boundary",
+      !noFalseMatchRes.findings.some((f) => f.ruleId === "bearer_header"));
+  }
+
   // ── scan + --verify: Slack, real fetch, real local HTTP server ─────────────
   // Same idea as the AWS subprocess test above, adapted to an HTTP call
   // instead of a spawned process: a real local server (127.0.0.1, this

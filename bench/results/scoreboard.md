@@ -8,7 +8,7 @@ Site recall per class (sites found / planted sites). Full per-tool detail, value
 
 | class | agentsweep | betterleaks | detect-secrets | ggshield | gitleaks | kingfisher | residoo | trufflehog | whatileaked |
 |---|---|---|---|---|---|---|---|---|---|
-| transcript-plain | 22/24 | 18/24 | 14/24 | n/s | 18/24 | 16/24 | 23/24 | 12/24 | 18/24 |
+| transcript-plain | 22/24 | 18/24 | 14/24 | n/s | 18/24 | 16/24 | 24/24 | 12/24 | 18/24 |
 | agent-config-plain | oos | 3/3 | 3/3 | n/s | 3/3 | 3/3 | 3/3 | 3/3 | oos |
 | transcript-json-nested | 6/6 | 2/6 | 3/6 | n/s | 2/6 | 3/6 | 6/6 | 5/6 | 2/6 |
 | transcript-echo | 12/12 | 9/12 | 3/12 | n/s | 12/12 | 9/12 | 12/12 | 7/12 | 5/12 |
@@ -16,7 +16,7 @@ Site recall per class (sites found / planted sites). Full per-tool detail, value
 | transcript-split (hard class) | 1/6 | 0/6 | 3/6 | n/s | 0/6 | 0/6 | 5/6 | 0/6 | 0/6 |
 | suppress-placeholder (suppress) | 5/10 FP | 2/10 FP | 5/10 FP | n/s | 0/10 FP | 1/10 FP | 0/10 FP | 0/10 FP | 0/10 FP |
 | chaff-shaped (chaff) | 0/45 FP | 0/45 FP | 44/45 FP | n/s | 0/45 FP | 0/45 FP | 0/45 FP | 0/45 FP | 0/45 FP |
-| distinct credentials, all claimed classes | 33/42 | 30/45 | 26/45 | n/s | 32/45 | 27/45 | 44/45 | 25/45 | 28/42 |
+| distinct credentials, all claimed classes | 33/42 | 30/45 | 26/45 | n/s | 32/45 | 27/45 | 45/45 | 25/45 | 28/42 |
 | precision (suppress FP included) | 89% | 95% | 2% | n/s | 100% | 97% | 100% | 100% | 100% |
 | egress verdict (offline / default where dual-mode) | none-observed | none-observed | none-observed / attempted | by-design-requires-server | none-observed | none-observed / attempted | none-observed | none-observed / attempted | none-observed |
 
@@ -208,14 +208,14 @@ Per-family site recall (claimed secret classes):
 | bearer-header | 0/2 |
 | jwt | 2/2 |
 
-## residoo (residoo 0.4.13)
+## residoo (residoo 0.4.14)
 
-- wall time: 475ms
+- wall time: 605ms
 - egress (scan-time only): **none-observed** no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window
 
 | class | kind | sites found | site recall | distinct values | value recall | false positives |
 |---|---|---|---|---|---|---|
-| transcript-plain | secret | 23/24 | 96% | 23/24 | 96% | |
+| transcript-plain | secret | 24/24 | 100% | 24/24 | 100% | |
 | agent-config-plain | secret | 3/3 | 100% | 3/3 | 100% | |
 | transcript-json-nested | secret | 6/6 | 100% | 6/6 | 100% | |
 | transcript-echo | secret | 12/12 | 100% | 4/4 | 100% | |
@@ -224,7 +224,7 @@ Per-family site recall (claimed secret classes):
 | suppress-placeholder | suppress | | | | | 0/10 |
 | chaff-shaped | chaff | | | | | 0/45 |
 
-Precision: 100% (matched sites 54, chaff FP 0, suppress FP 0, unplanted FP 0); 100% with suppress flags excluded. Distinct credentials found, all claimed classes (hard classes included): 44/45; headline classes only: 36/37. Re-exposed sites found: 8/8.
+Precision: 100% (matched sites 55, chaff FP 0, suppress FP 0, unplanted FP 0); 100% with suppress flags excluded. Distinct credentials found, all claimed classes (hard classes included): 45/45; headline classes only: 37/37. Re-exposed sites found: 8/8.
 
 Per-family site recall (claimed secret classes):
 
@@ -240,7 +240,7 @@ Per-family site recall (claimed secret classes):
 | connection-string | 3/3 |
 | private-key | 2/2 |
 | discord | 2/2 |
-| bearer-header | 1/2 |
+| bearer-header | 2/2 |
 | jwt | 2/2 |
 
 ## TruffleHog (trufflehog 3.97.2)

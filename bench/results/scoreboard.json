@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-03T14:54:14.450Z",
+  "generatedAt": "2026-09-03T15:03:53.146Z",
   "fixtureRoot": "bench/corpus/data",
   "manifestSeed": 20260902,
   "scores": [
@@ -1163,8 +1163,8 @@
     {
       "tool": "residoo",
       "displayName": "residoo",
-      "version": "residoo 0.4.13",
-      "wallMs": 475,
+      "version": "residoo 0.4.14",
+      "wallMs": 605,
       "egressVerdict": "none-observed",
       "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
       "egressObserved": {
@@ -1186,11 +1186,11 @@
           "kind": "secret",
           "claimed": true,
           "sites": 24,
-          "sitesFound": 23,
-          "siteRecall": "96%",
+          "sitesFound": 24,
+          "siteRecall": "100%",
           "values": 24,
-          "valuesFound": 23,
-          "valueRecall": "96%"
+          "valuesFound": 24,
+          "valueRecall": "100%"
         },
         "agent-config-plain": {
           "class": "agent-config-plain",
@@ -1263,7 +1263,7 @@
         }
       },
       "precision": {
-        "matchedSecretSites": 54,
+        "matchedSecretSites": 55,
         "chaffFlags": 0,
         "suppressFlags": 0,
         "unplantedFindings": 0,
@@ -1274,12 +1274,12 @@
       "overallDistinctCredentials": {
         "note": "ALL claimed classes, hard classes included; a distinct credential counts as found when any of its exposure sites matched, in any claimed class; guards dedup-style reporters against value-level undercounting. headlineOnly excludes the hard classes.",
         "total": 45,
-        "found": 44,
-        "recall": "98%",
+        "found": 45,
+        "recall": "100%",
         "headlineOnly": {
           "total": 37,
-          "found": 36,
-          "recall": "97%"
+          "found": 37,
+          "recall": "100%"
         }
       },
       "perFamily": {
@@ -1325,7 +1325,7 @@
         },
         "bearer-header": {
           "sites": 2,
-          "sitesFound": 1
+          "sitesFound": 2
         },
         "jwt": {
           "sites": 2,

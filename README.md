@@ -53,12 +53,12 @@ A reproducible benchmark against 8 real competing tools, on a synthetic-but-
 pattern-true corpus (72 Claude Code sessions, 45 planted credentials, zero
 real secrets), with live egress monitoring so "no network calls" is
 observed, not just documented. Re-run against every meaningful release,
-most recently v0.4.13:
+most recently v0.4.14:
 
 | | residoo | best of the rest |
 |---|---|---|
-| Distinct credentials found (all claimed classes) | **44/45 (98%)** | agentsweep 33/42 (79%) |
-| Precision (false positives) | **100%** (0 of 54 flags wrong) | gitleaks, whatileaked, trufflehog also 100% |
+| Distinct credentials found (all claimed classes) | **45/45 (100%)** | agentsweep 33/42 (79%) |
+| Precision (false positives) | **100%** (0 of 55 flags wrong) | gitleaks, whatileaked, trufflehog also 100% |
 | Network egress during the scan | **none-observed** | 3 of 8 tools attempt real outbound calls in their *default* mode (trufflehog: 50 connection attempts to github.com, slack.com, api.anthropic.com, gitlab.com, npmjs.org) |
 
 No single blended score, on purpose: a blend would hide exactly the class-
@@ -285,7 +285,7 @@ As a GitHub Action (this repo doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.4.13
+  - uses: dandovdub/residoo@v0.4.14
 ```
 
 As a pre-commit hook:
@@ -293,7 +293,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.4.13
+    rev: v0.4.14
     hooks:
       - id: residoo
 ```
