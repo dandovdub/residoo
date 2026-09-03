@@ -641,26 +641,61 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
       ref.verifiedDetail = result.detail;
     }
   };
+  const awsAvailable = pendingAwsVerifications.size === 0 || isAwsCliAvailable();
+  if (verify && anyPending) {
+    // One disclosure, not one per vendor: this used to print a full
+    // "this is a real network request..." paragraph for EACH vendor in
+    // turn, so a scan touching nine vendors put nine near-identical
+    // paragraphs on screen before any results — a wall of repeated
+    // boilerplate, caught live as bad UX. The safety-relevant fact (real
+    // outbound calls, using the exact matched value, one at a time) only
+    // needs saying once; per-vendor detail becomes a compact count table.
+    // Deliberately not gated on isTTY like the scan spinner: a script
+    // piping through a pager or into a log still needs this disclosure.
+    const rows = [];
+    if (pendingAwsVerifications.size > 0 && awsAvailable) {
+      rows.push(["AWS", pendingAwsVerifications.size]);
+    }
+    if (pendingPlanetScaleVerifications.size > 0) {
+      rows.push(["PlanetScale", pendingPlanetScaleVerifications.size]);
+    }
+    for (const [ruleId, byValue] of pendingSimpleVerifications) {
+      if (byValue.size === 0) continue;
+      // Vendor labels are consistently written "<Vendor>'s <endpoint
+      // description>" (see SIMPLE_VERIFY_VENDOR_LABEL above); take the
+      // part before "'s" rather than maintaining a second, parallel map
+      // of the same names.
+      const vendor = SIMPLE_VERIFY_VENDOR_LABEL[ruleId].split("'s ")[0];
+      rows.push([vendor, byValue.size]);
+    }
+    if (rows.length > 0) {
+      const width = Math.max(...rows.map(([label]) => label.length));
+      const table = rows.map(([label, count]) => `    ${label.padEnd(width)}  ${count}`).join("\n");
+      process.stderr.write(
+        "residoo --verify: checking whether these credentials are still active. Real network " +
+        "calls, one per vendor's own API, using the exact value found in your transcript, one at " +
+        "a time. Nothing is cached or sent anywhere but the vendor that issued it.\n\n" +
+        table + "\n\n"
+      );
+    }
+    if (pendingAwsVerifications.size > 0 && !awsAvailable) {
+      process.stderr.write(
+        "residoo --verify: the aws CLI was not found on PATH, so the " +
+        `${pendingAwsVerifications.size} AWS credential(s) found in this scan could not be checked. ` +
+        "Install it (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) to use --verify.\n"
+      );
+    }
+  }
   if (verify && pendingAwsVerifications.size > 0) {
     const applyPair = (refs, result) => {
       for (const ref of refs) {
         applyVerifyResult([ref.akiaFinding, ref.secretFinding], result);
       }
     };
-    if (!isAwsCliAvailable()) {
-      process.stderr.write(
-        "residoo --verify: the aws CLI was not found on PATH, so the " +
-        `${pendingAwsVerifications.size} AWS credential(s) found in this scan could not be checked. ` +
-        "Install it (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) to use --verify.\n"
-      );
+    if (!awsAvailable) {
       const result = { status: "error", detail: "aws CLI not found on PATH" };
       for (const { refs } of pendingAwsVerifications.values()) applyPair(refs, result);
     } else {
-      process.stderr.write(
-        `residoo --verify: calling AWS sts:get-caller-identity for ${pendingAwsVerifications.size} ` +
-        "credential(s) found in this scan. This is a real network request to AWS, using the exact " +
-        "credential found in your transcript, one at a time.\n"
-      );
       for (const [accessKeyValue, { secretValue, refs }] of pendingAwsVerifications) {
         const result = verifyAwsCredential(accessKeyValue, secretValue);
         applyPair(refs, result);
@@ -668,11 +703,6 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     }
   }
   if (verify && pendingPlanetScaleVerifications.size > 0) {
-    process.stderr.write(
-      `residoo --verify: calling PlanetScale's organizations endpoint for ${pendingPlanetScaleVerifications.size} ` +
-      "credential(s) found in this scan. This is a real network request to PlanetScale, using the exact " +
-      "credential found in your transcript, one at a time.\n"
-    );
     for (const [secretValue, { idValue, refs }] of pendingPlanetScaleVerifications) {
       const result = await verifyPlanetScaleToken(idValue, secretValue);
       for (const ref of refs) applyVerifyResult([ref.secretFinding, ref.idFinding], result);
@@ -682,11 +712,6 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     for (const [ruleId, byValue] of pendingSimpleVerifications) {
       if (byValue.size === 0) continue;
       const verifyFn = SIMPLE_VERIFY_FNS[ruleId];
-      process.stderr.write(
-        `residoo --verify: calling ${SIMPLE_VERIFY_VENDOR_LABEL[ruleId]} for ${byValue.size} ` +
-        "token(s) found in this scan. This is a real network request, using the exact " +
-        "token found in your transcript, one at a time.\n"
-      );
       for (const [value, { refs }] of byValue) {
         const result = await verifyFn(value);
         applyVerifyResult(refs, result);
