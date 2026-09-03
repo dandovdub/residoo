@@ -668,47 +668,86 @@ function statePath() {
 }
 
 /**
- * Load the ack map: { "<fingerprint>": { at, note } }. Missing file is the
- * normal first-run case and returns {} silently. A corrupt or unreadable
- * file returns {} too, but LOUDLY: one note on stderr, because "your acks
- * are gone" must never be silent, and because the next ackFinding() will
+ * Parse one map (acks, or dismissed) out of the already-JSON-parsed state
+ * file body. Shared by loadFullState() for both keys: same validation, same
+ * per-entry degrade-not-discard behavior, so a hand-edited or foreign
+ * ledger loses only its malformed entries, never the whole file.
+ */
+function parseFpMap(raw) {
+  const out = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [fp, v] of Object.entries(raw)) {
+    if (!FINGERPRINT_RE.test(fp)) continue;
+    if (!v || typeof v !== "object") continue;
+    // Control bytes stripped on READ as well as on write: this file sits on
+    // disk between the two, and a hand-edited or foreign ledger must not be
+    // able to put a terminal escape into the report via a note.
+    out[fp] = {
+      at: typeof v.at === "string" ? stripControlChars(v.at) : null,
+      note: typeof v.note === "string" ? stripControlChars(v.note) : null,
+    };
+  }
+  return out;
+}
+
+/**
+ * Load the full rotation state: { acks, dismissed }, both shaped
+ * { "<fingerprint>": { at, note } }. Missing file is the normal first-run
+ * case and returns both empty silently. A corrupt or unreadable file
+ * returns both empty too, but LOUDLY: one note on stderr, because "your
+ * acks are gone" must never be silent, and because the next write will
  * start a fresh store over the corrupt one.
  */
-function loadAcks({ file = statePath() } = {}) {
+function loadFullState({ file = statePath() } = {}) {
+  const empty = { acks: {}, dismissed: {} };
   let text;
   try {
     text = fs.readFileSync(file, "utf-8");
   } catch (err) {
-    if (err && (err.code === "ENOENT" || err.code === "ENOTDIR")) return {};
-    process.stderr.write(`residoo: rotation state ${path.basename(file)} could not be read; continuing with no acknowledgements\n`);
-    return {};
+    if (err && (err.code === "ENOENT" || err.code === "ENOTDIR")) return empty;
+    process.stderr.write(`residoo: rotation state ${path.basename(file)} could not be read; continuing with no acknowledgements or dismissals\n`);
+    return empty;
   }
   let parsed;
   try {
     parsed = JSON.parse(text);
   } catch {
-    process.stderr.write(`residoo: rotation state ${path.basename(file)} is corrupt; continuing with no acknowledgements (a new acknowledgement will start a fresh store)\n`);
-    return {};
+    process.stderr.write(`residoo: rotation state ${path.basename(file)} is corrupt; continuing with no acknowledgements or dismissals (the next write will start a fresh store)\n`);
+    return empty;
   }
-  if (!parsed || typeof parsed !== "object" || parsed.v !== 1 || !parsed.acks || typeof parsed.acks !== "object" || Array.isArray(parsed.acks)) {
-    process.stderr.write(`residoo: rotation state ${path.basename(file)} has an unrecognized shape; continuing with no acknowledgements\n`);
-    return {};
+  if (!parsed || typeof parsed !== "object" || parsed.v !== 1) {
+    process.stderr.write(`residoo: rotation state ${path.basename(file)} has an unrecognized shape; continuing with no acknowledgements or dismissals\n`);
+    return empty;
   }
-  // Only well-formed entries under well-formed keys survive: state written
-  // by a future version (or hand-edited) degrades per-entry, not per-file.
-  const acks = {};
-  for (const [fp, v] of Object.entries(parsed.acks)) {
-    if (!FINGERPRINT_RE.test(fp)) continue;
-    if (!v || typeof v !== "object") continue;
-    // Control bytes stripped on READ as well as on write: this file sits on
-    // disk between the two, and a hand-edited or foreign ledger must not be
-    // able to put a terminal escape into the report via an ack note.
-    acks[fp] = {
-      at: typeof v.at === "string" ? stripControlChars(v.at) : null,
-      note: typeof v.note === "string" ? stripControlChars(v.note) : null,
-    };
+  // dismissed is a later addition to this same file (v stays 1: additive,
+  // tolerant of a file written by an older residoo that never had this key).
+  return { acks: parseFpMap(parsed.acks), dismissed: parseFpMap(parsed.dismissed) };
+}
+
+/** Backward-compatible: the acks half of loadFullState(), same call shape as before dismiss existed. */
+function loadAcks({ file = statePath() } = {}) {
+  return loadFullState({ file }).acks;
+}
+
+/** The dismissed half of loadFullState(). */
+function loadDismissed({ file = statePath() } = {}) {
+  return loadFullState({ file }).dismissed;
+}
+
+/** Atomic write of the full state: temp file in the same directory, then rename; 0o600/0o700, same as before. */
+function writeFullState(file, { acks, dismissed }) {
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = path.join(dir, `.rotations.json.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
+  const body = JSON.stringify({ v: 1, acks, dismissed }, null, 2) + "\n";
+  fs.writeFileSync(tmp, body, { mode: 0o600 });
+  try {
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    // The rename failing must not strand a temp file next to the state.
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
   }
-  return acks;
 }
 
 /**
@@ -732,41 +771,43 @@ function sanitizeNote(note) {
 }
 
 /**
- * Record that the user acknowledged (rotated / accepted) one finding.
+ * Record that the user acknowledged (rotated) one finding, or dismissed it
+ * (decided it was never a real secret, a test fixture, a vendor example not
+ * already on the suppression list, etc.) — two DIFFERENT resolutions of the
+ * same "this is no longer pending" question, kept as separate maps in one
+ * file rather than a single status field: acked and dismissed have
+ * different guidance implications (an acked finding's guidance stays
+ * relevant if you ever need to re-check the rotation; a dismissed one
+ * never needed guidance in the first place) and different --fail-on-find
+ * semantics may want to diverge later. Shared helper for both:
+ * ackFinding(fp, note) / dismissFinding(fp, note).
+ *
  * Atomic: temp file in the same directory, then rename; 0o600 on the file,
  * 0o700 on the directory, since even a redacted rotation ledger is nobody
  * else's business.
  *
- * Atomic is not serialized: two concurrent `residoo ack` runs each
- * load-modify-write, and the last rename wins, silently dropping the other
- * run's ack. Accepted as a single-writer design: acks are typed by a human
- * one at a time, the ledger is per-user state, and the failure direction is
- * fail-safe (a dropped ack reverts that finding to pending, never the
- * reverse). A lockfile would add a stale-lock recovery path for a race that
- * a person cannot realistically produce.
+ * Atomic is not serialized: two concurrent `residoo ack`/`dismiss` runs
+ * each load-modify-write, and the last rename wins, silently dropping the
+ * other run's change. Accepted as a single-writer design: these are typed
+ * by a human one at a time, the ledger is per-user state, and the failure
+ * direction is fail-safe (a dropped entry reverts that finding to pending,
+ * never the reverse). A lockfile would add a stale-lock recovery path for
+ * a race that a person cannot realistically produce.
  */
-function ackFinding(fp, note, { file = statePath() } = {}) {
+function resolveFinding(kind, fp, note, { file = statePath() } = {}) {
   if (typeof fp !== "string" || !FINGERPRINT_RE.test(fp)) {
-    throw new TypeError("ackFinding expects a fingerprint from fingerprintFinding() (rf1-<32 hex>)");
+    throw new TypeError(`${kind}Finding expects a fingerprint from fingerprintFinding() (rf1-<32 hex>)`);
   }
-  const acks = loadAcks({ file });
+  const state = loadFullState({ file });
   const entry = { at: new Date().toISOString(), note: sanitizeNote(note) };
-  acks[fp] = entry;
-
-  const dir = path.dirname(file);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `.rotations.json.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
-  const body = JSON.stringify({ v: 1, acks }, null, 2) + "\n";
-  fs.writeFileSync(tmp, body, { mode: 0o600 });
-  try {
-    fs.renameSync(tmp, file);
-  } catch (err) {
-    // The rename failing must not strand a temp file next to the state.
-    try { fs.unlinkSync(tmp); } catch {}
-    throw err;
-  }
+  const key = kind === "ack" ? "acks" : "dismissed";
+  state[key][fp] = entry;
+  writeFullState(file, state);
   return { fingerprint: fp, ...entry, file };
 }
+
+function ackFinding(fp, note, opts) { return resolveFinding("ack", fp, note, opts); }
+function dismissFinding(fp, note, opts) { return resolveFinding("dismiss", fp, note, opts); }
 
 // ── summaries for the report layer ──────────────────────────────────────────
 
@@ -776,42 +817,58 @@ function ackFinding(fp, note, { file = statePath() } = {}) {
  * across a transcript are one rotation to do, not five (the same
  * distinct-vs-re-exposed reasoning scan.js applies to counting).
  */
-function pendingSummary(findings, acks) {
+function pendingSummary(findings, acks, dismissed = {}) {
   const list = Array.isArray(findings) ? findings : [];
   const ackMap = acks && typeof acks === "object" ? acks : {};
+  const dismissMap = dismissed && typeof dismissed === "object" ? dismissed : {};
   const statuses = [];
-  const distinct = new Map();
+  const distinctStatus = new Map(); // fp -> "acked" | "dismissed" | "pending"
   for (const f of list) {
     const fp = fingerprintFinding(f);
     const ack = ackMap[fp] || null;
+    const dismiss = dismissMap[fp] || null;
+    // Precedence when a fingerprint somehow has both (not reachable through
+    // the CLI today, but the state file is hand-editable): acked wins. "I
+    // rotated it" is the more thorough resolution of the two, and reverting
+    // to "acked" from a stray dismissed entry is the fail-safe direction —
+    // it keeps guidance attached rather than silently dropping a real
+    // rotation's record.
+    const status = ack ? "acked" : dismiss ? "dismissed" : "pending";
+    const resolved = ack || dismiss;
     statuses.push({
       fingerprint: fp,
-      status: ack ? "acked" : "pending",
-      ackedAt: ack ? ack.at : null,
-      ackNote: ack ? ack.note : null,
+      status,
+      ackedAt: resolved ? resolved.at : null,
+      ackNote: resolved ? resolved.note : null,
     });
-    if (!distinct.has(fp)) distinct.set(fp, !!ack);
+    if (!distinctStatus.has(fp)) distinctStatus.set(fp, status);
   }
-  let acked = 0;
-  for (const isAcked of distinct.values()) if (isAcked) acked++;
+  let acked = 0, dismissedCount = 0;
+  for (const status of distinctStatus.values()) {
+    if (status === "acked") acked++;
+    else if (status === "dismissed") dismissedCount++;
+  }
   return {
     counts: {
       findings: list.length,
-      distinct: distinct.size,
-      pending: distinct.size - acked,
+      distinct: distinctStatus.size,
+      pending: distinctStatus.size - acked - dismissedCount,
       acked,
+      dismissed: dismissedCount,
     },
     statuses,
   };
 }
 
+const STATUS_ORDER = { pending: 0, acked: 1, dismissed: 2 };
+
 /**
  * Pure data for the report layer: one entry per distinct fingerprint, with
  * rotation guidance attached and pending entries first. Prints nothing.
  */
-function renderRotation(findings, acks) {
+function renderRotation(findings, acks, dismissed = {}) {
   const list = Array.isArray(findings) ? findings : [];
-  const { counts, statuses } = pendingSummary(list, acks);
+  const { counts, statuses } = pendingSummary(list, acks, dismissed);
 
   const byFp = new Map();
   for (let i = 0; i < list.length; i++) {
@@ -842,7 +899,7 @@ function renderRotation(findings, acks) {
   }
 
   const entries = [...byFp.values()].sort((a, b) => {
-    if (a.status !== b.status) return a.status === "pending" ? -1 : 1;
+    if (a.status !== b.status) return STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
     if (a.ruleId !== b.ruleId) return a.ruleId < b.ruleId ? -1 : 1;
     return a.fingerprint < b.fingerprint ? -1 : 1;
   });
@@ -857,7 +914,9 @@ module.exports = {
   fingerprintFinding,
   statePath,
   loadAcks,
+  loadDismissed,
   ackFinding,
+  dismissFinding,
   pendingSummary,
   renderRotation,
 };

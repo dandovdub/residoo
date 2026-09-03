@@ -1252,6 +1252,7 @@ async function main() {
   {
     const {
       ROTATION_GUIDANCE, fingerprintFinding, renderRotation, loadAcks, ackFinding,
+      loadDismissed, dismissFinding,
     } = require("../src/rotation");
     const { NOISY_PATTERNS } = require("../src/patterns");
 
@@ -1307,6 +1308,37 @@ async function main() {
       rot.entries[0].status === "acked" && rot.counts.pending === 0 && rot.counts.acked === 1);
     check("renderRotation attaches the right guidance to the entry",
       rot.entries[0].guidance === ROTATION_GUIDANCE.aws_access_key_id);
+
+    // dismiss: a SEPARATE resolution from ack ("never a real secret", not
+    // "rotated"), same ledger file, same atomic round trip, own state key.
+    const dismissFile = path.join(tmp, "rot-state-dismiss", "rotations.json");
+    const f3 = { ruleId: "github_pat", preview: "ghp_…test  (40 chars)", relFile: "b.jsonl", file: "/x/b.jsonl", line: 5 };
+    const fp3 = fingerprintFinding(f3);
+    dismissFinding(fp3, "confirmed: residoo's own smoke-test fixture", { file: dismissFile });
+    const dismissed = loadDismissed({ file: dismissFile });
+    check("dismiss round-trips through the state file, under its own key", !!dismissed[fp3] && typeof dismissed[fp3].at === "string");
+    check("dismissing does NOT also create an ack for the same fingerprint",
+      Object.keys(loadAcks({ file: dismissFile })).length === 0);
+
+    // Ack and dismiss must coexist in the SAME file without clobbering each
+    // other: acking one fingerprint must not erase an unrelated fingerprint's
+    // dismissal already on disk, and vice versa.
+    const f4 = { ruleId: "slack_token", preview: "xoxb…here  (26 chars)", relFile: "c.jsonl", file: "/x/c.jsonl", line: 7 };
+    const fp4 = fingerprintFinding(f4);
+    ackFinding(fp4, "rotated", { file: dismissFile });
+    check("acking a second fingerprint in the same file leaves the first one's dismissal intact",
+      !!loadDismissed({ file: dismissFile })[fp3] && !!loadAcks({ file: dismissFile })[fp4]);
+
+    // Three-way status in one report: one pending, one acked, one dismissed.
+    const f5 = { ruleId: "npm_token", preview: "npm_…here  (40 chars)", relFile: "d.jsonl", file: "/x/d.jsonl", line: 9 };
+    const rot3 = renderRotation([f1, f3, f4, f5], loadAcks({ file: dismissFile }), loadDismissed({ file: dismissFile }));
+    check("renderRotation: three-way status counts are correct (1 pending, 1 acked, 1 dismissed)",
+      rot3.counts.distinct === 4 && rot3.counts.pending === 2 && rot3.counts.acked === 1 && rot3.counts.dismissed === 1);
+    const entryByFp = new Map(rot3.entries.map((e) => [e.fingerprint, e]));
+    check("renderRotation: the dismissed entry's status and note come through",
+      entryByFp.get(fp3).status === "dismissed" && entryByFp.get(fp3).ackNote.includes("smoke-test fixture"));
+    check("renderRotation: sort order is pending first, dismissed last",
+      rot3.entries[0].status === "pending" && rot3.entries[rot3.entries.length - 1].status === "dismissed");
   }
 
   // ── CLI: rotation report, ack round-trip, --allow-acked exit codes ────────
@@ -1396,6 +1428,73 @@ async function main() {
       if (o.status !== 0 || dashRe.test(o.stdout)) { allExplainClean = false; console.log("  FAIL detail: explain " + id); }
     }
     check("every rule's explain runbook exits 0 with no em/en dashes", allExplainClean);
+  }
+
+  // ── CLI: dismiss, and the "Recommended actions" summary (see src/report.js) ─
+  // Fresh fixture, two distinct findings: motivated directly by real user
+  // feedback that a raw "N potential secrets found" count with no triage
+  // path was not actionable. This walks the summary through all three
+  // states a distinct value can be in.
+  {
+    const { spawnSync } = require("child_process");
+    const dHome = path.join(tmp, "dismiss-home");
+    const dCwd = path.join(tmp, "dismiss-cwd");
+    fs.mkdirSync(path.join(dHome, ".claude"), { recursive: true });
+    fs.mkdirSync(dCwd, { recursive: true });
+    const dismissToken = "ghp_" + "F4keT0ken".repeat(4); // 36-char body, synthetic
+    fs.writeFileSync(path.join(dHome, ".claude", "settings.local.json"),
+      JSON.stringify({ env: { AWS_ACCESS_KEY_ID: plantedAwsKey, GITHUB_TOKEN: dismissToken } }, null, 2));
+
+    const runCli = (cliArgs) => spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), ...cliArgs], {
+        cwd: dCwd, encoding: "utf-8",
+        env: {
+          ...process.env,
+          HOME: dHome, USERPROFILE: dHome,
+          XDG_CONFIG_HOME: path.join(dHome, ".config"), XDG_DATA_HOME: path.join(dHome, ".local", "share"),
+          GEMINI_CLI_HOME: dHome, CODEX_HOME: path.join(dHome, ".codex"),
+        },
+      });
+
+    const fresh = runCli(["scan", "--no-color"]);
+    check("recommended actions: fresh scan, everything pending, plural and 'need' agree with 2 distinct",
+      fresh.stdout.includes("Recommended actions:") &&
+      fresh.stdout.includes("2 of 2 distinct values need review"));
+
+    const p0 = JSON.parse(runCli(["scan", "--json"]).stdout);
+    const awsFp = p0.findings.find((f) => f.rule === "aws_access_key_id").fingerprint;
+    const ghFp = p0.findings.find((f) => f.rule === "github_pat").fingerprint;
+
+    const dismissedRes = runCli(["dismiss", ghFp, "--note", "confirmed test fixture, note holds " + docExampleKey]);
+    check("residoo dismiss exits 0 and echoes the fingerprint", dismissedRes.status === 0 && dismissedRes.stdout.includes(ghFp));
+    const ledger = path.join(dHome, ".residoo", "rotations.json");
+    check("dismiss ledger holds no raw secret", !fs.readFileSync(ledger, "utf-8").includes("IOSFODNN7EXAMPLE"));
+
+    const afterDismiss = runCli(["scan", "--no-color"]);
+    check("recommended actions: after dismissing one of two, singular 'needs' and the dismissed count show",
+      afterDismiss.stdout.includes("1 of 2 distinct values needs review") &&
+      afterDismiss.stdout.includes("1 dismissed already"));
+    check("--fail-on-find --allow-acked still exits 1: the AWS key is dismissed but not resolved yet (the OTHER one is still pending)",
+      runCli(["scan", "--fail-on-find", "--allow-acked"]).status === 1);
+
+    runCli(["ack", awsFp]);
+    const afterBoth = runCli(["scan", "--no-color"]);
+    check("recommended actions: once everything is resolved, the reassuring line shows instead of a review prompt",
+      afterBoth.stdout.includes("Nothing new to review") &&
+      afterBoth.stdout.includes("1 acknowledged, 1 dismissed already"));
+    check("--fail-on-find --allow-acked exits 0 once every distinct value is EITHER acked OR dismissed",
+      runCli(["scan", "--fail-on-find", "--allow-acked"]).status === 0);
+
+    const p1 = JSON.parse(runCli(["scan", "--json"]).stdout);
+    check("--json rotation.counts carries the dismissed count distinctly from acked",
+      p1.rotation.counts.acked === 1 && p1.rotation.counts.dismissed === 1 && p1.rotation.counts.pending === 0);
+    const ghEntry = p1.rotation.entries.find((e) => e.fingerprint === ghFp);
+    check("--json rotation entry for the dismissed finding carries status 'dismissed'",
+      !!ghEntry && ghEntry.status === "dismissed");
+
+    const missingFp = runCli(["dismiss"]);
+    check("residoo dismiss with no fingerprint prints usage and exits 2",
+      missingFp.status === 2 && missingFp.stderr.includes("usage: residoo dismiss"));
   }
 
   // ── CLI: --project mode end to end on a synthetic repo checkout ───────────

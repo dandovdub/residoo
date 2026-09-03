@@ -143,9 +143,13 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
   // raw values, while these entries dedupe fingerprints (which include the
   // basename, so one value in two differently-named files is two rotations to
   // track). Two counts under one word would read as a contradiction.
+  const resolvedNote = [
+    counts.acked > 0 ? `${counts.acked} acknowledged` : null,
+    counts.dismissed > 0 ? `${counts.dismissed} dismissed` : null,
+  ].filter(Boolean).join(", ");
   push(paint(c.bold, "Rotation:") +
     ` ${counts.pending} of ${counts.distinct} rotation${counts.distinct === 1 ? "" : "s"} pending` +
-    (counts.acked > 0 ? ` (${counts.acked} acknowledged)` : ""));
+    (resolvedNote ? ` (${resolvedNote})` : ""));
   if (showAdvisory) {
     const wrapped = wrapText(ROTATION_ORDER_ADVISORY, 72, "     ");
     push(`  ${paint(c.red + c.bold, "⚠  " + wrapped[0])}`);
@@ -155,11 +159,17 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
   // dump. Everything elided here is in --json in full.
   const MAX_SHOWN = 12;
   const shown = entries.slice(0, MAX_SHOWN);
+  const STATUS_TAG = {
+    pending: paint(c.yellow, "pending  "),
+    acked: paint(c.green, "acked    "),
+    dismissed: paint(c.dim, "dismissed"),
+  };
   for (const e of shown) {
-    const tag = e.status === "pending" ? paint(c.yellow, "pending") : paint(c.green, "acked  ");
-    push(`  ${tag}  ${e.fingerprint}  ${e.label}`);
+    push(`  ${STATUS_TAG[e.status]}  ${e.fingerprint}  ${e.label}`);
     if (e.status === "acked") {
       push(paint(c.dim, `           acknowledged ${e.ackedAt || "(no timestamp)"}${e.ackNote ? `: ${e.ackNote}` : ""}`));
+    } else if (e.status === "dismissed") {
+      push(paint(c.dim, `           dismissed ${e.ackedAt || "(no timestamp)"}${e.ackNote ? `: ${e.ackNote}` : ""} (not a real secret)`));
     } else {
       const g = e.guidance;
       const where = g.rotateUrl ? `rotate: ${g.rotateUrl}` : `where: ${g.consolePath}`;
@@ -169,7 +179,7 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
   if (entries.length > shown.length) {
     push(paint(c.dim, `  … and ${entries.length - shown.length} more; see --json for the full list`));
   }
-  push(paint(c.dim, `  Full runbook: residoo explain <rule-id> · mark one rotated: residoo ack <fingerprint>`));
+  push(paint(c.dim, `  Full runbook: residoo explain <rule-id> · rotated: residoo ack <fp> · not a secret: residoo dismiss <fp>`));
   return lines.join("\n");
 }
 
@@ -287,6 +297,31 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
   push(paint(c.dim, `   ${filesScanned} files scanned (${(bytesScanned / 1024 / 1024).toFixed(1)} MB) · sources: ${sourcesScanned.join(", ")}`));
   push(paint(c.dim, `   oldest match ~${ageDays(oldest)}d old · most recent ~${ageDays(newest)}d old`) + suppressedNote);
   if (unreadableNote) push(unreadableNote);
+
+  // The practical, act-on-this-now summary, first, before the full
+  // rule-by-rule and file-by-file detail below: a raw count of findings
+  // (which can run into the hundreds on a machine with a lot of history) is
+  // not by itself a to-do list. What actually needs a person's attention is
+  // the count of DISTINCT values not yet triaged (rotated or dismissed) —
+  // everything else is either already handled or a re-exposure of a value
+  // already accounted for.
+  if (rotation && rotation.counts.distinct > 0) {
+    const { pending, distinct, acked, dismissed } = rotation.counts;
+    push();
+    push(paint(c.bold, "Recommended actions:"));
+    if (pending > 0) {
+      push(`  ${paint(c.yellow, "→")} ${pending} of ${distinct} distinct value${distinct === 1 ? "" : "s"} ${pending === 1 ? "needs" : "need"} review: rotate the real ones (residoo ack), dismiss the rest (residoo dismiss)`);
+    } else {
+      push(`  ${paint(c.green, "✓")} Nothing new to review; every distinct value here has already been triaged`);
+    }
+    const resolvedParts = [
+      acked > 0 ? `${acked} acknowledged` : null,
+      dismissed > 0 ? `${dismissed} dismissed` : null,
+    ].filter(Boolean);
+    if (resolvedParts.length > 0) {
+      push(paint(c.dim, `    ${resolvedParts.join(", ")} already, no action needed (see Rotation below for which)`));
+    }
+  }
   push();
 
   const sorted = [...byRule.entries()].sort((a, b) => b[1].items.length - a[1].items.length);

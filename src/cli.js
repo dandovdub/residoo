@@ -8,7 +8,7 @@ const { scan, emptyResult } = require("./scan");
 const { render, renderIntegrity, renderJson, renderSarif, makeProgressReporter, printIntro } = require("./report");
 const { checkIntegrity } = require("./integrity");
 const {
-  ROTATION_GUIDANCE, guidanceFor, loadAcks, ackFinding, renderRotation,
+  ROTATION_GUIDANCE, guidanceFor, loadAcks, loadDismissed, ackFinding, dismissFinding, renderRotation,
 } = require("./rotation");
 
 /**
@@ -48,9 +48,11 @@ const HELP = `residoo: find secrets leaking through your AI agent's session hist
   path, verified against their docs, because a leaked key that is found but
   never rotated is still leaked (64% of leaked secrets stay valid for years).
   "residoo explain <rule-id>" prints the full runbook for one credential
-  type; "residoo ack <fingerprint>" records that you rotated one, in
-  ~/.residoo/rotations.json, the only file residoo ever writes outside an
-  explicit --seal.
+  type; "residoo ack <fingerprint>" records that you rotated one, and
+  "residoo dismiss <fingerprint>" records that you determined it was never a
+  real secret (a test fixture, a vendor example not already recognized).
+  Both are recorded in ~/.residoo/rotations.json, the only file residoo
+  ever writes outside an explicit --seal.
 
   Scanning makes NO network calls and changes nothing on disk. Findings are
   redacted in every output format. Sealing (--seal) writes NEW encrypted
@@ -60,6 +62,7 @@ Usage:
   residoo scan [options]
   residoo explain <rule-id>   (or: residoo explain --list)
   residoo ack <fingerprint> [--note <text>]
+  residoo dismiss <fingerprint> [--note <text>]
   residoo unseal <vault-dir> [--restore <n> --out <path>]
 
 Scan options:
@@ -85,23 +88,29 @@ Scan options:
                           findings and integrity WARNINGS count; integrity
                           info-level review items do not
   --allow-acked           with --fail-on-find: findings whose fingerprint was
-                          acknowledged via "residoo ack" no longer fail the
-                          run; pending findings and integrity warnings still
-                          do. Without this flag, --fail-on-find fails on
-                          every finding, acknowledged or not.
+                          acknowledged via "residoo ack" OR dismissed via
+                          "residoo dismiss" no longer fail the run; pending
+                          findings and integrity warnings still do. Without
+                          this flag, --fail-on-find fails on every finding,
+                          acked, dismissed, or not.
   --no-integrity          skip the integrity checks (planted hooks, dropper
                           files, auto-run tasks, hidden Unicode)
   --no-color              disable ANSI colour
 
 Rotation:
-  residoo explain <rule-id>   full rotation runbook for one detection rule
-                              (where to revoke, steps, what revocation does)
-  residoo explain --list      every rule id with its credential label
-  residoo ack <fingerprint>   mark one finding's rotation done; fingerprints
-                              appear next to findings in the report and in
-                              --json. Optional --note <text> is stored with
-                              the acknowledgement (redacted if it matches a
-                              secret pattern).
+  residoo explain <rule-id>     full rotation runbook for one detection rule
+                                (where to revoke, steps, what revocation does)
+  residoo explain --list        every rule id with its credential label
+  residoo ack <fingerprint>     mark one finding's rotation done; fingerprints
+                                appear next to findings in the report and in
+                                --json. Optional --note <text> is stored with
+                                the acknowledgement (redacted if it matches a
+                                secret pattern).
+  residoo dismiss <fingerprint> mark one finding as reviewed and NOT a real
+                                secret (a test fixture, a vendor example not
+                                already recognized, etc.), distinct from ack:
+                                nothing was rotated, there was nothing to
+                                rotate. Same --note handling as ack.
 
 Seal options (used with scan):
   --seal                  after scanning, encrypt every transcript that carried a
@@ -367,6 +376,41 @@ function runAck(args) {
   return 0;
 }
 
+/**
+ * Record that one finding was reviewed and determined NOT to be a real
+ * secret (a test fixture, a value used to verify residoo's own detection,
+ * a vendor example not already on the built-in suppression list, etc.) —
+ * distinct from `ack`, which means "I rotated a real credential." Without
+ * this, the only way to stop a confirmed-fake finding from reappearing
+ * every scan was to `ack` it, which is semantically wrong (nothing was
+ * rotated) and reads misleadingly in the rotation ledger.
+ */
+function runDismiss(args) {
+  const fp = args[1] && !args[1].startsWith("--") ? args[1] : null;
+  if (!fp) {
+    process.stderr.write("usage: residoo dismiss <fingerprint> [--note <text>]\n" +
+      "Fingerprints (rf1-...) are shown next to findings in the scan report and in --json.\n");
+    return 2;
+  }
+  let res;
+  try {
+    res = dismissFinding(fp, argValue(args, "--note"));
+  } catch (err) {
+    process.stderr.write(`residoo: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 2;
+  }
+  process.stdout.write(
+    `Dismissed ${res.fingerprint} at ${res.at}` +
+    (res.note ? ` with note: ${res.note}` : "") + "\n" +
+    "The next scan reports this finding as dismissed instead of pending, and it is\n" +
+    "excluded from --fail-on-find the same way an acked finding is with --allow-acked.\n" +
+    "(dismiss is stateless, same as ack: it cannot check this fingerprint against a\n" +
+    "scan, so a mistyped one is recorded too; the intended finding would then still\n" +
+    "show as pending on the next scan.)\n"
+  );
+  return 0;
+}
+
 async function main(argv) {
   const args = argv.slice(2);
   if (args.includes("-h") || args.includes("--help") || args.length === 0) {
@@ -378,6 +422,7 @@ async function main(argv) {
   if (cmd === "unseal") return runUnseal(args);
   if (cmd === "explain") return runExplain(args);
   if (cmd === "ack") return runAck(args);
+  if (cmd === "dismiss") return runDismiss(args);
   if (cmd !== "scan") {
     process.stderr.write(`Unknown command "${cmd}". Try "residoo --help".\n`);
     return 2;
@@ -467,9 +512,11 @@ async function main(argv) {
     sources = availableSources();
   }
 
-  // loadAcks degrades to {} (loudly, on stderr) if the state file is corrupt,
-  // so a broken ack ledger can never block or distort a scan.
+  // loadAcks/loadDismissed degrade to {} (loudly, on stderr) if the state
+  // file is corrupt, so a broken rotation ledger can never block or distort
+  // a scan.
   const acks = loadAcks();
+  const dismissed = loadDismissed();
 
   if (sources.length === 0) {
     const empty = emptyResult();
@@ -482,7 +529,7 @@ async function main(argv) {
       // A --json caller (CI, a script piping into jq) must always get valid JSON
       // on stdout, even on the "nothing to scan" path — a plain-text message on
       // stderr with exit 0 silently breaks that contract.
-      process.stdout.write(renderJson(empty, integrity, renderRotation([], acks)) + "\n");
+      process.stdout.write(renderJson(empty, integrity, renderRotation([], acks, dismissed)) + "\n");
     } else {
       process.stderr.write(
         "No known transcript sources found on this machine.\n" +
@@ -499,7 +546,7 @@ async function main(argv) {
   const result = await scan({ sources, includeNoisy, includeSuppressed, onProgress: progress.onProgress });
   progress.stop();
   const integrity = wantsIntegrity ? runIntegrity() : null;
-  const rotation = renderRotation(result.findings, acks);
+  const rotation = renderRotation(result.findings, acks, dismissed);
   process.stdout.write((wantsSarif
     ? renderSarif(result)
     : wantsJson

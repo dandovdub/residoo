@@ -122,10 +122,10 @@ won't be built into the tool that writes it.
   preview, never the real value, including in `--json` mode. A decoded or
   rejoined secret is redacted exactly like a plain one.
 - On an interactive terminal, prints who it is and where it lives before
-  scanning starts (`residoo v0.3.9 · find secrets your AI coding agent left
+  scanning starts (`residoo v0.4.0 · find secrets your AI coding agent left
   on disk` plus the repo URL), then a live spinner naming the current file
   as it scans. Every report also opens with the exact version and timestamp
-  it was run with (`residoo v0.3.9 · scanned 2026-01-01 12:00`; `--json`
+  it was run with (`residoo v0.4.0 · scanned 2026-01-01 12:00`; `--json`
   carries the same as `residooVersion`/`scannedAt`), so a report pasted or
   screenshotted later never leaves you guessing which build produced it.
   When there are findings, the report closes with a "Next steps" pointer to
@@ -297,12 +297,21 @@ with the way out:
   type: where to revoke, the steps, and what revocation actually does at
   that vendor. `residoo explain --list` shows the whole catalogue.
 - **`residoo ack <fingerprint>`** records that you rotated one finding.
+  **`residoo dismiss <fingerprint>`** records that you determined it was
+  never a real secret (a test fixture, a vendor example not already
+  recognized), a separate resolution from ack, since nothing was rotated.
   Every finding carries a stable fingerprint (derived only from
   already-redacted material, so the ledger can never leak), shown in the
-  report and in `--json`. Acknowledged findings are reported as such on the
-  next scan instead of re-alarming forever. The ledger lives at
-  `~/.residoo/rotations.json`: residoo's own file, written atomically, ack
-  notes redacted through the same pipeline as previews.
+  report and in `--json`. Acked and dismissed findings are both reported as
+  resolved on the next scan instead of re-alarming forever. Both live in the
+  same ledger at `~/.residoo/rotations.json`: residoo's own file, written
+  atomically, notes redacted through the same pipeline as previews.
+- **A "Recommended actions" summary leads the report**, before the detailed
+  findings breakdown: how many *distinct* values still need a decision,
+  versus how many are already resolved. A machine with a lot of history can
+  report hundreds of raw findings that are really a handful of distinct
+  values echoed repeatedly; the summary is built around what's actually left
+  to triage, not the raw count.
 - **Order matters, and the report says so when it does.** The ChainDrop
   campaign (Aug 2026) shipped a token monitor that fires an attacker payload
   the moment the stolen GitHub token is revoked. When one scan finds both
@@ -310,9 +319,9 @@ with the way out:
   the planted persistence first and rotate second, because "rotate
   everything now" advice can itself trigger the damage.
 
-Acks change what the report says, never what CI does: `--fail-on-find`
-fails on every finding, acknowledged or not, unless you explicitly pass
-`--allow-acked` (integrity warnings always fail either way).
+Acks and dismissals change what the report says, never what CI does:
+`--fail-on-find` fails on every finding, resolved or not, unless you
+explicitly pass `--allow-acked` (integrity warnings always fail either way).
 
 ## CI and pre-commit
 
@@ -329,7 +338,7 @@ As a GitHub Action (this repository doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.3.9
+  - uses: dandovdub/residoo@v0.4.0
 ```
 
 As a pre-commit hook:
@@ -337,7 +346,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.3.9
+    rev: v0.4.0
     hooks:
       - id: residoo
 ```
