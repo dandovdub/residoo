@@ -31,8 +31,14 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       # OIDC trusted publishing needs npm 11.5+; Node 20 ships npm 10.x,
-      # which fails auth silently-tokenless. Pin the major, not @latest.
-      - run: npm install -g npm@11
+      # which fails auth silently-tokenless. Pinned to an exact version,
+      # not a floating major tag, so a future npm release can't land in
+      # this release pipeline unreviewed (Scorecard's Pinned-Dependencies
+      # check, same reasoning as the SHA-pinned Actions above). Unlike
+      # those, Dependabot does not parse a version inside a shell `run:`
+      # command, so this one needs a human to bump it occasionally --
+      # stated here rather than left to silently go stale unnoticed.
+      - run: npm install -g npm@11.19.1
 
       # Zero dependencies means there's nothing to install, but `npm ci`
       # still validates package.json/lockfile integrity before we publish.
