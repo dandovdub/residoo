@@ -47,6 +47,26 @@ scanned here left your machine; residoo makes no network calls.
 > trufflehog/betterleaks' verification postures, in
 > [docs/comparison.md](docs/comparison.md).
 
+## Benchmark: measured, not claimed
+
+A reproducible benchmark against 8 real competing tools, on a synthetic-but-
+pattern-true corpus (72 Claude Code sessions, 45 planted credentials, zero
+real secrets), with live egress monitoring so "no network calls" is
+observed, not just documented. Re-run against every meaningful release,
+most recently v0.4.13:
+
+| | residoo | best of the rest |
+|---|---|---|
+| Distinct credentials found (all claimed classes) | **44/45 (98%)** | agentsweep 33/42 (79%) |
+| Precision (false positives) | **100%** (0 of 54 flags wrong) | gitleaks, whatileaked, trufflehog also 100% |
+| Network egress during the scan | **none-observed** | 3 of 8 tools attempt real outbound calls in their *default* mode (trufflehog: 50 connection attempts to github.com, slack.com, api.anthropic.com, gitlab.com, npmjs.org) |
+
+No single blended score, on purpose: a blend would hide exactly the class-
+level differences (base64-wrapped, split-across-lines, JSON-nested) the
+benchmark exists to measure. Full per-class breakdown, fairness rules, and
+reproduction steps: [bench/](bench/). Self-run, pending independent
+reproduction; everything needed to rerun it ships in this repo.
+
 ## What it does
 
 - Scans your local AI-agent session transcripts for 50 high-confidence
@@ -265,7 +285,7 @@ As a GitHub Action (this repo doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.4.12
+  - uses: dandovdub/residoo@v0.4.13
 ```
 
 As a pre-commit hook:
@@ -273,7 +293,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.4.12
+    rev: v0.4.13
     hooks:
       - id: residoo
 ```

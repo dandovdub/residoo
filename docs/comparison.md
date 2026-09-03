@@ -14,6 +14,13 @@ for anyone deciding between residoo and an adjacent tool.
 | Runtime deps | 0 (Node only) | 0 (Go binary) | 0 (Go binary) | Python 3.11+, 3 pip packages |
 | Agent sources covered | 43 | n/a | n/a | 31 |
 
+The rows above (rule counts, deps, sources) are documented facts, not
+measured ones. For actual detection quality, precision, and egress,
+measured head to head against 8 real tools including gitleaks, trufflehog,
+and agentsweep on a synthetic-but-pattern-true corpus: see
+[`bench/`](../bench/) and [`bench/RESULTS.md`](../bench/RESULTS.md). That
+benchmark, not this table, is the answer to "does it actually work better."
+
 ## Why not just use a git scanner
 
 gitleaks and trufflehog are excellent at what they do, and what they do is
