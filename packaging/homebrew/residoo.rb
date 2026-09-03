@@ -6,9 +6,9 @@
 class Residoo < Formula
   desc "Find secrets leaking through AI coding agent session history"
   homepage "https://github.com/dandovdub/residoo"
-  url "https://registry.npmjs.org/residoo/-/residoo-0.4.3.tgz"
+  url "https://registry.npmjs.org/residoo/-/residoo-0.4.4.tgz"
   # sha256 of the real published tarball: curl -sL <url> | shasum -a 256
-  sha256 "c1223b9190e6620db562b159007dc8f7e86cca650cc0902dbcc00f5a0c0c6b3c"
+  sha256 "15b7bf9c83b00a1067226723dafcb68a137a4b80c066f3c102127acb07d5265f"
   license "MIT"
 
   depends_on "node"
