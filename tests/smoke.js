@@ -1341,6 +1341,65 @@ async function main() {
       rot3.entries[0].status === "pending" && rot3.entries[rot3.entries.length - 1].status === "dismissed");
   }
 
+  // ── report.js: renderRotationSection groups by rule, one URL per group ────
+  // Direct response to real feedback on a flat listing: the same rotation URL
+  // repeated once per finding, and a bare fingerprint with no other context.
+  {
+    const { renderRotation, fingerprintFinding } = require("../src/rotation");
+    const { renderRotationSection } = require("../src/report");
+
+    const g1 = { ruleId: "aws_access_key_id", label: "AWS Access Key ID", preview: "AKIA…1111  (20 chars)", relFile: "one.jsonl", file: "/x/one.jsonl", line: 1 };
+    const g2 = { ruleId: "aws_access_key_id", label: "AWS Access Key ID", preview: "AKIA…2222  (20 chars)", relFile: "two.jsonl", file: "/x/two.jsonl", line: 1 };
+    const g3 = { ruleId: "anthropic_key", label: "Anthropic API key", preview: "sk-a…aaaa  (53 chars)", relFile: "three.jsonl", file: "/x/three.jsonl", line: 1 };
+    const rotSmall = renderRotation([g1, g2, g3], {}, {});
+    const outSmall = renderRotationSection(rotSmall, { noColor: true });
+
+    check("grouped rotation section prints the rotate URL once per rule, not once per finding",
+      (outSmall.match(/rotate: https:\/\/docs\.aws\.amazon\.com/g) || []).length === 1);
+    check("grouped rotation section still shows every distinct finding's redacted preview and file",
+      outSmall.includes("AKIA…1111") && outSmall.includes("one.jsonl") &&
+      outSmall.includes("AKIA…2222") && outSmall.includes("two.jsonl") &&
+      outSmall.includes("sk-a…aaaa") && outSmall.includes("three.jsonl"));
+    check("grouped rotation section keeps the fingerprint as a demoted detail line, not the headline",
+      outSmall.includes(fingerprintFinding(g1)) && outSmall.includes(fingerprintFinding(g2)));
+
+    // Same value re-echoed under the SAME basename from two different
+    // directories: fingerprintFinding keys on ruleId+preview+relFile, so
+    // these merge into one entry (occurrences: 2, files.length: 1, since the
+    // merge key IS that basename). Different absolute `file` paths on
+    // purpose, to prove it's relFile driving the merge, not object identity.
+    // Also exercises lastSeenMs: the merged entry must carry the NEWER of
+    // its two occurrences' timestamps, not the older or the first-seen one.
+    const now = Date.now();
+    const g4a = { ruleId: "openai_key", label: "OpenAI API key", preview: "sk-p…zzzz  (48 chars)", relFile: "shared.jsonl", file: "/dirA/shared.jsonl", line: 1, fileMTimeMs: now - 40 * 86400000 };
+    const g4b = { ruleId: "openai_key", label: "OpenAI API key", preview: "sk-p…zzzz  (48 chars)", relFile: "shared.jsonl", file: "/dirB/shared.jsonl", line: 1, fileMTimeMs: now };
+    const rotMulti = renderRotation([g4a, g4b], {}, {});
+    check("same basename from two directories merges into one entry, not two",
+      rotMulti.counts.distinct === 1 && rotMulti.entries[0].occurrences === 2 && rotMulti.entries[0].files.length === 1);
+    check("the merged entry's last-seen is the NEWER of its two occurrences",
+      rotMulti.entries[0].lastSeenMs === g4b.fileMTimeMs);
+    const outMulti = renderRotationSection(rotMulti, { noColor: true });
+    check("rotation section shows a last-seen note derived from the newer occurrence, not the older one",
+      outMulti.includes("last seen ~0d ago") && !outMulti.includes("last seen ~40d ago"));
+
+    // Elision: one rule alone over MAX_SHOWN (12), plus two more rules after
+    // it. Mid-group truncation and whole-group elision must both count
+    // toward the same "N more" total, and an elided group's URL must never
+    // print (it was never shown, so it must not be claimed as shown).
+    const manyAws = Array.from({ length: 15 }, (_, i) => ({
+      ruleId: "aws_access_key_id", label: "AWS Access Key ID",
+      preview: `AKIA…${String(i).padStart(4, "0")}  (20 chars)`,
+      relFile: `many-${i}.jsonl`, file: `/x/many-${i}.jsonl`, line: 1,
+    }));
+    const rotBig = renderRotation([...manyAws, g3, g4a], {}, {});
+    check("elision fixture actually has 17 distinct entries across 3 rules", rotBig.counts.distinct === 17);
+    const outBig = renderRotationSection(rotBig, { noColor: true });
+    check("elision caps at MAX_SHOWN and reports the remainder across ALL groups (3 aws + anthropic + openai = 5)",
+      outBig.includes("and 5 more"));
+    check("a fully-elided group's heading and URL never print",
+      !outBig.includes("Anthropic API key") && !outBig.includes("OpenAI API key"));
+  }
+
   // ── CLI: rotation report, ack round-trip, --allow-acked exit codes ────────
   // Everything through the real binary with HOME pinned to a fixture, so
   // the ack ledger lands in the fixture's ~/.residoo, never the real one.

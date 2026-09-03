@@ -122,10 +122,10 @@ won't be built into the tool that writes it.
   preview, never the real value, including in `--json` mode. A decoded or
   rejoined secret is redacted exactly like a plain one.
 - On an interactive terminal, prints who it is and where it lives before
-  scanning starts (`residoo v0.4.0 · find secrets your AI coding agent left
+  scanning starts (`residoo v0.4.1 · find secrets your AI coding agent left
   on disk` plus the repo URL), then a live spinner naming the current file
   as it scans. Every report also opens with the exact version and timestamp
-  it was run with (`residoo v0.4.0 · scanned 2026-01-01 12:00`; `--json`
+  it was run with (`residoo v0.4.1 · scanned 2026-01-01 12:00`; `--json`
   carries the same as `residooVersion`/`scannedAt`), so a report pasted or
   screenshotted later never leaves you guessing which build produced it.
   When there are findings, the report closes with a "Next steps" pointer to
@@ -312,6 +312,17 @@ with the way out:
   report hundreds of raw findings that are really a handful of distinct
   values echoed repeatedly; the summary is built around what's actually left
   to triage, not the raw count.
+- **The rotation list is grouped by credential type**, so the rotation URL
+  prints once per type instead of once per finding. Each distinct value's own
+  line shows its redacted preview, which file it's in, and when it was last
+  seen in a transcript, not just a bare fingerprint. "Last seen" is exactly
+  that: the most recent transcript occurrence residoo found, not proof a
+  credential is still live or that an older value was rotated. Most
+  credential formats (AWS access keys, vendor API tokens) carry no shared
+  identifier linking a rotated key to its predecessor, and residoo makes no
+  network calls to ask the provider, so two distinct pending values of the
+  same type are always shown as two separate lines, never collapsed on a
+  guess.
 - **Order matters, and the report says so when it does.** The ChainDrop
   campaign (Aug 2026) shipped a token monitor that fires an attacker payload
   the moment the stolen GitHub token is revoked. When one scan finds both
@@ -338,7 +349,7 @@ As a GitHub Action (this repository doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.4.0
+  - uses: dandovdub/residoo@v0.4.1
 ```
 
 As a pre-commit hook:
@@ -346,7 +357,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.4.0
+    rev: v0.4.1
     hooks:
       - id: residoo
 ```

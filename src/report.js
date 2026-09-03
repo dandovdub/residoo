@@ -155,30 +155,88 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
     push(`  ${paint(c.red + c.bold, "⚠  " + wrapped[0])}`);
     for (const l of wrapped.slice(1)) push(`  ${paint(c.red, l)}`);
   }
-  // Same anti-flood policy as the by-file table: a report is a summary, not a
-  // dump. Everything elided here is in --json in full.
-  const MAX_SHOWN = 12;
-  const shown = entries.slice(0, MAX_SHOWN);
+  // Grouped by rule, not one row per finding: with several distinct values
+  // of the same credential type pending, the old flat list repeated the
+  // exact same rotation URL once per finding, all noise, no signal.
+  // Guidance now prints once per credential TYPE; what actually differs
+  // between two findings of the same type is which value and where, so
+  // that's what each row shows: the redacted preview (the one piece of
+  // information that lets a reader tell "this looks like my prod key" from
+  // "this looks like the placeholder ending in HERE" without cross-checking
+  // anything else) and how many files it's in, with the fingerprint kept
+  // but de-emphasized, still there for `ack`/`dismiss` but no longer the
+  // only thing on the line.
+  const groups = new Map(); // ruleId -> { label, entries: [] }
+  for (const e of entries) {
+    if (!groups.has(e.ruleId)) groups.set(e.ruleId, { label: e.label, entries: [] });
+    groups.get(e.ruleId).entries.push(e);
+  }
+  // Group order: any group with at least one pending entry first (matches
+  // the report's own "what needs attention" priority throughout), fully
+  // resolved groups after, alphabetical by label within each tier.
+  const groupList = [...groups.values()].sort((a, b) => {
+    const aPending = a.entries.some((e) => e.status === "pending");
+    const bPending = b.entries.some((e) => e.status === "pending");
+    if (aPending !== bPending) return aPending ? -1 : 1;
+    return a.label < b.label ? -1 : 1;
+  });
+
   const STATUS_TAG = {
     pending: paint(c.yellow, "pending  "),
     acked: paint(c.green, "acked    "),
     dismissed: paint(c.dim, "dismissed"),
   };
-  for (const e of shown) {
-    push(`  ${STATUS_TAG[e.status]}  ${e.fingerprint}  ${e.label}`);
-    if (e.status === "acked") {
-      push(paint(c.dim, `           acknowledged ${e.ackedAt || "(no timestamp)"}${e.ackNote ? `: ${e.ackNote}` : ""}`));
-    } else if (e.status === "dismissed") {
-      push(paint(c.dim, `           dismissed ${e.ackedAt || "(no timestamp)"}${e.ackNote ? `: ${e.ackNote}` : ""} (not a real secret)`));
-    } else {
-      const g = e.guidance;
-      const where = g.rotateUrl ? `rotate: ${g.rotateUrl}` : `where: ${g.consolePath}`;
-      push(paint(c.dim, `           ${where}`));
+  // Same anti-flood policy as the by-file table: a report is a summary, not
+  // a dump. Everything elided here is in --json in full. Counted in
+  // individual findings, not groups, so the cap means the same thing here
+  // as it always has.
+  const MAX_SHOWN = 12;
+  let shownCount = 0;
+  let elided = 0;
+  for (const g of groupList) {
+    if (shownCount >= MAX_SHOWN) { elided += g.entries.length; continue; }
+    push();
+    const g0 = g.entries[0];
+    const where = g0.guidance.rotateUrl ? `rotate: ${g0.guidance.rotateUrl}` : `where: ${g0.guidance.consolePath}`;
+    push(`  ${paint(c.bold, g.label)}`);
+    push(paint(c.dim, `    ${where}`));
+    for (const e of g.entries) {
+      if (shownCount >= MAX_SHOWN) { elided++; continue; }
+      shownCount++;
+      // e.files always has exactly one entry: the fingerprint is derived
+      // from this same basename (see fingerprintFinding in rotation.js), so
+      // two findings only ever merge into one entry when they share it. Same
+      // discipline as the "By file:" table: a filename is attacker-
+      // controllable text (a hostile --project checkout picks its own
+      // names), so it goes through safeBasename before it ever reaches the
+      // terminal, control bytes stripped, invisible code points made visible.
+      const fileNote = safeBasename(e.files[0]);
+      // Last SEEN, not last used or last rotated: the most recent transcript
+      // occurrence residoo found, nothing more. There is no reliable way to
+      // tell from a local scan whether an older value of the same rule type
+      // was superseded by a newer one, both because most credential formats
+      // (AWS access keys, vendor API tokens) carry no shared identifier
+      // linking a rotated key to its predecessor, and because residoo makes
+      // no network calls to ask the provider. Two distinct pending values of
+      // the same type are shown as two separate lines on purpose, not
+      // collapsed on a guess.
+      const lastSeenNote = typeof e.lastSeenMs === "number" ? `last seen ~${ageDays(e.lastSeenMs)}d ago` : null;
+      push(`    ${STATUS_TAG[e.status]}  ${e.preview}  ${paint(c.dim, fileNote)}` +
+        (lastSeenNote ? `  ${paint(c.dim, lastSeenNote)}` : ""));
+      if (e.status === "acked") {
+        push(paint(c.dim, `               acknowledged ${e.ackedAt || "(no timestamp)"}${e.ackNote ? `: ${e.ackNote}` : ""} · ${e.fingerprint}`));
+      } else if (e.status === "dismissed") {
+        push(paint(c.dim, `               dismissed ${e.ackedAt || "(no timestamp)"}${e.ackNote ? `: ${e.ackNote}` : ""} (not a real secret) · ${e.fingerprint}`));
+      } else {
+        push(paint(c.dim, `               ${e.fingerprint}`));
+      }
     }
   }
-  if (entries.length > shown.length) {
-    push(paint(c.dim, `  … and ${entries.length - shown.length} more; see --json for the full list`));
+  if (elided > 0) {
+    push();
+    push(paint(c.dim, `  … and ${elided} more; see --json for the full list`));
   }
+  push();
   push(paint(c.dim, `  Full runbook: residoo explain <rule-id> · rotated: residoo ack <fp> · not a secret: residoo dismiss <fp>`));
   return lines.join("\n");
 }

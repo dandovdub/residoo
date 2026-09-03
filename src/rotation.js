@@ -888,6 +888,7 @@ function renderRotation(findings, acks, dismissed = {}) {
         status: st.status,
         ackedAt: st.ackedAt,
         ackNote: st.ackNote,
+        lastSeenMs: null,
       };
       byFp.set(st.fingerprint, e);
     }
@@ -896,6 +897,14 @@ function renderRotation(findings, acks, dismissed = {}) {
     if (rel && !e.files.includes(rel)) e.files.push(rel);
     const src = f.source != null ? String(f.source) : null;
     if (src && !e.sources.includes(src)) e.sources.push(src);
+    // Most recent occurrence across all files this value showed up in: the
+    // honest, locally-derivable signal for "how stale is this." NOT proof a
+    // credential was rotated or revoked, only that residoo hasn't seen it
+    // paste anywhere more recently than this. residoo makes no network
+    // calls, so it never checks a provider for whether a key is still live.
+    if (typeof f.fileMTimeMs === "number" && (e.lastSeenMs === null || f.fileMTimeMs > e.lastSeenMs)) {
+      e.lastSeenMs = f.fileMTimeMs;
+    }
   }
 
   const entries = [...byFp.values()].sort((a, b) => {
