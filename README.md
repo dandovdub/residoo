@@ -265,7 +265,7 @@ As a GitHub Action (this repo doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.4.11
+  - uses: dandovdub/residoo@v0.4.12
 ```
 
 As a pre-commit hook:
@@ -273,7 +273,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.4.11
+    rev: v0.4.12
     hooks:
       - id: residoo
 ```

@@ -1023,14 +1023,31 @@ async function main() {
     const prevAwsCli = process.env.RESIDOO_TEST_AWS_CLI;
     process.env.RESIDOO_TEST_AWS_CLI = fakeAwsPath;
     let verifyRes;
+    // Captures scan.js's own stderr output (the --verify disclosure and
+    // results tables), same mocking pattern as the progress-reporter tests
+    // below: real process.stderr.write swapped out for the duration of one
+    // call, restored in the finally either way.
+    const originalStderrWrite = process.stderr.write;
+    let stderrWritten = [];
+    process.stderr.write = (s) => { stderrWritten.push(s); return true; };
     try {
       verifyRes = await scanOneFile("verify.jsonl",
         JSON.stringify({ message: { content: liveKey + " " + verifySecret + " and re-echoed again: " + liveKey + " " + verifySecret + " also " + deadKey + " " + verifySecret } }) + "\n",
         { verify: true });
     } finally {
+      process.stderr.write = originalStderrWrite;
       if (prevAwsCli === undefined) delete process.env.RESIDOO_TEST_AWS_CLI;
       else process.env.RESIDOO_TEST_AWS_CLI = prevAwsCli;
     }
+    const stderrText = stderrWritten.join("");
+    check("--verify: the results table (printed after the calls run, not the disclosure table before them) exists",
+      stderrText.includes("residoo --verify:") && stderrText.includes("results"));
+    check("--verify: an ACTIVE credential's line in the results table says ACTIVE",
+      stderrText.includes("ACTIVE"));
+    check("--verify: an INVALID credential's line in the results table says inactive",
+      stderrText.includes("inactive"));
+    check("--verify: the results table stamps a checked-at timestamp (YYYY-MM-DD HH:MM), not just a bare verdict",
+      /checked \d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(stderrText));
 
     // Previews are redacted to first/last 4 characters, so matching by a
     // substring like "LIVE" (which lands in the redacted middle) would

@@ -237,6 +237,16 @@ const VENDOR_EXAMPLE_VALUES = new Set([
 /** Matches every finding's own `relFile` convention — never the full path. See SECURITY.md. */
 function safeName(file) { return path.basename(file); }
 
+// Same format as report.js's own localTimestamp, duplicated rather than
+// imported: this is a 3-line pure function, and report.js is the
+// presentation layer for stdout while this file's own --verify results
+// table is stderr, the same reasoning pairing.js gives for its own small
+// duplicated helper (looksZeroEntropy) rather than cross-importing.
+function localTimestamp(d) {
+  const p2 = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+
 /**
  * Scan every transcript from every available source.
  *
@@ -705,6 +715,11 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // file while stderr still reaches a real terminal is a real case: `scan
   // --verify --json > out.json` should still color this table).
   const paint = makePaint(noColor, process.stderr);
+  // Populated inside the disclosure block below (when there's something to
+  // verify), then read again once every verify loop below has finished, to
+  // print the results table. Declared out here, not inside that block, so
+  // it survives to that second read.
+  let verifyRows = [];
   if (verify && anyPending) {
     // One disclosure, not one per vendor: this used to print a full
     // "this is a real network request..." paragraph for EACH vendor in
@@ -724,26 +739,37 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     // everywhere else in the report — reusing redact() on the same raw
     // value record() was called with, not a second display convention.
     // One line per vendor+endpoint header, one indented line per credential.
-    const rows = [];
+    //
+    // Each row also carries a `resultFinding` per credential: a direct
+    // reference to the finding object applyVerifyResult mutates below (the
+    // access-key/secret finding for AWS, the secret finding for
+    // PlanetScale/MongoDB Atlas, the finding itself for a simple vendor).
+    // Captured now, read after the verify loops run, so the results table
+    // further down needs no second vendor-shape dispatch of its own.
+    verifyRows = [];
     if (pendingAwsVerifications.size > 0 && awsAvailable) {
-      rows.push(["AWS", "sts:get-caller-identity", [...pendingAwsVerifications.keys()].map(redact)]);
+      verifyRows.push(["AWS", "sts:get-caller-identity",
+        [...pendingAwsVerifications.entries()].map(([value, { refs }]) => ({ value, resultFinding: refs[0].akiaFinding }))]);
     }
     if (pendingPlanetScaleVerifications.size > 0) {
-      rows.push(["PlanetScale", "organizations endpoint", [...pendingPlanetScaleVerifications.keys()].map(redact)]);
+      verifyRows.push(["PlanetScale", "organizations endpoint",
+        [...pendingPlanetScaleVerifications.entries()].map(([value, { refs }]) => ({ value, resultFinding: refs[0].secretFinding }))]);
     }
     if (pendingMongoDbAtlasVerifications.size > 0) {
-      rows.push(["MongoDB Atlas", "oauth/token endpoint", [...pendingMongoDbAtlasVerifications.keys()].map(redact)]);
+      verifyRows.push(["MongoDB Atlas", "oauth/token endpoint",
+        [...pendingMongoDbAtlasVerifications.entries()].map(([value, { refs }]) => ({ value, resultFinding: refs[0].secretFinding }))]);
     }
     for (const [ruleId, byValue] of pendingSimpleVerifications) {
       if (byValue.size === 0) continue;
       const [vendor, endpoint] = SIMPLE_VERIFY_VENDOR_LABEL[ruleId].split("'s ");
-      rows.push([vendor, endpoint, [...byValue.keys()].map(redact)]);
+      verifyRows.push([vendor, endpoint,
+        [...byValue.entries()].map(([value, { refs }]) => ({ value, resultFinding: refs[0] }))]);
     }
-    if (rows.length > 0) {
-      const table = rows
-        .map(([vendor, endpoint, previews]) =>
-          `    ${paint(c.bold, vendor)} ${paint(c.dim, "·")} ${paint(c.dim, endpoint)}\n` +
-          previews.map((p) => `        ${p}`).join("\n"))
+    if (verifyRows.length > 0) {
+      const table = verifyRows
+        .map(([vendor, endpoint, credentials]) =>
+          `    ${paint(c.bold + c.cyan, vendor)} ${paint(c.dim, "·")} ${paint(c.dim, endpoint)}\n` +
+          credentials.map(({ value }) => `        ${redact(value)}`).join("\n"))
         .join("\n");
       process.stderr.write(
         paint(c.yellow + c.bold, "residoo --verify:") +
@@ -799,6 +825,37 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
         applyVerifyResult(refs, result);
       }
     }
+  }
+
+  if (verify && verifyRows.length > 0) {
+    // Same vendor/endpoint grouping as the disclosure table above, now
+    // showing what each call actually found. An ACTIVE credential is a
+    // real, present-tense risk, colored the same red/bold the Rotation
+    // section below uses for the identical fact ("rotate immediately");
+    // "could not verify" gets the same red/bold too, on purpose, matching
+    // this project's fail-safe-direction policy of treating "unknown" as
+    // "assume risk" rather than as reassuring silence. Stamped with when
+    // this check actually ran, so a report read later (pasted into a
+    // ticket, screenshotted) doesn't silently imply "still true right now."
+    const checkedAt = localTimestamp(new Date());
+    const describeResult = (finding) => {
+      if (finding.verified === "active") {
+        return paint(c.red + c.bold, `⚠ ACTIVE: real working credential`) + paint(c.dim, ` (checked ${checkedAt})`);
+      }
+      if (finding.verified === "invalid") {
+        return paint(c.green, `✓ inactive: vendor rejected it`) + paint(c.dim, ` (checked ${checkedAt})`);
+      }
+      return paint(c.red + c.bold, `⚠ could not verify`) + paint(c.dim, ` (checked ${checkedAt}${finding.verifiedDetail ? `: ${finding.verifiedDetail}` : ""})`);
+    };
+    const resultsTable = verifyRows
+      .map(([vendor, endpoint, credentials]) =>
+        `    ${paint(c.bold + c.cyan, vendor)} ${paint(c.dim, "·")} ${paint(c.dim, endpoint)}\n` +
+        credentials.map(({ value, resultFinding }) => `        ${redact(value)}  ${describeResult(resultFinding)}`).join("\n"))
+      .join("\n");
+    process.stderr.write(
+      paint(c.yellow + c.bold, "residoo --verify:") + " results\n\n" +
+      resultsTable + "\n\n"
+    );
   }
 
   const distinctCounts = {};
