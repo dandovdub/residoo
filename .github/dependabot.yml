@@ -1,0 +1,13 @@
+# residoo itself has zero runtime dependencies (see CONTRIBUTING.md), so
+# there is no npm ecosystem to track here. What DOES need tracking: every
+# GitHub Action referenced in .github/workflows/ and action.yml is pinned
+# to an exact commit SHA (see each file's own "# vX.Y.Z" comment) rather
+# than a floating tag, precisely so a Dependabot-opened PR bumping that SHA
+# is a real, reviewable, single-line diff instead of a silent, unpinned
+# drift to whatever a tag happens to point at later.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

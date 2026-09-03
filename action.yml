@@ -69,7 +69,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: "20"
     - name: Install residoo
@@ -110,7 +110,7 @@ runs:
         residoo scan --project "$RESIDOO_PROJECT_DIR" --sarif > residoo-results.sarif
     - name: Upload SARIF to GitHub code scanning
       if: inputs.sarif == 'true'
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@6f5948dfacef28e207b48d0905cf90c03365536d # v3.37.9
       with:
         sarif_file: residoo-results.sarif
     - name: Apply scan result

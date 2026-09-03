@@ -18,18 +18,25 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   test-sarif:
     runs-on: ubuntu-latest
+    # security-events: write is scoped to this one job, not the whole
+    # workflow (least-privilege: a workflow-level write grant applies to
+    # every job in the file, including any added later that doesn't need
+    # it; this job is the only thing that does, via the composite action's
+    # own internal upload-sarif step when sarif: "true" is passed below).
+    permissions:
+      contents: read
+      security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Plant a synthetic, pattern-true finding (never committed)
         run: |
           echo 'AWS_ACCESS_KEY_ID=AKIASARIFTESTFAKEKEY' > .env.sarif-test
       - name: Run residoo with SARIF enabled
-        uses: dandovdub/residoo@v0.3.6
+        uses: dandovdub/residoo@3e3b20f96cf512103b08f24365debe0aec70bd10 # v0.3.6
         with:
           fail-on-find: "false"
           sarif: "true"
