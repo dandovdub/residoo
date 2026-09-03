@@ -60,6 +60,26 @@ watching 43 sources, 118 files · polling every 5s
 > trufflehog/betterleaks' verification postures, in
 > [docs/comparison.md](docs/comparison.md).
 
+Scan and watch tell you what already leaked. The most common way a NEW
+leak happens is pasting a key into the chat so Claude can use it, which
+then sits in that conversation's transcript forever, the exact thing scan
+exists to catch in the first place. `residoo cred` closes that loop: store
+a credential once in your OS keychain, then let Claude run a command with
+it injected as an environment variable, never pasted into the chat, never
+written into a script (see
+[Cred: run commands with injected credentials](#cred-run-commands-with-injected-credentials)):
+
+```
+$ residoo cred set aws-prod --env AWS_ACCESS_KEY_ID --env AWS_SECRET_ACCESS_KEY
+Value for AWS_ACCESS_KEY_ID (input hidden):
+Value for AWS_SECRET_ACCESS_KEY (input hidden):
+Stored credential "aws-prod" (2 env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY).
+
+$ residoo cred run aws-prod -- aws s3 ls
+exit 0 (succeeded). stdout: 3 line(s), stderr: 0 line(s).
+Command output is never shown by design, only exit status and line counts.
+```
+
 ## Benchmark: measured, not claimed
 
 A reproducible benchmark against 8 real competing tools, on a synthetic-but-
@@ -475,9 +495,13 @@ injected-credential execution, covered below.
 
 ## Cred: run commands with injected credentials
 
-`residoo cred` stores a live, reusable credential in the OS keychain and
-runs one allow-listed command with it injected as environment variables:
-Claude never sees the raw value, before, during, or after:
+The usual way an AI coding agent ends up able to use a real credential is
+you pasting it into the chat, which puts it in that conversation's
+transcript forever, indistinguishable from any other leak `residoo scan`
+finds. `residoo cred` is the alternative: store the credential once in
+your OS keychain, then let Claude run one allow-listed command with it
+injected as environment variables. Claude never sees the raw value,
+before, during, or after, and it's never written into a script either.
 
 ```bash
 residoo cred set aws-prod --env AWS_ACCESS_KEY_ID --env AWS_SECRET_ACCESS_KEY
