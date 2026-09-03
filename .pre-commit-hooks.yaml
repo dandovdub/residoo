@@ -16,7 +16,7 @@
 # Consumers add to .pre-commit-config.yaml:
 #   repos:
 #     - repo: https://github.com/dandovdub/residoo
-#       rev: v0.5.0
+#       rev: v0.6.0
 #       hooks:
 #         - id: residoo
 - id: residoo

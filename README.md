@@ -129,6 +129,10 @@ reproduction; everything needed to rerun it ships in this repo.
 - **`residoo watch`**: continuous scanning instead of one snapshot, alerting
   the moment a new secret lands in a transcript. See
   [Watch: continuous scanning](#watch-continuous-scanning) below.
+- **`residoo mcp`**: query findings and manage rotation from inside Claude
+  Code itself, over a hand-rolled MCP server. See
+  [MCP: query findings from inside Claude Code](#mcp-query-findings-from-inside-claude-code)
+  below.
 
 ## Beyond transcripts: configs and planted persistence
 
@@ -301,7 +305,7 @@ As a GitHub Action (this repo doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.5.0
+  - uses: dandovdub/residoo@v0.6.0
 ```
 
 As a pre-commit hook:
@@ -309,7 +313,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.5.0
+    rev: v0.6.0
     hooks:
       - id: residoo
 ```
@@ -431,6 +435,37 @@ project's own benchmark ([`bench/`](bench/)) has a continuous mode at all,
 verified directly against each one's own `--help` output rather than
 assumed; see [docs/comparison.md](docs/comparison.md) for how the one
 adjacent thing, GitGuardian's `ggshield` AI hook, works differently.
+
+## MCP: query findings from inside Claude Code
+
+`residoo mcp` runs residoo as an MCP server over stdio, so Claude Code can
+query findings and manage the rotation ledger conversationally instead of
+you running the CLI in a terminal:
+
+```bash
+claude mcp add residoo -- residoo mcp
+```
+
+or add it directly to `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "residoo": { "type": "stdio", "command": "residoo", "args": ["mcp"] }
+  }
+}
+```
+
+Five tools, mirroring the CLI exactly: `residoo_scan` (a fresh scan,
+merged with rotation status), `residoo_check` (only what's new since the
+last check in this conversation, backed by the same engine as `watch`),
+`residoo_explain` (a rule's rotation runbook), and `residoo_ack` /
+`residoo_dismiss` (append to the local ledger). Every value returned is
+redacted the same way the CLI's own output is; nothing here makes a
+network call or touches the transcript files themselves. Like the rest of
+residoo, this is hand-rolled against the MCP spec directly, not built on
+`@modelcontextprotocol/sdk`: zero runtime dependencies stays true here
+too.
 
 ## Sources supported today
 

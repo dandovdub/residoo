@@ -94,6 +94,27 @@ but it doesn't need one installed per tool either, and it covers every
 transcript store residoo already knows about, not just the one tool a hook
 happens to be attached to.
 
+## Sieve: same niche, different shape
+
+[Sieve](https://apps.apple.com/us/app/sieve-secret-scanner/id6767409365) is
+a macOS GUI app ($9.99, App Store) scanning the same class of target
+(Claude Code, Cursor, VS Code Copilot, Windsurf, Codex, and more local
+agent session state) for leaked secrets, with a pitch nearly identical to
+residoo's own: local-only, no telemetry, no cloud sync. It also ships an
+MCP server for Claude Code, and residoo now does too, but the two aren't
+doing the same thing with it. Sieve's MCP integration lets Claude run
+commands with vault-stored credentials injected at execution time, so
+Claude never sees the raw value even while using it. residoo's MCP server
+(`residoo mcp`, see the [MCP section](../README.md#mcp-query-findings-from-inside-claude-code)
+above) is deliberately narrower: query findings, get rotation guidance,
+and acknowledge/dismiss them, all read-only against the local ledger,
+nothing intercepted or injected. That's a real scope difference, not a
+parity claim: residoo's own "nothing destructive, ever" stance is the
+reason, and closing that gap would be a separate, larger decision, not an
+oversight. Sieve is also GUI-only and macOS-only, with no CLI, CI, or
+cross-platform story, and (as of its last update) no continuous/watch
+mode either.
+
 ## Verifying a found value is still live
 
 The field splits into two real postures, and residoo picked a side.

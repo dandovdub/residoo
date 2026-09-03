@@ -2927,6 +2927,193 @@ async function main() {
     }
   }
 
+  // ── mcp: hand-rolled MCP server over stdio (src/mcp.js + src/mcpTools.js) ───
+  // Real spawned subprocess, real HOME-pinned fixture, matching this file's
+  // existing spawnSync CLI-testing precedent for the fully scripted flows;
+  // one genuinely interactive test (residoo_check across a real file
+  // mutation between two calls to the SAME live process) uses async spawn
+  // instead, since that scenario needs the test to act mid-connection.
+  {
+    const { spawnSync, spawn } = require("child_process");
+    const { fingerprintFinding } = require("../src/rotation");
+    const { redact: redactValue } = require("../src/patterns");
+    const residooBin = path.join(__dirname, "..", "bin", "residoo.js");
+
+    const mcpHome = fs.mkdtempSync(path.join(tmp, "mcp-"));
+    const projDir = path.join(mcpHome, ".claude", "projects", "testproj");
+    fs.mkdirSync(projDir, { recursive: true });
+    const sessionFile = path.join(projDir, "session1.jsonl");
+    fs.writeFileSync(sessionFile,
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "key: " + plantedAwsKey }] } }) + "\n");
+
+    const expectedPreview = redactValue(plantedAwsKey);
+    const expectedFingerprint = fingerprintFinding({ ruleId: "aws_access_key_id", preview: expectedPreview, relFile: "session1.jsonl" });
+
+    function runMcp(lines, home) {
+      const input = lines.map((l) => JSON.stringify(l)).join("\n") + "\n";
+      const res = spawnSync(process.execPath, [residooBin, "mcp"], {
+        input, encoding: "utf-8", env: { ...process.env, HOME: home },
+      });
+      const outLines = res.stdout.split("\n").filter((l) => l.length > 0);
+      const parsed = outLines.map((l) => { try { return JSON.parse(l); } catch { return { __unparseable: l }; } });
+      return { status: res.status, stdout: res.stdout, stderr: res.stderr, lines: outLines, parsed };
+    }
+    const byId = (parsed, id) => parsed.find((m) => m.id === id);
+
+    // One continuous session so the fingerprint-hallucination guard's
+    // "seen this session" state carries correctly across the whole sequence.
+    const seq = [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "0.0.1" } } },
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+      { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "residoo_scan", arguments: {} } },
+      { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "residoo_explain", arguments: { ruleId: "aws_access_key_id" } } },
+      { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "residoo_explain", arguments: {} } },
+      { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "residoo_explain", arguments: { ruleId: "totally_unknown_rule_xyz" } } },
+      { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "residoo_ack", arguments: { fingerprint: expectedFingerprint, note: "rotated in test" } } },
+      { jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "residoo_ack", arguments: { fingerprint: "rf1-00000000000000000000000000000000" } } },
+      { jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "residoo_dismiss", arguments: { fingerprint: expectedFingerprint } } },
+      { jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "nonexistent_tool", arguments: {} } },
+      { jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "residoo_scan", arguments: { maxEntries: "abc" } } },
+      { jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "residoo_check", arguments: {} } },
+      { jsonrpc: "2.0", id: 13, method: "server/discover" },
+    ];
+    const r = runMcp(seq, mcpHome);
+
+    check("mcp: process exits 0 on clean stdin close", r.status === 0);
+    check("mcp: every stdout line parses as standalone JSON", r.parsed.every((m) => !m.__unparseable));
+    check("mcp: notifications/initialized (id-less) produces no reply line at all",
+      r.parsed.length === seq.filter((m) => "id" in m).length);
+
+    const init = byId(r.parsed, 1);
+    check("mcp: initialize echoes the requested protocol version and the correct result shape",
+      !!init && !!init.result && init.result.protocolVersion === "2025-06-18" &&
+      init.result.capabilities && typeof init.result.capabilities.tools === "object" &&
+      init.result.serverInfo && init.result.serverInfo.name === "residoo");
+
+    const list = byId(r.parsed, 2);
+    const toolNames = list && list.result ? list.result.tools.map((t) => t.name).sort() : [];
+    check("mcp: tools/list returns exactly the 5 expected tools",
+      JSON.stringify(toolNames) === JSON.stringify(["residoo_ack", "residoo_check", "residoo_dismiss", "residoo_explain", "residoo_scan"]));
+    check("mcp: every listed tool has a real description and an object inputSchema",
+      list.result.tools.every((t) => typeof t.description === "string" && t.description.length > 20 && t.inputSchema && t.inputSchema.type === "object"));
+
+    const scanMsg = byId(r.parsed, 3);
+    const scanPayload = JSON.parse(scanMsg.result.content[0].text);
+    check("mcp: residoo_scan finds the planted secret with a redacted preview only",
+      scanPayload.entries.length === 1 &&
+      scanPayload.entries[0].fingerprint === expectedFingerprint &&
+      scanPayload.entries[0].preview === expectedPreview);
+    check("mcp: residoo_scan never leaks the raw secret anywhere in stdout",
+      !r.stdout.includes("SM0KETESTFAKEKEY"));
+
+    const explainKnown = JSON.parse(byId(r.parsed, 4).result.content[0].text);
+    check("mcp: residoo_explain with a known ruleId returns the full runbook",
+      explainKnown.known === true && explainKnown.ruleId === "aws_access_key_id" &&
+      Array.isArray(explainKnown.steps) && explainKnown.steps.length > 0);
+
+    const explainList = JSON.parse(byId(r.parsed, 5).result.content[0].text);
+    check("mcp: residoo_explain with no ruleId lists every known rule id",
+      Array.isArray(explainList.ruleIds) && explainList.ruleIds.length > 10 &&
+      explainList.ruleIds.some((x) => x.id === "aws_access_key_id"));
+
+    const explainUnknown = JSON.parse(byId(r.parsed, 6).result.content[0].text);
+    check("mcp: residoo_explain with an unrecognized ruleId still succeeds, known:false, never errors",
+      explainUnknown.known === false && typeof explainUnknown.label === "string");
+
+    const ackReal = JSON.parse(byId(r.parsed, 7).result.content[0].text);
+    check("mcp: residoo_ack on a fingerprint actually seen this session carries warning:null",
+      ackReal.fingerprint === expectedFingerprint && ackReal.status === "acked" && ackReal.warning === null);
+
+    const ackFake = JSON.parse(byId(r.parsed, 8).result.content[0].text);
+    check("mcp: residoo_ack on a well-formed but never-seen fingerprint carries a non-null warning",
+      ackFake.status === "acked" && typeof ackFake.warning === "string" && ackFake.warning.length > 0);
+
+    const dismissReal = JSON.parse(byId(r.parsed, 9).result.content[0].text);
+    check("mcp: residoo_dismiss records status \"dismissed\", distinct from ack",
+      dismissReal.status === "dismissed" && dismissReal.fingerprint === expectedFingerprint);
+
+    const unknownTool = byId(r.parsed, 10);
+    check("mcp: calling an unknown tool name is a PROTOCOL error (-32602), not a tool-execution error",
+      !unknownTool.result && !!unknownTool.error && unknownTool.error.code === -32602);
+
+    const badArgs = byId(r.parsed, 11);
+    check("mcp: a known tool called with a wrong-typed argument is a TOOL EXECUTION error (isError:true), not a protocol error (the SEP-1303 split)",
+      !badArgs.error && !!badArgs.result && badArgs.result.isError === true);
+
+    const checkMsg = byId(r.parsed, 12);
+    const checkPayload = JSON.parse(checkMsg.result.content[0].text);
+    check("mcp: residoo_check's first call in a session baselines silently",
+      checkPayload.firstCheckThisSession === true && checkPayload.newFindings.length === 0);
+
+    const discoverMsg = byId(r.parsed, 13);
+    check("mcp: an unrecognized method (e.g. a server/discover era-probe) gets an immediate plain -32601, not silence or a hang",
+      !discoverMsg.result && !!discoverMsg.error && discoverMsg.error.code === -32601);
+
+    const ledgerPath = path.join(mcpHome, ".residoo", "rotations.json");
+    const ledgerText = fs.readFileSync(ledgerPath, "utf-8");
+    check("mcp: ack/dismiss actually persisted to the pinned-HOME ledger file, no raw secret in it",
+      ledgerText.includes(expectedFingerprint) && !ledgerText.includes("SM0KETESTFAKEKEY"));
+
+    // Malformed input: separate run so it can't disturb the sequence above.
+    // runMcp()'s `input` is built by JSON.stringify-ing every entry, which
+    // would just re-encode a raw string as a JSON string literal (still
+    // valid JSON) rather than injecting genuinely malformed bytes -- so
+    // this case builds its own direct input string instead of using runMcp().
+    const rawInput =
+      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }) + "\n" +
+      "not valid json at all\n" +
+      JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) + "\n";
+    const malformedRaw = spawnSync(process.execPath, [residooBin, "mcp"], { input: rawInput, encoding: "utf-8", env: { ...process.env, HOME: mcpHome } });
+    const malformedLines = malformedRaw.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    check("mcp: a malformed (non-JSON) line gets a -32700 parse error with id:null, and the connection keeps working afterward",
+      malformedLines.length === 3 &&
+      malformedLines[1].error && malformedLines[1].error.code === -32700 && malformedLines[1].id === null &&
+      malformedLines[2].id === 2 && Array.isArray(malformedLines[2].result.tools));
+
+    // residoo_check across TWO calls to the SAME live process, with a real
+    // file mutation in between -- genuinely needs process interactivity
+    // (the test must act mid-connection), so this one uses async spawn
+    // rather than the fully-scripted spawnSync flows above.
+    {
+      const checkDir = fs.mkdtempSync(path.join(tmp, "mcp-check-"));
+      const checkProjDir = path.join(checkDir, ".claude", "projects", "p2");
+      fs.mkdirSync(checkProjDir, { recursive: true });
+      const checkFile = path.join(checkProjDir, "s.jsonl");
+      fs.writeFileSync(checkFile, "");
+
+      const child = spawn(process.execPath, [residooBin, "mcp"], {
+        env: { ...process.env, HOME: checkDir }, stdio: ["pipe", "pipe", "ignore"],
+      });
+      const outChunks = [];
+      child.stdout.on("data", (d) => outChunks.push(d));
+      const send = (obj) => child.stdin.write(JSON.stringify(obj) + "\n");
+
+      send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } });
+      send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "residoo_check", arguments: {} } });
+      await new Promise((res) => setTimeout(res, 400));
+
+      fs.appendFileSync(checkFile, JSON.stringify({ message: { content: "new key: AKIAQ7B3N5K9M1P4R2T6" } }) + "\n");
+      send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "residoo_check", arguments: {} } });
+      await new Promise((res) => setTimeout(res, 400));
+
+      child.stdin.end();
+      await new Promise((res) => child.on("exit", res));
+
+      const lines = Buffer.concat(outChunks).toString("utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      const first = lines.find((m) => m.id === 2);
+      const second = lines.find((m) => m.id === 3);
+      const firstPayload = JSON.parse(first.result.content[0].text);
+      const secondPayload = JSON.parse(second.result.content[0].text);
+
+      check("mcp: residoo_check's first call baselines silently (zero new findings)",
+        firstPayload.firstCheckThisSession === true && firstPayload.newFindings.length === 0);
+      check("mcp: residoo_check's second call, after a REAL new secret was written, reports exactly one new finding",
+        secondPayload.firstCheckThisSession === false && secondPayload.newFindings.length === 1 &&
+        secondPayload.newFindings[0].ruleId === "aws_access_key_id");
+    }
+  }
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

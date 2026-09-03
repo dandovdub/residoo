@@ -11,6 +11,8 @@ const {
   ROTATION_GUIDANCE, guidanceFor, loadAcks, loadDismissed, ackFinding, dismissFinding, renderRotation,
 } = require("./rotation");
 const { startWatch, isTailable } = require("./watch");
+const { startMcpServer } = require("./mcp");
+const { buildTools } = require("./mcpTools");
 
 /**
  * A source is unavailable for the ordinary reason (not installed — nothing
@@ -146,6 +148,20 @@ Watch:
   --include-noisy, --include-suppressed, --no-color   same meaning as scan
   Ctrl+C stops cleanly and prints a session summary (skipped with --json,
   where the same information is one final NDJSON event).
+
+MCP:
+  residoo mcp              run residoo as an MCP server over stdio, so
+                          Claude Code (or any other MCP client) can query
+                          findings and manage rotation conversationally
+                          instead of a human running the CLI. No network
+                          calls, nothing destructive: the 5 exposed tools
+                          (residoo_scan, residoo_check, residoo_explain,
+                          residoo_ack, residoo_dismiss) mirror scan/watch/
+                          explain/ack/dismiss exactly, and every value
+                          returned is redacted the same way. Register it
+                          with "claude mcp add residoo -- residoo mcp".
+                          Zero runtime dependencies: the protocol is hand-
+                          rolled, not the official SDK.
 
 Rotation:
   residoo explain <rule-id>     full rotation runbook for one detection rule
@@ -571,6 +587,44 @@ async function runWatch(args) {
   return 0;
 }
 
+/**
+ * `residoo mcp`: run residoo as an MCP server over stdio. See src/mcp.js
+ * for the protocol engine and src/mcpTools.js for the tool catalog; this
+ * function is only the startup banner (stderr only -- see mcp.js's own
+ * doc comment on why stdout must never carry anything but protocol
+ * messages) and wiring SIGINT/SIGTERM to a clean stop, mirroring runWatch.
+ */
+async function runMcp(args) {
+  const { version } = require("../package.json");
+  const sources = availableSources();
+  process.stderr.write(
+    sources.length
+      ? `residoo mcp: ${sources.length} source(s) available on this machine: ${sources.map((s) => s.label()).join(", ")}\n`
+      : `residoo mcp: no known transcript sources found on this machine (residoo_scan will report none until one is installed and residoo mcp is restarted).\n`
+  );
+  process.stderr.write("residoo mcp: ready. Waiting for a client on stdin...\n");
+
+  const { promise, stop } = startMcpServer({
+    tools: buildTools({ sources }),
+    serverInfo: { name: "residoo", version },
+    instructions: "Find secrets leaking through this machine's AI coding agent session histories. All tool output is redacted; raw secret values are never returned. Nothing here is destructive: scanning is read-only, and ack/dismiss only append to a local audit ledger.",
+  });
+
+  let signalled = false;
+  const onSignal = () => {
+    if (signalled) return;
+    signalled = true;
+    stop();
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+
+  await promise;
+  process.removeListener("SIGINT", onSignal);
+  process.removeListener("SIGTERM", onSignal);
+  return 0;
+}
+
 async function main(argv) {
   const args = argv.slice(2);
   if (args.includes("-h") || args.includes("--help") || args.length === 0) {
@@ -584,6 +638,7 @@ async function main(argv) {
   if (cmd === "ack") return runAck(args);
   if (cmd === "dismiss") return runDismiss(args);
   if (cmd === "watch") return runWatch(args);
+  if (cmd === "mcp") return runMcp(args);
   if (cmd !== "scan") {
     process.stderr.write(`Unknown command "${cmd}". Try "residoo --help".\n`);
     return 2;
