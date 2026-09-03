@@ -40,4 +40,15 @@ jobs:
 
       - run: node bin/residoo.js --help # smoke test: the CLI must at least run
 
+      # actions/setup-node's registry-url input writes an EMPTY
+      # "_authToken=" line into .npmrc even when NODE_AUTH_TOKEN is unset
+      # (a known upstream issue: actions/setup-node#1551). npm then tries
+      # that blank token for the actual publish instead of relying purely
+      # on the OIDC exchange this workflow is built around, and fails with
+      # a 401 "token is invalid" that has nothing to do with OIDC itself
+      # being broken. Stripping the line is the documented workaround.
+      - run: |
+          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          sed -i '/_authToken/d' "$npmrc"
+
       - run: npm publish --provenance
