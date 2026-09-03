@@ -1398,6 +1398,12 @@ async function main() {
       outBig.includes("and 5 more"));
     check("a fully-elided group's heading and URL never print",
       !outBig.includes("Anthropic API key") && !outBig.includes("OpenAI API key"));
+    // Real user confusion, verified live: "N more" printed directly under
+    // whichever group filled the last visible slot reads as "N more of
+    // THIS type," when the remainder is almost always spread across other
+    // rule types too. The line must say so.
+    check("the elision line names how many OTHER rule types it spans, not just a bare count",
+      outBig.includes("and 5 more across 3 rule types"));
   }
 
   // ── CLI: rotation report, ack round-trip, --allow-acked exit codes ────────

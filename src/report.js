@@ -193,15 +193,23 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
   const MAX_SHOWN = 12;
   let shownCount = 0;
   let elided = 0;
+  // Tracked separately from `elided` so the closing line can say WHICH rule
+  // types got cut, not just how many entries. The cap is global across all
+  // groups (a report is a summary), so on a rule-heavy scan the elided
+  // remainder almost always spans multiple types, not more of whichever
+  // group happened to print right above the "N more" line; without this a
+  // reader sees that line directly under (say) an Anthropic group and
+  // reasonably reads it as "N more Anthropic keys," which it usually is not.
+  const elidedRuleLabels = new Set();
   for (const g of groupList) {
-    if (shownCount >= MAX_SHOWN) { elided += g.entries.length; continue; }
+    if (shownCount >= MAX_SHOWN) { elided += g.entries.length; elidedRuleLabels.add(g.label); continue; }
     push();
     const g0 = g.entries[0];
     const where = g0.guidance.rotateUrl ? `rotate: ${g0.guidance.rotateUrl}` : `where: ${g0.guidance.consolePath}`;
     push(`  ${paint(c.bold, g.label)}`);
     push(paint(c.dim, `    ${where}`));
     for (const e of g.entries) {
-      if (shownCount >= MAX_SHOWN) { elided++; continue; }
+      if (shownCount >= MAX_SHOWN) { elided++; elidedRuleLabels.add(g.label); continue; }
       shownCount++;
       // e.files always has exactly one entry: the fingerprint is derived
       // from this same basename (see fingerprintFinding in rotation.js), so
@@ -234,7 +242,8 @@ function renderRotationSection(rotation, { noColor = false, showAdvisory = false
   }
   if (elided > 0) {
     push();
-    push(paint(c.dim, `  … and ${elided} more; see --json for the full list`));
+    const typeNote = elidedRuleLabels.size > 1 ? ` across ${elidedRuleLabels.size} rule types` : "";
+    push(paint(c.dim, `  … and ${elided} more${typeNote}; see --json for the full list`));
   }
   push();
   push(paint(c.dim, `  Full runbook: residoo explain <rule-id> · rotated: residoo ack <fp> · not a secret: residoo dismiss <fp>`));

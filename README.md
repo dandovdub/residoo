@@ -122,10 +122,10 @@ won't be built into the tool that writes it.
   preview, never the real value, including in `--json` mode. A decoded or
   rejoined secret is redacted exactly like a plain one.
 - On an interactive terminal, prints who it is and where it lives before
-  scanning starts (`residoo v0.4.1 · find secrets your AI coding agent left
+  scanning starts (`residoo v0.4.2 · find secrets your AI coding agent left
   on disk` plus the repo URL), then a live spinner naming the current file
   as it scans. Every report also opens with the exact version and timestamp
-  it was run with (`residoo v0.4.1 · scanned 2026-01-01 12:00`; `--json`
+  it was run with (`residoo v0.4.2 · scanned 2026-01-01 12:00`; `--json`
   carries the same as `residooVersion`/`scannedAt`), so a report pasted or
   screenshotted later never leaves you guessing which build produced it.
   When there are findings, the report closes with a "Next steps" pointer to
@@ -349,7 +349,7 @@ As a GitHub Action (this repository doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.4.1
+  - uses: dandovdub/residoo@v0.4.2
 ```
 
 As a pre-commit hook:
@@ -357,7 +357,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.4.1
+    rev: v0.4.2
     hooks:
       - id: residoo
 ```
