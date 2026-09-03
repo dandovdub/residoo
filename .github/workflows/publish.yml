@@ -38,6 +38,19 @@ jobs:
       # those, Dependabot does not parse a version inside a shell `run:`
       # command, so this one needs a human to bump it occasionally --
       # stated here rather than left to silently go stale unnoticed.
+      #
+      # This is the practical ceiling, not an oversight: Scorecard's
+      # check technically wants a HASH, not just an exact version, but
+      # npm itself has no practical hash-pinning syntax for a plain
+      # global CLI install (a known, community-acknowledged tooling gap:
+      # ossf/scorecard#1754). The only literal workaround is manually
+      # downloading the npm tarball and verifying its checksum by hand,
+      # which is more fragile CI logic for marginal extra protection over
+      # an exact-version pin -- that pin already blocks the actual threat
+      # (an unreviewed future npm release landing silently); a checksum
+      # would only additionally guard against the registry response for
+      # THIS exact version being tampered with in flight, already covered
+      # by TLS to registry.npmjs.org. Not worth the fragility.
       - run: npm install -g npm@11.19.1
 
       # Zero dependencies means there's nothing to install, but `npm ci`
