@@ -61,6 +61,14 @@ the determinism claim demonstrated rather than asserted.
 
 ## Tool versions
 
+This table documents the original v1 baseline run (2026-09-02). residoo's
+own row is superseded by every dated rerun section later in this file (most
+recently 0.8.0) — it advances every release. Every OTHER tool's version
+below was pinned once here and reused unchanged in every rerun since: none
+of them were reinstalled or upgraded between runs, so gitleaks 8.30.1,
+TruffleHog 3.97.2, and the rest are still the exact versions behind every
+later result in this document too, not just this first one.
+
 | tool | version | invocation (scan-only) |
 |---|---|---|
 | residoo | 0.3.0 (this repo at commit 16c911f, `node bin/residoo.js scan --json`) | machine scan, HOME pinned |
