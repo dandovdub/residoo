@@ -111,7 +111,7 @@ own public tool schema (its `sieve-mcp` stub repo) actually shows: Sieve's
 tool takes a single `command` string, implying shell interpretation, and
 documents no allow-list or execution-time enforcement mechanism anywhere.
 residoo's `residoo_run_with_cred` (see
-[Cred](../README.md#cred-run-commands-with-injected-credentials) above)
+[Cred](features.md#cred-run-commands-with-injected-credentials))
 takes a structured argument list, never a shell string, and the command
 name is resolved *only* against an operator-configured, absolute-path-pinned
 allow-list read fresh on every call, closing a real vulnerability class
