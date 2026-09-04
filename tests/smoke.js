@@ -114,6 +114,31 @@ async function main() {
   // tracker (#4711, #4609, both open/unaddressed there too).
   check("Stripe webhook secret matched, only by stripe_webhook_secret (never stripe_key/stripe_test_key)",
     matchesOnly("stripe_webhook_secret", "whsec_" + "aB3xY9qZ1mN4pQ7rS2tU5vW8"));
+  // Claude Code Remote Control session URL: found via a gitleaks open
+  // issue (#2094) whose proposed session_<id> pattern was checked
+  // against this project's own installed `claude` binary and found
+  // wrong -- the real template has no prefix and the ID is a UUID v4.
+  check("Claude Code Remote Control session URL (bare UUID, no prefix) matched, only by claude_code_remote_control_url",
+    matchesOnly("claude_code_remote_control_url", "https://claude.ai/code/19ea187b-723a-4c8b-97d8-447fa87545b6"));
+  check("a gitleaks-issue-style session_<id> guess is correctly NOT what this rule looks for (confirming the real template has no prefix)",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("https://claude.ai/code/session_aaaaaaaaaaaaaaaaaaaaaaaa"); }));
+  check("wrong host (not claude.ai) never matches",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("https://example.com/code/19ea187b-723a-4c8b-97d8-447fa87545b6"); }));
+  check("wrong path (not /code/) never matches",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("https://claude.ai/chat/19ea187b-723a-4c8b-97d8-447fa87545b6"); }));
+  check("a non-UUID-shaped path segment under claude.ai/code/ never matches (e.g. /code/artifacts)",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("https://claude.ai/code/artifacts"); }));
+  // Azure AD client secret: adapted from gitleaks' own battle-tested rule
+  // (found via gitleaks/gitleaks#1687), anchored on its distinctive "Q~" marker.
+  check("Azure AD client secret matched, only by azure_ad_client_secret",
+    matchesOnly("azure_ad_client_secret", "aB3" + "9Q~" + "x".repeat(32)));
+  check("plain English text is never mistaken for an Azure AD client secret",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("this is just some normal english sentence with words"); }));
+  // Tailscale auth key: found via gitleaks/gitleaks#1778 (still open there too).
+  check("Tailscale auth key (tskey-auth- form) matched, only by tailscale_auth_key",
+    matchesOnly("tailscale_auth_key", "tskey-auth-" + "k7CNTRL1CNTRL11" + "-" + "a".repeat(30)));
+  check("Tailscale auth key (legacy bare tskey- form) matched, only by tailscale_auth_key",
+    matchesOnly("tailscale_auth_key", "tskey-" + "a".repeat(20)));
 
   // ── sealcrypto: round-trip, wrong passphrase, tamper ──────────────────────
   const { sealFile, unsealFile, sealBuffer, unsealBuffer } = require("../src/sealcrypto");

@@ -664,6 +664,60 @@ can't exercise the same way a pattern rule can): residoo stays 45/45
 (100%), 100% precision, none-observed egress, byte-identical to 0.8.3
 except the version label. Every other tool's row reproduced unchanged.
 
+## residoo 0.8.5: a gitleaks feature request checked against residoo's own installed binary, and found wrong (added 2026-09-04)
+
+The most interesting fix in this release didn't come from research alone.
+gitleaks/gitleaks#2094 requests a rule for Claude Code's Remote Control
+session URLs -- a real, high-impact target: Anthropic's own docs
+(code.claude.com/docs/en/remote-control) confirm this URL is a bearer
+credential (opening it grants full read/write/execute access to a live
+session, no further auth) AND that Claude Code "posts the session URL in
+the conversation" -- i.e. it genuinely lands in the exact transcripts this
+project scans, not a hypothetical. The issue's own proposed pattern
+(`claude.ai/code/session_<id>`) is explicitly hedged as "illustrative."
+
+Rather than ship that guess, it was checked against this machine's own
+installed `claude` binary directly (`strings /usr/local/bin/claude`,
+read-only inspection of locally-installed software, the same kind of
+plain-text-string check any diagnostic tool performs). Two things came
+back straight from the shipped binary's own strings, not inferred: the
+literal URL template is `` `/code/${sessionId}` `` -- no `session_`
+prefix at all -- and `sessionId:mqH.randomUUID()` confirms the ID is a
+standard UUID v4. The gitleaks issue's proposed pattern would have missed
+every real instance of this URL. Shipped as `claude_code_remote_control_url`,
+anchored on the confirmed template and ID shape.
+
+Two more vendor rules closed the same cross-check session, this time
+against gitleaks' own tracker specifically:
+
+- **Azure AD (Entra ID) client secret** (gitleaks/gitleaks#1687) --
+  gitleaks already has this rule in its own `gitleaks.toml`
+  (`azure-ad-client-secret`), so it was adapted directly from that
+  battle-tested pattern (anchored on the token's distinctive `Q~` marker)
+  rather than designed from scratch. Azure Storage Account keys were
+  investigated and NOT added: they're a bare, unprefixed ~88-char base64
+  blob, the same unsafe generic shape already excluded for Weights &
+  Biases' classic key format.
+- **Tailscale auth key** (gitleaks/gitleaks#1778, still open there too)
+  -- no single authoritative current spec found (Tailscale's own docs
+  show an older bare `tskey-<hex>` example; recent real-world usage
+  consistently shows a newer `tskey-auth-<id>-<secret>` form), covered
+  on the strength of the `tskey-` prefix alone, same reasoning as
+  `whsec_` in 0.8.4.
+
+GCP Service Account keys were investigated and found to need no new rule
+at all: the existing `private_key_block` rule already matches the real
+PEM-formatted private key material inside a leaked service-account JSON
+file (confirmed directly -- a synthetic service-account JSON was
+constructed and scanned), even embedded in a single JSON-escaped line. A
+dedicated rule would only improve labeling, not add real coverage, and
+wasn't judged worth the added complexity tonight.
+
+Pattern rule count moved 53 to 56. Full reproduce sequence run (none of
+these three families has a corpus plant yet): residoo stays 45/45 (100%),
+100% precision, none-observed egress, byte-identical to 0.8.4 except the
+version label. Every other tool's row reproduced unchanged.
+
 Monitored per scan, spawn to exit, by two dynamic layers: a refuse-and-log proxy trap
 (all proxy env pinned to it) and lsof polling of the scanner's own process tree at
 ~150ms. Cadence honesty: ~150ms is the sleep between poll ticks, and each tick shells

@@ -216,6 +216,32 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "A leaked webhook secret alone can't drain funds or read data -- it only lets an attacker forge fake Stripe-Signature headers to a webhook endpoint that trusts them, so this is a spoofing/logic-bypass risk, not an account-access one. Still worth rolling promptly: it's what stands between a webhook handler and forged events.",
   },
+  // Fetched learn.microsoft.com (2026-09-04), Azure App Registration
+  // secret management docs: steps below are the documented
+  // create-update-verify-delete rotation flow, not guessed.
+  azure_ad_client_secret: {
+    label: "Azure AD (Entra ID) client secret",
+    consolePath: "Microsoft Entra ID > App registrations > [app] > Certificates & secrets",
+    steps: [
+      "Create a new client secret on the same app registration first (New client secret)",
+      "Update whatever used the old one with the new value, and verify it works",
+      "Only then delete the leaked secret (trash icon next to it), to minimize downtime",
+    ],
+    revokeNote: "Deletion is immediate. Prefer create-then-delete over delete-then-create if the app can tolerate two live secrets briefly -- it avoids an outage window for whatever depends on this secret.",
+  },
+  // Fetched tailscale.com/kb/1085/auth-keys (2026-09-04): exact console
+  // path and the important revoke-vs-deauthorize distinction are quoted
+  // from that page, not inferred.
+  tailscale_auth_key: {
+    label: "Tailscale auth key",
+    consolePath: "console.tailscale.com/admin/settings/keys",
+    steps: [
+      "Open the Keys page of the admin console",
+      "Find the key in the table and select Revoke",
+      "If a node already used this key to join your tailnet, also delete that node from the Machines page -- revoking the key alone does not deauthorize nodes already using it",
+    ],
+    revokeNote: "Revoking is immediate for future use of the key, but any node it already authorized stays connected until separately removed from Machines -- the two are not the same action.",
+  },
   // help.openai.com articles 5112595 and 8304786 exist (surfaced by search)
   // but the help center serves HTTP 403 to this project's fetcher, so no URL
   // is shipped: unverifiable end to end fails the bar above.
@@ -784,6 +810,21 @@ const ROTATION_GUIDANCE = {
       "Create a replacement and update whatever used the old one",
     ],
     revokeNote: "Deletion is immediate; the key stops authenticating on the next request.",
+  },
+  // Not a vendor API key with a console to rotate it in -- a session URL
+  // that IS the credential. Steps below per code.claude.com/docs/en/
+  // remote-control (fetched 2026-09-04): disconnect terminates the URL's
+  // access immediately; there is no separate "revoke" step to perform
+  // afterward the way there is for a leaked API key.
+  claude_code_remote_control_url: {
+    label: "Claude Code Remote Control session URL",
+    consolePath: "the terminal running the session, or claude.ai/code's session list",
+    steps: [
+      "In the terminal running the session, run /remote-control again to disconnect (or use the status panel's disconnect option)",
+      "If you no longer have terminal access, end the local session entirely -- Remote Control access ends with it",
+      "Start a fresh Remote Control session if you still need one; it gets a new, unrelated URL",
+    ],
+    revokeNote: "Disconnecting invalidates the URL immediately -- your local session keeps running in the terminal either way, only the remote-access link is torn down. There is no separate token to also revoke at a vendor console.",
   },
   // Fetched docs.langchain.com/langsmith/create-account-api-key
   // (2026-09-04): both personal access tokens and service keys are

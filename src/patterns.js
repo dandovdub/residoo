@@ -58,6 +58,34 @@ const PATTERNS = [
   // unlike a short/generic prefix where that same generosity would matter.
   { id: "stripe_webhook_secret", label: "Stripe webhook signing secret", confidence: "high",
     re: /\bwhsec_[A-Za-z0-9]{24,64}\b/g },
+  // Azure AD (Entra ID) client secret. Found missing by cross-checking
+  // gitleaks' own open-issue tracker (gitleaks/gitleaks#1687), which
+  // asked for Azure coverage generally -- gitleaks itself already has a
+  // rule (id "azure-ad-client-secret" in its own gitleaks.toml), so this
+  // is adapted directly from that battle-tested pattern rather than
+  // designed from scratch: 2-4 chars, one digit, the literal "Q~"
+  // marker, then 28-36 more chars. No capture group (unlike gitleaks'
+  // Go regex), to match every other rule in this file using the whole
+  // match as the value; zero-width lookaround used instead of gitleaks'
+  // literal delimiter character classes for the same reason -- the
+  // charset includes non-word characters (~ .) that a plain \b boundary
+  // can't reliably bound. Azure Storage Account keys were investigated
+  // and NOT added: they're a bare, unprefixed base64 blob (~88 chars,
+  // confirmed via learn.microsoft.com), the same unsafe generic shape
+  // already excluded for Weights & Biases' classic key format.
+  { id: "azure_ad_client_secret", label: "Azure AD (Entra ID) client secret", confidence: "high",
+    re: /(?<![A-Za-z0-9_.~-])[A-Za-z0-9_.~]{2,4}\dQ~[A-Za-z0-9_.~-]{28,36}(?![A-Za-z0-9_.~-])/g },
+  // Tailscale auth key. Found missing via gitleaks/gitleaks#1778 (still
+  // open there too). No fully authoritative current spec found: Tailscale's
+  // own kb/1085/auth-keys page shows an older bare "tskey-<hex>" example,
+  // while more recent third-party usage consistently shows a newer
+  // "tskey-auth-<id>-<secret>" two-segment form -- genuine format
+  // evolution, not a single confirmed shape. Covers both on the strength
+  // of the "tskey-" prefix alone, which carries negligible false-positive
+  // risk regardless of which era's exact body shape is present, same
+  // reasoning as whsec_ above.
+  { id: "tailscale_auth_key", label: "Tailscale auth key", confidence: "high",
+    re: /\btskey-(?:auth-)?[A-Za-z0-9-]{15,80}\b/g },
   // The negative lookahead keeps this rule mutually exclusive with anthropic_key
   // and openrouter_key below — without it, "sk-ant-..." or "sk-or-v1-..." match
   // BOTH this pattern and the more specific one, and get reported twice under
@@ -284,6 +312,25 @@ const PATTERNS = [
   // than a doc-confirmed exact count.
   { id: "posthog_key", label: "PostHog personal API key", confidence: "high",
     re: /\bphx_[A-Za-z0-9]{40,}\b/g },
+  // Claude Code Remote Control session URL -- not a vendor API key, a URL
+  // that IS a bearer credential: opening it in a browser grants full
+  // read/write/execute access to a live local Claude Code session, no
+  // further auth. Anthropic's own docs (code.claude.com/docs/en/remote-control,
+  // fetched 2026-09-04) confirm this URL is printed directly into the
+  // conversation ("Claude Code also posts the session URL in the
+  // conversation") -- i.e. this genuinely lands in the exact transcripts
+  // this project scans, not a hypothetical risk. Found via a gitleaks
+  // open-issue request (gitleaks/gitleaks#2094) that proposed a
+  // `session_<id>` prefix as "illustrative," unconfirmed. That guess was
+  // checked against this project's own installed `claude` binary (macOS,
+  // `strings /usr/local/bin/claude`) rather than assumed correct: the
+  // literal web-URL template is `` `/code/${sessionId}` `` with NO prefix
+  // at all, and `sessionId:mqH.randomUUID()` confirms the ID is a
+  // standard UUID v4 -- both directly present in the shipped binary's own
+  // strings, not inferred. The gitleaks issue's proposed pattern would
+  // have MISSED every real instance of this URL.
+  { id: "claude_code_remote_control_url", label: "Claude Code Remote Control session URL", confidence: "high",
+    re: /\bclaude\.ai\/code\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g },
   // LangSmith personal access token (lsv2_pt_) / service key (lsv2_sk_).
   // Found missing by cross-checking agentsweep's own open-issue tracker.
   // The first segment (32 hex, UUID-shaped) is consistent across every

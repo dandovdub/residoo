@@ -43,7 +43,7 @@ counted clean.
   │            ├──────────────┬───────────────┤                   │
   │            ▼              │               ▼                   │
   │   stream + match          │        integrity checks           │
-  │   53 verified rules       │        hooks · droppers ·         │
+  │   56 verified rules       │        hooks · droppers ·         │
   │            │              │        zero-width unicode         │
   │            ▼              ▼               │                   │
   │        redacted report (first/last 4 chars only) ◀────────────┤
@@ -139,7 +139,7 @@ Detection without rotation is theater: 64% of secrets leaked publicly in
 authenticated, and the median time to remediate a GitHub-leaked secret is
 94 days. Every finding in a residoo report comes with the way out:
 
-- **A rotation hint per finding**, from a guidance map covering all 53
+- **A rotation hint per finding**, from a guidance map covering all 56
   detection rules. Where shown, a rotation URL was fetched and confirmed to
   document revoking that exact credential type.
 - **`residoo explain <rule-id>`** prints the full runbook: where to revoke,
