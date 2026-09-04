@@ -139,6 +139,29 @@ async function main() {
     matchesOnly("tailscale_auth_key", "tskey-auth-" + "k7CNTRL1CNTRL11" + "-" + "a".repeat(30)));
   check("Tailscale auth key (legacy bare tskey- form) matched, only by tailscale_auth_key",
     matchesOnly("tailscale_auth_key", "tskey-" + "a".repeat(20)));
+  // github_pat: widened to also cover GitHub's fine-grained PAT prefix
+  // (github_pat_, an entirely separate literal prefix the original regex
+  // could never match) and the new dotted ghs_<appid>_<JWT> installation
+  // token shape (docs.github.com auth overview; github.blog changelog
+  // 2026-04-24). Both found via detect-secrets issue #894/#958.
+  check("classic ghp_ token still matched, only by github_pat (regression check on the widened regex)",
+    matchesOnly("github_pat", "ghp_" + "a".repeat(36)));
+  check("GitHub fine-grained PAT (github_pat_ prefix) matched, only by github_pat",
+    matchesOnly("github_pat", "github_pat_" + "a".repeat(80)));
+  check("GitHub App installation token, new dotted JWT shape, matched, only by github_pat",
+    matchesOnly("github_pat", "ghs_" + "123456" + "_" + "a".repeat(20) + "." + "a".repeat(20) + "." + "a".repeat(40)));
+  check("a short github_pat_-prefixed code identifier is never mistaken for a real fine-grained PAT",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("github_pat_helper()"); }));
+  // supabase_token: the v0_ infix is not vendor-confirmed (see the comment
+  // in src/patterns.js) -- found via gitleaks/gitleaks#2225.
+  check("Supabase PAT, versioned sbp_v0_ form, matched, only by supabase_token",
+    matchesOnly("supabase_token", "sbp_v0_" + "a".repeat(40)));
+  // Supabase secret key (sb_secret_): confirmed via
+  // supabase.com/docs/guides/api/api-keys, the newer non-JWT replacement
+  // for the service_role key. Found via this session's own broader
+  // competitor-issue-tracker research pass, not from a single issue.
+  check("Supabase secret API key matched, only by supabase_secret_key",
+    matchesOnly("supabase_secret_key", "sb_secret_" + "a".repeat(40)));
 
   // ── sealcrypto: round-trip, wrong passphrase, tamper ──────────────────────
   const { sealFile, unsealFile, sealBuffer, unsealBuffer } = require("../src/sealcrypto");

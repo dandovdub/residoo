@@ -20,8 +20,17 @@ const PATTERNS = [
     re: /\bASIA[0-9A-Z]{16}\b/g },
   { id: "private_key_block", label: "Private key block", confidence: "high",
     re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/g },
+  // Widened twice from the original gh[pousr]_[A-Za-z0-9]{36,255}, both
+  // confirmed via GitHub's own docs (docs.github.com, authentication
+  // overview): (1) fine-grained PATs use an entirely disjoint literal
+  // prefix, github_pat_, not gh[pousr]_ at all -- the original regex
+  // could never match one; (2) GitHub's own 2026-04-24 changelog post
+  // shows App installation tokens (ghs_) rolling out to a new
+  // ghs_<appid>_<3-segment-JWT> shape, whose dots fell outside the old
+  // [A-Za-z0-9] body class. The distinctive prefix carries the FP
+  // protection, so widening the body to include . _ - is safe.
   { id: "github_pat", label: "GitHub personal access token", confidence: "high",
-    re: /\bgh[pousr]_[A-Za-z0-9]{36,255}\b/g },
+    re: /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_.-]{20,600}\b/g },
   { id: "gitlab_pat", label: "GitLab personal access token", confidence: "high",
     re: /\bglpat-[A-Za-z0-9_-]{20,100}\b/g },
   { id: "slack_token", label: "Slack token", confidence: "high",
@@ -163,8 +172,24 @@ const PATTERNS = [
   // ── Cloud / infra ──────────────────────────────────────────────────────
   { id: "digitalocean_token", label: "DigitalOcean access token", confidence: "high",
     re: /\b(?:dop|doo|dor)_v1_[a-f0-9]{64}\b/g },
+  // The optional v0_ infix is NOT confirmed by Supabase's own docs -- found
+  // via a gitleaks feature request (gitleaks/gitleaks#2225) whose author
+  // cites real tokens seen in the wild, and cross-checked that trufflehog's
+  // own supabase detector has the identical blind spot for the same
+  // reason. Same honesty tier as tailscale_auth_key: shipped despite
+  // imperfect vendor documentation because the addition is a narrow,
+  // low-risk optional segment, not a guessed body shape.
   { id: "supabase_token", label: "Supabase personal access token", confidence: "high",
-    re: /\bsbp_[a-z0-9]{40}\b/g },
+    re: /\bsbp_(?:v0_)?[a-z0-9]{40}\b/g },
+  // Supabase's newer "secret key" replaces the JWT-based service_role key
+  // and, unlike it, bypasses Row Level Security -- full database/storage/
+  // auth access. Confirmed via supabase.com/docs/guides/api/api-keys,
+  // which names sb_secret_ explicitly ("not JWTs") but does not publish an
+  // exact suffix length, hence the generous floor/ceiling bound already
+  // used elsewhere in this file (cerebras_key, render_key) for the same
+  // situation.
+  { id: "supabase_secret_key", label: "Supabase secret API key", confidence: "high",
+    re: /\bsb_secret_[A-Za-z0-9_-]{20,200}\b/g },
   // Confirmed via planetscale.com/docs/api/reference/service-tokens: the
   // secret half of a service token pair. The id half (12 lowercase
   // alphanumeric characters, no prefix) is not a rule on its own for the

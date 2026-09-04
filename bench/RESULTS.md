@@ -874,6 +874,67 @@ attempts) and is reported in its raw record instead.
   base32 ids before v1 publication. The private-key disclosure above is the same
   policy applied to this extension's findings.
 
+## residoo 0.8.6: a major research pass across four more competitor trackers found two real bugs, not just new coverage (added 2026-09-04)
+
+Following the same "check open-items on other scanners" instruction that produced
+0.8.2-0.8.5, this pass ran four research agents in parallel against sources not yet
+mined this session: Yelp's detect-secrets, AWS Labs' git-secrets, Bloomberg's
+noseyparker (browsing its shipped rule YAML directly, not just its issue tracker),
+GitGuardian's ggshield (cross-checked against vendor docs rather than trusted, since
+ggshield's own detection is server-side and its issues aren't a source of truth for
+a regex), plus a fifth check for new direct competitors and anything filed more
+recently than the gitleaks/TruffleHog issues already actioned in 0.8.2-0.8.5.
+
+Two findings this round are false-negative BUGS in rules residoo already ships, not
+new-vendor gaps:
+
+- **`github_pat` could never match a GitHub fine-grained PAT.** Fine-grained tokens
+  use the entirely disjoint literal prefix `github_pat_`, not `gh[pousr]_` -- the
+  old regex had zero overlap with it. Confirmed directly against GitHub's own docs
+  (docs.github.com's authentication overview). Found via detect-secrets issue #894.
+- **`github_pat` also couldn't match GitHub's new App installation token shape.**
+  GitHub's own 2026-04-24 changelog post describes `ghs_` tokens rolling out to
+  `ghs_<appid>_<3-segment-JWT>` -- the JWT's dots fell outside the old
+  `[A-Za-z0-9]`-only body class, so a real leaked installation token in this new
+  format would have been silently missed. Found via detect-secrets issue #958.
+
+Both are fixed by widening the body character class to include `. _ -` and raising
+the ceiling (the distinctive prefix, unchanged, carries the false-positive
+protection either way -- widening what follows it doesn't loosen that).
+
+One more, lower-confidence rule fix: `supabase_token`'s regex only matched the bare
+`sbp_<40 hex>` form. A gitleaks feature request (#2225) reports real-world tokens
+also appearing as `sbp_v0_<40 hex>` -- not confirmed by Supabase's own docs, only by
+the issue author's own code search and a cross-check that TruffleHog's detector has
+the identical blind spot for the same structural reason. Shipped anyway (same
+honesty tier as 0.8.5's Tailscale rule) since it's a narrow, low-risk optional
+infix, not a guessed body shape.
+
+One genuinely new rule: **Supabase secret API key** (`sb_secret_`), the newer
+non-JWT replacement for the `service_role` key that bypasses Row Level Security the
+same way. Confirmed via supabase.com's own current API-keys doc, which names the
+prefix explicitly but not an exact length -- generously bounded, same treatment as
+`cerebras_key`/`render_key` for the same situation. Zero prior coverage, confirmed
+by grepping `src/patterns.js` before writing it.
+
+Everything else these four agents surfaced (~18 additional vendor candidates,
+individually verified against a primary source, spanning package registries,
+dev-platform tokens, AI/ML vendors, and other SaaS) is being held for the next two
+releases rather than shipped in one batch -- described there, not here. One new
+direct competitor was also found and confirmed active: DidILeak
+(github.com/frangelbarrera/DidILeak), same "scan your own AI chat history" framing
+residoo uses, launched 2026-07 and still being pushed to as of this writing.
+
+Pattern rule count moved 56 to 59 (one new rule, two existing rules widened). The
+corpus's `github-pat` family plants are all classic `ghp_`-style (no fine-grained or
+new-installation-token-shaped plant exists yet), so the full reproduce sequence
+confirms no regression on the classic form rather than exercising the actual fix --
+the fix itself is covered by dedicated smoke tests instead (`tests/smoke.js`), which
+plant the exact fine-grained and dotted-JWT shapes and confirm both match `github_pat`
+alone. Full reproduce run: residoo stays 45/45 (100%), 100% precision, none-observed
+egress, byte-identical to 0.8.5 except the version label. Every other tool's row
+reproduced unchanged.
+
 ## Reproduce
 
 ```

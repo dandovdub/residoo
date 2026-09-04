@@ -517,6 +517,20 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "This is the account-level token (sbp_); a project's anon and service_role keys rotate separately in that project's API settings.",
   },
+  // supabase.com/docs/guides/api/api-keys (fetched 2026-09-04): sb_secret_
+  // is the newer replacement for the JWT-based service_role key, and
+  // bypasses Row Level Security the same way that key did.
+  supabase_secret_key: {
+    label: "Supabase secret API key",
+    consolePath: "supabase.com/dashboard > Project > Project Settings > API Keys",
+    steps: [
+      "Open the project's API Keys page",
+      "Revoke the leaked secret key",
+      "Generate a replacement and update whatever used the old one",
+      "Review recent database/storage/auth activity for anything unexpected while the key was live",
+    ],
+    revokeNote: "This key bypasses Row Level Security -- treat a leak as full database access, not a scoped credential.",
+  },
   // Fetched https://planetscale.com/docs/api/reference/service-tokens
   // (2026-09-03): tokens are managed and revoked from the organization's
   // Service tokens page in the PlanetScale dashboard.

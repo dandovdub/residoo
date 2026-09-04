@@ -43,7 +43,7 @@ counted clean.
   │            ├──────────────┬───────────────┤                   │
   │            ▼              │               ▼                   │
   │   stream + match          │        integrity checks           │
-  │   56 verified rules       │        hooks · droppers ·         │
+  │   59 verified rules       │        hooks · droppers ·         │
   │            │              │        zero-width unicode         │
   │            ▼              ▼               │                   │
   │        redacted report (first/last 4 chars only) ◀────────────┤
