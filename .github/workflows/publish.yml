@@ -16,8 +16,8 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: read
-  id-token: write # required for OIDC trusted publishing — nothing else needs it
+  contents: write # also creates the GitHub Release + uploads provenance assets below
+  id-token: write # required for OIDC trusted publishing
 
 jobs:
   publish:
@@ -71,3 +71,43 @@ jobs:
           sed -i '/_authToken/d' "$npmrc"
 
       - run: npm publish --provenance
+
+      # OpenSSF Scorecard's Signed-Releases check looks for a real signed
+      # artifact attached to the GitHub Release itself, not just npm's own
+      # provenance (which it doesn't know how to find). `npm publish
+      # --provenance` above already generated a real Sigstore-signed SLSA
+      # provenance attestation and an npm-publish attestation; this just
+      # fetches both from the registry (their public, permanent home) and
+      # republishes them where Scorecard actually looks. Named .intoto.jsonl
+      # / .sigstore.json to match the file patterns Scorecard's detector
+      # recognizes (see docs/checks.md#signed-releases) -- both are already
+      # real Sigstore bundles, not reformatted or re-signed here.
+      - name: Attach npm's provenance attestation to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME}"
+          # Small retry: the attestation can take a few seconds to be
+          # indexed on the registry right after publish completes.
+          for i in 1 2 3 4 5; do
+            curl -sf "https://registry.npmjs.org/-/npm/v1/attestations/residoo@${version}" -o /tmp/attestations.json && break
+            echo "attestation not indexed yet, retrying in 10s ($i/5)..."
+            sleep 10
+          done
+          node -e "
+            const fs = require('fs');
+            const d = JSON.parse(fs.readFileSync('/tmp/attestations.json', 'utf-8'));
+            for (const a of d.attestations) {
+              if (a.predicateType === 'https://slsa.dev/provenance/v1') {
+                fs.writeFileSync('/tmp/residoo-${version}.intoto.jsonl', JSON.stringify(a.bundle));
+              }
+              if (a.predicateType.includes('npm/attestation')) {
+                fs.writeFileSync('/tmp/residoo-${version}.sigstore.json', JSON.stringify(a.bundle));
+              }
+            }
+          "
+          gh release create "$tag" --title "$tag" --generate-notes --repo "${GITHUB_REPOSITORY}" || true
+          gh release upload "$tag" "/tmp/residoo-${version}.intoto.jsonl" "/tmp/residoo-${version}.sigstore.json" \
+            --repo "${GITHUB_REPOSITORY}" --clobber
