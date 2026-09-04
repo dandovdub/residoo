@@ -32,7 +32,12 @@ The pre-commit framework installs this repo with npm in its own isolated environ
 
 ## GitHub Action
 
-The repository doubles as a composite action. The action tag and the CLI version move together: `@v0.15.0` runs residoo 0.15.0 from npm.
+The repository doubles as a composite action. `@v0` is a floating major-version
+tag, moved to the latest release after every publish -- the same convention
+`actions/checkout@v4` and `actions/setup-node@v4` use, so your workflow picks
+up new detection rules automatically instead of scanning with a stale rule
+set until someone remembers to bump the pin. Pin an exact release instead
+(`@v0.15.0`) if you need reproducible CI runs.
 
 ```yaml
 name: residoo
@@ -46,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dandovdub/residoo@v0.15.0
+      - uses: dandovdub/residoo@v0
 ```
 
 Inputs, all optional:
@@ -69,7 +74,7 @@ jobs:
       security-events: write   # required for the SARIF upload step
     steps:
       - uses: actions/checkout@v4
-      - uses: dandovdub/residoo@v0.15.0
+      - uses: dandovdub/residoo@v0
         with:
           sarif: "true"
 ```
