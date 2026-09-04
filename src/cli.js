@@ -175,7 +175,8 @@ Watch:
   --verify                same opt-in vendor check as scan --verify,
                           applied to each newly found credential once,
                           never to one already seen
-  --include-noisy, --include-suppressed, --no-color   same meaning as scan
+  --include-noisy, --include-suppressed, --include-pii, --no-color
+                          same meaning as scan
   Ctrl+C stops cleanly and prints a session summary (skipped with --json,
   where the same information is one final NDJSON event).
 
@@ -663,6 +664,7 @@ async function runWatch(args) {
   const includeSuppressed = args.includes("--include-suppressed");
   const verify = args.includes("--verify");
   const noColor = args.includes("--no-color");
+  const includePii = args.includes("--include-pii");
 
   let intervalSeconds = 5;
   const intervalArg = argValue(args, "--interval");
@@ -688,7 +690,7 @@ async function runWatch(args) {
 
   const { promise, stop } = startWatch({
     sources,
-    options: { includeNoisy, includeSuppressed, verify, noColor, json: wantsJson, pollMs: intervalSeconds * 1000 },
+    options: { includeNoisy, includeSuppressed, verify, noColor, includePii, json: wantsJson, pollMs: intervalSeconds * 1000 },
   });
 
   const printFinalSummary = (stats) => {

@@ -1339,6 +1339,35 @@ instead by dedicated unit tests (Luhn/IBAN validators against
 synthetically-computed-valid, never-real values) and two new
 `tests/fuzz.js` properties.
 
+## residoo 0.15.0: --include-pii reaches watch and MCP, not just scan (added 2026-09-05)
+
+0.14.0 shipped `--include-pii` on `residoo scan` only. This closes the gap
+to the other two surfaces that already share `includeNoisy`'s exact
+plumbing: `residoo watch` and the `residoo_scan`/`residoo_check` MCP
+tools. A deliberate exclusion, checked against precedent rather than
+assumed: `--ocr` and `--verify` stay OUT of the MCP tool surface, on
+purpose -- `mcpTools.js`'s own header comment already states why `verify`
+is excluded (a live network call with a real secret is a materially
+different trust boundary for an autonomous model to opt into
+mid-conversation than a human typing a flag), and `--ocr` shells out to
+an external binary and does real per-image CPU work, the same risk shape.
+`includePii` doesn't: no network call, no external process, just a
+different LOCAL detection category -- architecturally identical to
+`includeNoisy`, which is already exposed, so excluding it would have been
+inconsistent rather than careful.
+
+Threaded through `watch.js`'s `sweepOnce`/`baselineSeed` (both already
+carried `includeNoisy` positionally/via an options object; `includePii`
+follows the identical shape), `cli.js`'s `runWatch`, and both MCP tools'
+schemas and handlers. Verified with a real MCP-protocol test: a planted
+SSN sits in the same fixture file as the existing AWS-key fixture,
+confirming a default `residoo_scan` call still finds exactly the one key
+(the gate is real, not a no-op) while `{includePii: true}` finds both.
+
+Touches no scan.js matching logic at all -- pure plumbing -- so the full
+benchmark reproduce sequence wasn't re-run; `npm test` (680 checks) and
+`npm run fuzz` both green instead.
+
 ## Reproduce
 
 ```

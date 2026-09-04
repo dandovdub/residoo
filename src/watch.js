@@ -266,14 +266,14 @@ function makeSyntheticSource(realId, batchesByFile) {
  * `verify` is always forced off here: seeding a dedup cache must never be
  * the reason a live vendor API gets hit.
  */
-async function baselineSeed(source, sourceId, file, sizeBytes, mtimeMs, seen, includeNoisy, includeSuppressed, noColor) {
+async function baselineSeed(source, sourceId, file, sizeBytes, mtimeMs, seen, includeNoisy, includeSuppressed, noColor, includePii) {
   const batch = await readWholeFile(source, file, sizeBytes, mtimeMs);
   if (!batch) return;
   let result;
   try {
     result = await scan({
       sources: [makeSyntheticSource(sourceId, new Map([[file, batch]]))],
-      includeNoisy, includeSuppressed, verify: false, noColor,
+      includeNoisy, includeSuppressed, verify: false, noColor, includePii,
     });
   } catch {
     return; // best-effort: a failure here just leaves this file's dedup
@@ -299,7 +299,7 @@ async function baselineSeed(source, sourceId, file, sizeBytes, mtimeMs, seen, in
  * `dismiss` takes effect without a restart.
  */
 async function sweepOnce({ sources, tracked, seen, ledger, options, emit }) {
-  const { includeNoisy, includeSuppressed, verify, noColor } = options || {};
+  const { includeNoisy, includeSuppressed, verify, noColor, includePii } = options || {};
   let loud = 0;
   let quiet = 0;
   let suppressedByLedger = 0;
@@ -363,7 +363,7 @@ async function sweepOnce({ sources, tracked, seen, ledger, options, emit }) {
           contentHash: tailable ? null : wholeFileHash(file),
         });
         if (!tailable) {
-          await baselineSeed(source, sourceId, file, sizeBytes, mtimeMs, seen, includeNoisy, includeSuppressed, noColor);
+          await baselineSeed(source, sourceId, file, sizeBytes, mtimeMs, seen, includeNoisy, includeSuppressed, noColor, includePii);
         }
         continue;
       }
@@ -432,7 +432,7 @@ async function sweepOnce({ sources, tracked, seen, ledger, options, emit }) {
     try {
       result = await scan({
         sources: [makeSyntheticSource(sourceId, batchesByFile)],
-        includeNoisy, includeSuppressed, verify, noColor,
+        includeNoisy, includeSuppressed, verify, noColor, includePii,
       });
     } catch (err) {
       emit({ type: "watch-error", at: new Date(), source: sourceId, detail: "scan failed: " + (err && err.message) });

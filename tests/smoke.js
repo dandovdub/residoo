@@ -3795,7 +3795,12 @@ async function main() {
     fs.mkdirSync(projDir, { recursive: true });
     const sessionFile = path.join(projDir, "session1.jsonl");
     fs.writeFileSync(sessionFile,
-      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "key: " + plantedAwsKey }] } }) + "\n");
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "key: " + plantedAwsKey }] } }) + "\n" +
+      // A PII-shaped line too, deliberately off by default: proves
+      // includePii is a real opt-in gate on the MCP surface, not just the
+      // CLI, without disturbing the AWS-key-only assertions below (a
+      // default residoo_scan call must still see exactly one finding).
+      JSON.stringify({ type: "user", message: { content: "SSN: 123-45-6789" } }) + "\n");
 
     const expectedPreview = redactValue(plantedAwsKey);
     const expectedFingerprint = fingerprintFinding({ ruleId: "aws_access_key_id", preview: expectedPreview, relFile: "session1.jsonl" });
@@ -3828,6 +3833,7 @@ async function main() {
       { jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "residoo_scan", arguments: { maxEntries: "abc" } } },
       { jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "residoo_check", arguments: {} } },
       { jsonrpc: "2.0", id: 13, method: "server/discover" },
+      { jsonrpc: "2.0", id: 14, method: "tools/call", params: { name: "residoo_scan", arguments: { includePii: true } } },
     ];
     const r = runMcp(seq, mcpHome);
 
@@ -3900,6 +3906,12 @@ async function main() {
     const discoverMsg = byId(r.parsed, 13);
     check("mcp: an unrecognized method (e.g. a server/discover era-probe) gets an immediate plain -32601, not silence or a hang",
       !discoverMsg.result && !!discoverMsg.error && discoverMsg.error.code === -32601);
+
+    const piiScanPayload = JSON.parse(byId(r.parsed, 14).result.content[0].text);
+    check("mcp: residoo_scan with includePii:true finds the planted SSN too, on top of the default AWS key",
+      piiScanPayload.entries.length === 2 && piiScanPayload.entries.some((e) => e.label === "US Social Security Number"));
+    check("mcp: includePii is a real opt-in gate on the MCP surface -- the default residoo_scan call (id 3, includePii omitted) found exactly the one AWS key, never the SSN",
+      scanPayload.entries.length === 1);
 
     const ledgerPath = path.join(mcpHome, ".residoo", "rotations.json");
     const ledgerText = fs.readFileSync(ledgerPath, "utf-8");

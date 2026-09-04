@@ -50,11 +50,20 @@ function rejectUnknownKeys(args, allowed) {
   return errs;
 }
 
-/** Shared arg shape for residoo_scan/residoo_check: includeNoisy, includeSuppressed, maxEntries. */
+/**
+ * Shared arg shape for residoo_scan/residoo_check: includeNoisy,
+ * includeSuppressed, includePii, maxEntries. includePii is exposed here
+ * (unlike ocr or verify, see this file's own header comment on verify's
+ * exclusion) because it is architecturally identical to includeNoisy --
+ * local-only, no network call, no external process, just a different
+ * detection category (see pii.js) -- not the network/live-secret trust
+ * boundary verify's own exclusion is specifically about.
+ */
 function validateSweepArgs(args, allowedKeys) {
   const errs = rejectUnknownKeys(args, allowedKeys);
   if (args.includeNoisy !== undefined && typeof args.includeNoisy !== "boolean") errs.push("includeNoisy must be a boolean");
   if (args.includeSuppressed !== undefined && typeof args.includeSuppressed !== "boolean") errs.push("includeSuppressed must be a boolean");
+  if (args.includePii !== undefined && typeof args.includePii !== "boolean") errs.push("includePii must be a boolean");
   let maxEntries = 25;
   if (args.maxEntries !== undefined) {
     if (typeof args.maxEntries !== "number" || !Number.isInteger(args.maxEntries) || args.maxEntries < 1 || args.maxEntries > 200) {
@@ -63,7 +72,10 @@ function validateSweepArgs(args, allowedKeys) {
       maxEntries = args.maxEntries;
     }
   }
-  return { errs, includeNoisy: args.includeNoisy === true, includeSuppressed: args.includeSuppressed === true, maxEntries };
+  return {
+    errs, includeNoisy: args.includeNoisy === true, includeSuppressed: args.includeSuppressed === true,
+    includePii: args.includePii === true, maxEntries,
+  };
 }
 
 /** Drop the full step-by-step runbook (redundant once per shared rule id across many entries -- call residoo_explain for that) and any null-valued optional field. */
@@ -122,8 +134,8 @@ function buildTools({ sources }) {
   let checkStarted = false;
 
   async function handleScan(args) {
-    const SCAN_KEYS = new Set(["projectDir", "includeNoisy", "includeSuppressed", "maxEntries"]);
-    const { errs, includeNoisy, includeSuppressed, maxEntries } = validateSweepArgs(args, SCAN_KEYS);
+    const SCAN_KEYS = new Set(["projectDir", "includeNoisy", "includeSuppressed", "includePii", "maxEntries"]);
+    const { errs, includeNoisy, includeSuppressed, includePii, maxEntries } = validateSweepArgs(args, SCAN_KEYS);
     if (args.projectDir !== undefined && typeof args.projectDir !== "string") errs.push("projectDir must be a string");
     if (errs.length) return errorResult(`Invalid arguments: ${errs.join("; ")}`);
 
@@ -140,7 +152,7 @@ function buildTools({ sources }) {
       scanSources = sources;
     }
 
-    const result = await scan({ sources: scanSources, includeNoisy, includeSuppressed, verify: false, noColor: true });
+    const result = await scan({ sources: scanSources, includeNoisy, includeSuppressed, includePii, verify: false, noColor: true });
     const acks = loadAcks();
     const dismissed = loadDismissed();
     const rotation = renderRotation(result.findings, acks, dismissed);
@@ -167,8 +179,8 @@ function buildTools({ sources }) {
   }
 
   async function handleCheck(args) {
-    const CHECK_KEYS = new Set(["includeNoisy", "includeSuppressed", "maxEntries"]);
-    const { errs, includeNoisy, includeSuppressed, maxEntries } = validateSweepArgs(args, CHECK_KEYS);
+    const CHECK_KEYS = new Set(["includeNoisy", "includeSuppressed", "includePii", "maxEntries"]);
+    const { errs, includeNoisy, includeSuppressed, includePii, maxEntries } = validateSweepArgs(args, CHECK_KEYS);
     if (errs.length) return errorResult(`Invalid arguments: ${errs.join("; ")}`);
 
     const firstCheckThisSession = !checkStarted;
@@ -179,7 +191,7 @@ function buildTools({ sources }) {
     const emit = (e) => events.push(e);
     const stats = await sweepOnce({
       sources, tracked: checkTracked, seen: checkSeen, ledger,
-      options: { includeNoisy, includeSuppressed, verify: false, noColor: true }, emit,
+      options: { includeNoisy, includeSuppressed, includePii, verify: false, noColor: true }, emit,
     });
 
     const allNew = events.filter((e) => e.type === "finding");
@@ -353,6 +365,7 @@ function buildTools({ sources }) {
         projectDir: { type: "string", description: "Absolute path to a project/repo directory to scan instead of the machine-wide transcript stores (same as `residoo scan --project <dir>`). Omit for the default machine-wide scan." },
         includeNoisy: { type: "boolean", default: false, description: "Also run residoo's two low-confidence heuristic rules (generic password/secret assignments) -- catches more, false-positives more. Off by default." },
         includeSuppressed: { type: "boolean", default: false, description: "Include matches normally hidden because they look like vendor-documented example values or placeholder text. Off by default." },
+        includePii: { type: "boolean", default: false, description: "Also scan for PII (US Social Security Numbers, Luhn-validated credit card numbers, checksum-validated IBANs) -- a different risk category from a credential, not a lower confidence bar. Off by default; residoo is deliberately credentials-only otherwise." },
         maxEntries: { type: "integer", minimum: 1, maximum: 200, default: 25, description: "Cap on distinct findings returned in full detail, pending-first. Counts in the response are always exact even when the entry list is truncated." },
       },
       required: [],
@@ -368,6 +381,7 @@ function buildTools({ sources }) {
       properties: {
         includeNoisy: { type: "boolean", default: false, description: "Same meaning as residoo_scan." },
         includeSuppressed: { type: "boolean", default: false, description: "Same meaning as residoo_scan." },
+        includePii: { type: "boolean", default: false, description: "Same meaning as residoo_scan." },
         maxEntries: { type: "integer", minimum: 1, maximum: 200, default: 25, description: "Cap on new findings / re-exposures returned in full detail. Counts are always exact even when truncated." },
       },
       required: [],
