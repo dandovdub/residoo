@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-04T17:51:46.577Z",
+  "generatedAt": "2026-09-04T20:08:20.297Z",
   "fixtureRoot": "bench/corpus/data",
   "manifestSeed": 20260902,
   "scores": [
@@ -1164,8 +1164,8 @@
     {
       "tool": "residoo",
       "displayName": "residoo",
-      "version": "residoo 0.8.8",
-      "wallMs": 627,
+      "version": "residoo 0.10.0",
+      "wallMs": 656,
       "egressVerdict": "none-observed",
       "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
       "egressObserved": {

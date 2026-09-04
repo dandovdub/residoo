@@ -138,6 +138,18 @@ Scan options:
                           JWT's own signed exp claim is checked locally
                           with no network call at all, on by default, not
                           part of --verify.
+  --ocr                   also OCR every pasted or tool-returned image found
+                          in a transcript (a screenshot of a .env file or a
+                          cloud console, for example) and scan the extracted
+                          text the same way. Off by default: needs
+                          tesseract installed (e.g. brew install tesseract;
+                          residoo does not bundle it), and it is real CPU
+                          work per image. No network call -- OCR runs
+                          100% locally, same as everything else. OCR is
+                          lossy by nature: a real test found visually
+                          similar characters (0/O, Y/*) can be misread,
+                          which breaks an exact-format match, so this is
+                          best-effort additional coverage, not a guarantee.
 
 Watch:
   residoo watch            continuous scanning instead of one snapshot:
@@ -876,6 +888,13 @@ async function main(argv) {
   // API call; see verify.js). Off by default; every other flag here only
   // changes what is READ or how it is DISPLAYED.
   const verify = args.includes("--verify");
+  // --ocr: no network call (tesseract runs 100% locally), but it does shell
+  // out to a binary this project doesn't ship and do real per-image CPU
+  // work, unlike every other flag here — same "off by default, opt in for
+  // a reason" posture as --verify, different reason. See ocr.js for the
+  // exact confirmed image shape this looks for and its honest accuracy
+  // limitations.
+  const wantsOcr = args.includes("--ocr");
 
   // --project [dir]: the dir is optional (CI passes ".", a bare --project
   // means the current directory). null means machine mode.
@@ -987,7 +1006,7 @@ async function main(argv) {
 
   const progress = makeProgressReporter(noColor);
   const result = await scan({
-    sources, includeNoisy, includeSuppressed, verify, noColor,
+    sources, includeNoisy, includeSuppressed, verify, noColor, ocr: wantsOcr,
     onProgress: progress.onProgress,
     // Clears the spinner's last frame before --verify's own stderr lines
     // print; without this the last spinner line sits uncleared on screen
@@ -998,6 +1017,13 @@ async function main(argv) {
     onBeforeVerify: progress.stop,
   });
   progress.stop();
+  // Always stderr, never gated on --json/--sarif: those formats' stdout
+  // contract is machine-readable output only, but a user who asked for
+  // --ocr and got silently zero image findings because tesseract isn't
+  // installed needs to know that, not infer it from an empty result.
+  if (result.ocrRequestedButMissing) {
+    process.stderr.write("--ocr was requested but tesseract is not installed or not on PATH; no images were scanned. Install it (e.g. \"brew install tesseract\") and rerun.\n");
+  }
   const integrity = wantsIntegrity ? runIntegrity() : null;
   const rotation = renderRotation(result.findings, acks, dismissed);
   process.stdout.write((wantsSarif

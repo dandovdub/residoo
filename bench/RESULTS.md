@@ -1077,6 +1077,58 @@ the benchmark harness), this change has no code path through any file the
 benchmark scores at all, provable by grep, not just by reasoning about
 call graphs. Pattern count unchanged at 79.
 
+## residoo 0.10.0: OCR for pasted screenshots -- a verified-unclaimed gap, closed (added 2026-09-04)
+
+A 100-agent deep-research pass (five search angles, 78 claims extracted, 25
+adversarially verified 3-vote) went looking for a real, current technique a
+leading competitor uses that residoo's high-confidence-regex approach
+structurally cannot do. Most candidates carried a genuine identity tension
+(GitGuardian's proprietary ML false-positive filter is closed and not
+something this project could replicate; a peer-reviewed MSR 2026 paper
+found a cheap off-the-shelf LLM secondary pass actually underperforms a
+smaller fine-tuned classifier, 80% F1 vs 94%). Two findings from that same
+pass turned out to be things residoo already ships (`.claude/settings.local.json`
+credential caching and MCP config file scanning were both already covered
+in `src/sources/agent-configs.js`, confirmed by grep before believing the
+research agents' framing of them as gaps) -- a real, useful correction, not
+just confirmation.
+
+One candidate survived scrutiny clean: OCR for pasted-screenshot
+credentials. DidILeak (an already-known direct competitor) lists it as an
+unshipped Phase-2 roadmap item; no tool checked in this research has
+shipped it. Verified directly before writing a line of code, not assumed:
+real inspection of this machine's own Claude Code session files confirmed
+the exact JSON shape a pasted or tool-returned image takes
+(`{"type":"image","source":{"type":"base64","media_type":...,"data":...}}`,
+at two different nesting depths, both real), and a real, generated test
+image run through the real, already-installed tesseract on this machine
+confirmed both the CLI contract (`tesseract stdin stdout`, clean stdout/
+stderr separation) and a genuine, disclosed limitation: visually similar
+characters (0/O, Y/*) get misread even at 2x resolution, meaning a single
+character error can break an exact-format regex match. Shipped as
+best-effort additional coverage, not a guaranteed catch, stated plainly in
+the CLI help, README, and architecture docs -- not smoothed into a stronger
+claim than the evidence supports.
+
+Implementation: `src/ocr.js` (new), same shell-out-to-an-already-installed-
+tool posture `verify.js`'s AWS check already has (zero runtime deps
+preserved; tesseract is not bundled). Extracted text runs through the
+existing high-confidence rules and `redact()` -- no new detection logic, no
+new false-positive surface, a new place text can come from. Off by default
+(`--ocr`), gated on `isTesseractAvailable()` checked once per scan, with a
+clear stderr message (not silence) when requested but missing.
+
+This corpus has no image-content plant (a synthetic base64-image-block
+fixture doesn't meaningfully exercise real OCR the way a real screenshot
+would, and this feature's own correctness is proven by dedicated unit/e2e
+tests using a fixture tesseract script -- see tests/smoke.js and
+tests/fuzz.js's new `extractImageBlocks` property), so the full reproduce
+sequence confirms no regression on existing behavior (ocr defaults to
+false; the new code path is unreachable without the flag) rather than
+exercising the new coverage directly: residoo stays 45/45 (100%), 100%
+precision, none-observed egress, byte-identical to 0.8.8 except the
+version label. Every other tool's row reproduced unchanged.
+
 ## Reproduce
 
 ```

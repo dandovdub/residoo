@@ -466,9 +466,11 @@ function render({ findings, filesScanned, sourcesScanned, bytesScanned, suppress
     // so the reader should know the value was hidden.
     const encoded = items.filter((f) => f.encoding).length;
     const split = items.filter((f) => f.spanLines).length;
+    const ocrd = items.filter((f) => f.ocr).length;
     const marks = [];
     if (encoded) marks.push(`${encoded} base64-wrapped`);
     if (split) marks.push(`${split} split across lines`);
+    if (ocrd) marks.push(`${ocrd} read from a pasted image (--ocr)`);
     const markNote = marks.length ? paint(c.yellow, `  [${marks.join(", ")}]`) : "";
     const paddedLabel = label.length <= labelWidth ? label.padEnd(labelWidth) : label;
     push(`  ${paint(color + c.bold, String(items.length).padStart(4))}  [${tag}]  ${paddedLabel}${distinctNote}${markNote}`);
@@ -526,17 +528,21 @@ function renderJson(result, integrity = null, rotation = null) {
         bytesScanned: result.bytesScanned,
         suppressedCount: result.suppressedCount || 0,
         unreadableFiles: result.unreadableFiles || [],
+        ocrRequestedButMissing: result.ocrRequestedButMissing || false,
       },
       findings: result.findings.map((f) => ({
         rule: f.ruleId, label: f.label, confidence: f.confidence,
         source: f.source, file: f.relFile, line: f.line, preview: f.preview,
         fileMTimeMs: f.fileMTimeMs,
-        // Markers for the two decode/reconstruct passes (absent on ordinary
+        // Markers for the decode/reconstruct/OCR passes (absent on ordinary
         // findings). `encoding` names how the value was wrapped ("base64" /
         // "base64url"); `spanLines` names the adjacent line pair a split value
-        // was reconstructed across.
+        // was reconstructed across; `ocr` means the value was never plain
+        // text at all -- it was read out of a pasted or tool-returned image
+        // (see ocr.js).
         ...(f.encoding ? { encoding: f.encoding } : {}),
         ...(f.spanLines ? { spanLines: f.spanLines } : {}),
+        ...(f.ocr ? { ocr: true } : {}),
         fingerprint: fingerprintFinding(f),
         // Only present on an --include-suppressed run: says WHY this finding
         // is low-confidence, so a JSON consumer doesn't have to guess.

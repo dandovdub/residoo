@@ -25,6 +25,7 @@ const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("
 const { PATTERNS, NOISY_PATTERNS, redact } = require("../src/patterns");
 const { evaluateToolInput, matchSensitivePath } = require("../src/guard");
 const { fingerprintFinding } = require("../src/rotation");
+const { extractImageBlocks } = require("../src/ocr");
 
 const ALL_RULES = PATTERNS.concat(NOISY_PATTERNS);
 const NUM_RUNS = process.env.FUZZ_RUNS ? Number(process.env.FUZZ_RUNS) : 2000;
@@ -128,6 +129,20 @@ property("fingerprintFinding always returns the documented rf1-<32 hex> shape fo
     file: fc.option(fc.string({ maxLength: 200 }), { nil: undefined }),
   }),
   (finding) => /^rf1-[0-9a-f]{32}$/.test(fingerprintFinding(finding)));
+
+// ── ocr.js: extractImageBlocks parses a transcript line as JSON and walks
+// the result -- the newest untrusted-content parser in this codebase, same
+// threat model as decode.js above. Must never throw on any string, and on
+// any parseable-JSON shape (not just the confirmed real one), including
+// deeply nested or self-referential-looking structures a crafted transcript
+// could contain.
+property("extractImageBlocks never throws on any string, real JSON shape or not",
+  fc.string({ maxLength: 3000 }),
+  (line) => { extractImageBlocks(line); return true; });
+
+property("extractImageBlocks never throws on arbitrary JSON-shaped values, and always returns an array",
+  fc.jsonValue({ maxDepth: 15 }),
+  (value) => Array.isArray(extractImageBlocks(JSON.stringify(value))));
 
 console.log(`\n${NUM_RUNS} runs per property, ${failed === 0 ? "0 failed" : `${failed} FAILED`}`);
 process.exitCode = failed ? 1 : 0;

@@ -242,6 +242,88 @@ async function main() {
   check("Akamai EdgeGrid token matched, only by akamai_edgegrid_token",
     matchesOnly("akamai_edgegrid_token", "akab-" + "a".repeat(20) + "-" + "b".repeat(20)));
 
+  // ── ocr: extractImageBlocks (pure, no process spawn) ───────────────────────
+  {
+    const { extractImageBlocks } = require("../src/ocr");
+    const fakeB64 = "a".repeat(200); // shape doesn't matter here, only extraction
+    check("finds a direct top-level image content block (real confirmed shape: message.content[])",
+      (() => {
+        const line = JSON.stringify({ message: { content: [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: fakeB64 } },
+          { type: "text", text: "hi" },
+        ] } });
+        const found = extractImageBlocks(line);
+        return found.length === 1 && found[0].data === fakeB64 && found[0].mediaType === "image/png";
+      })());
+    check("finds an image block nested inside a tool_result (real confirmed shape: message.content[].content[])",
+      (() => {
+        const line = JSON.stringify({ message: { content: [
+          { type: "tool_result", content: [
+            { type: "image", source: { type: "base64", media_type: "image/webp", data: fakeB64 } },
+          ] },
+        ] } });
+        const found = extractImageBlocks(line);
+        return found.length === 1 && found[0].mediaType === "image/webp";
+      })());
+    check("a line with no image block returns []", extractImageBlocks(JSON.stringify({ message: { content: "just text" } })).length === 0);
+    check("a non-JSON line returns [] rather than throwing", extractImageBlocks("not json at all { [").length === 0);
+    check("an empty/undefined line returns []", extractImageBlocks("").length === 0 && extractImageBlocks(undefined).length === 0);
+    check("an unknown media_type is rejected (only the confirmed real types are trusted)",
+      extractImageBlocks(JSON.stringify({ type: "image", source: { type: "base64", media_type: "image/svg+xml", data: fakeB64 } })).length === 0);
+    check("a non-base64 source type (e.g. a URL reference) is rejected",
+      extractImageBlocks(JSON.stringify({ type: "image", source: { type: "url", media_type: "image/png", url: "https://example.com/x.png" } })).length === 0);
+    check("more than 8 image blocks on one line are capped, not all collected",
+      extractImageBlocks(JSON.stringify({ content: Array.from({ length: 20 }, () => ({ type: "image", source: { type: "base64", media_type: "image/png", data: fakeB64 } })) })).length === 8);
+  }
+
+  // ── ocr: isTesseractAvailable + ocrImageBase64, via a fixture script ──────
+  // Same RESIDOO_TEST_TESSERACT escape hatch verify.js's RESIDOO_TEST_AWS_CLI
+  // tests already use for a real spawnSync + stdin/stdout round trip, never
+  // the real tesseract binary. The fixture just echoes stdin back to stdout,
+  // standing in for "OCR read exactly this text" -- residoo's own code under
+  // test here is the extraction/spawn/redaction plumbing, not tesseract's
+  // own OCR accuracy (verified separately, live, against the real binary).
+  {
+    const { isTesseractAvailable, ocrImageBase64 } = require("../src/ocr");
+    const fakeDir = fs.mkdtempSync(path.join(tmp, "fake-tesseract-"));
+    const fakeTesseractPath = path.join(fakeDir, "fake-tesseract.js");
+    fs.writeFileSync(fakeTesseractPath,
+      "#!/usr/bin/env node\n" +
+      "if (process.argv[2] === '--version') { process.stdout.write('tesseract 5.0.0 fake\\n'); process.exit(0); }\n" +
+      "const chunks = [];\n" +
+      "process.stdin.on('data', (c) => chunks.push(c));\n" +
+      "process.stdin.on('end', () => { process.stdout.write(Buffer.concat(chunks).toString('utf-8')); process.exit(0); });\n");
+    fs.chmodSync(fakeTesseractPath, 0o755);
+
+    const prevTess = process.env.RESIDOO_TEST_TESSERACT;
+    process.env.RESIDOO_TEST_TESSERACT = fakeTesseractPath;
+    try {
+      check("isTesseractAvailable: true against the fixture script", isTesseractAvailable());
+      const ocrText = "AWS_ACCESS_KEY_ID=" + plantedAwsKey;
+      const res = ocrImageBase64(Buffer.from(ocrText).toString("base64"));
+      check("ocrImageBase64: returns exactly what the fixture echoed back, no error", res.text === ocrText && !res.error);
+      // Node's base64 decoder is lenient (strips anything outside the
+      // alphabet rather than throwing), so a string that decodes to a real
+      // empty buffer needs zero valid base64 characters in it at all -- a
+      // letters-containing "garbage" string would actually decode to
+      // something non-empty and defeat the point of this test.
+      const badRes = ocrImageBase64("!!!@@@###$$$%%%^^^&&&");
+      check("ocrImageBase64: base64 with nothing decodable degrades to an error, never throws", typeof badRes.error === "string");
+    } finally {
+      if (prevTess === undefined) delete process.env.RESIDOO_TEST_TESSERACT;
+      else process.env.RESIDOO_TEST_TESSERACT = prevTess;
+    }
+
+    const prevTessMissing = process.env.RESIDOO_TEST_TESSERACT;
+    process.env.RESIDOO_TEST_TESSERACT = path.join(fakeDir, "does-not-exist-binary");
+    try {
+      check("isTesseractAvailable: false when the binary genuinely does not exist (ENOENT), never throws", isTesseractAvailable() === false);
+    } finally {
+      if (prevTessMissing === undefined) delete process.env.RESIDOO_TEST_TESSERACT;
+      else process.env.RESIDOO_TEST_TESSERACT = prevTessMissing;
+    }
+  }
+
   // ── sealcrypto: round-trip, wrong passphrase, tamper ──────────────────────
   const { sealFile, unsealFile, sealBuffer, unsealBuffer } = require("../src/sealcrypto");
   const src = path.join(tmp, "orig.bin");
@@ -340,6 +422,56 @@ async function main() {
     };
     return scan({ sources: [src], ...(opts || {}) });
   };
+
+  // ── ocr: full scan.js wiring, --ocr end to end, via the same fixture ──────
+  {
+    const fakeDir2 = fs.mkdtempSync(path.join(tmp, "fake-tesseract2-"));
+    const fakeTesseractPath2 = path.join(fakeDir2, "fake-tesseract.js");
+    fs.writeFileSync(fakeTesseractPath2,
+      "#!/usr/bin/env node\n" +
+      "if (process.argv[2] === '--version') { process.stdout.write('tesseract 5.0.0 fake\\n'); process.exit(0); }\n" +
+      "const chunks = [];\n" +
+      "process.stdin.on('data', (c) => chunks.push(c));\n" +
+      "process.stdin.on('end', () => { process.stdout.write(Buffer.concat(chunks).toString('utf-8')); process.exit(0); });\n");
+    fs.chmodSync(fakeTesseractPath2, 0o755);
+
+    // Wrapped in non-UTF8 high-byte noise (0x80-0xFF) on both sides, standing
+    // in for real binary PNG bytes: without this, the plain-ASCII fixture
+    // would ALSO be found by decode.js's own pre-existing base64 pass (which
+    // decodes any base64 run and rescans it if the result is mostly
+    // printable text) -- a real screenshot's binary pixel data fails that
+    // printable-ratio check and is correctly ignored by that pass, which is
+    // exactly what this test needs to isolate: found ONLY via --ocr, not as
+    // a side effect of decode.js already handling base64 blobs generally.
+    const noise = Buffer.from(Array.from({ length: 60 }, (_, i) => 0x80 + (i % 0x7f)));
+    const ocrImageBytes = Buffer.concat([noise, Buffer.from("leaked in the screenshot: " + plantedAwsKey), noise]);
+    const imageLine = JSON.stringify({ message: { content: [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: ocrImageBytes.toString("base64") } },
+    ] } }) + "\n";
+
+    const prevTess2 = process.env.RESIDOO_TEST_TESSERACT;
+    process.env.RESIDOO_TEST_TESSERACT = fakeTesseractPath2;
+    let ocrScanRes, noOcrScanRes;
+    try {
+      ocrScanRes = await scanOneFile("ocr.jsonl", imageLine, { ocr: true });
+      noOcrScanRes = await scanOneFile("ocr.jsonl", imageLine, { ocr: false });
+    } finally {
+      if (prevTess2 === undefined) delete process.env.RESIDOO_TEST_TESSERACT;
+      else process.env.RESIDOO_TEST_TESSERACT = prevTess2;
+    }
+    check("--ocr finds the AWS key that only existed inside the 'image', via the fake OCR fixture",
+      ocrScanRes.findings.some((f) => f.ruleId === "aws_access_key_id" && f.ocr === true));
+    check("--ocr finding's preview is redacted, the raw key never appears anywhere in the finding",
+      !JSON.stringify(ocrScanRes.findings).includes(plantedAwsKey));
+    check("without --ocr, the exact same transcript finds nothing (the key only exists inside the image data)",
+      noOcrScanRes.findings.length === 0);
+    check("ocrRequestedButMissing is false when tesseract IS available and --ocr was used",
+      ocrScanRes.ocrRequestedButMissing === false);
+
+    const missingRes = await scanOneFile("ocr2.jsonl", imageLine, { ocr: true });
+    check("ocrRequestedButMissing correctly reflects reality when no fixture is configured (real tesseract present or absent, either way boolean, never throws)",
+      typeof missingRes.ocrRequestedButMissing === "boolean");
+  }
 
   {
     // Feature 1a: a findable AWS-shaped key present ONLY base64-encoded, and

@@ -121,6 +121,11 @@ while losing rows, then fixed in public against the classes it was losing
   output, no external CSS/JS, nothing to open it needs the network.
 - `--seal --keychain` encrypts every transcript with a finding into a
   local vault. See [docs/architecture.md](docs/architecture.md#sealing-what-it-finds).
+- `--ocr` reads secrets out of a pasted or tool-returned screenshot, too —
+  a real, verified-unclaimed gap: nobody else in this space has shipped
+  this. Opt-in, needs `tesseract` installed, 100% local, best-effort (OCR
+  can misread a character and miss an exact-format match). See
+  [docs/architecture.md](docs/architecture.md#reading-secrets-out-of-pasted-screenshots).
 - Tells you how many **distinct** secrets it found versus how many times
   one got echoed back across tool calls, so the headline number reflects
   real exposure, not repetition.
@@ -203,6 +208,8 @@ residoo scan [options]
   --no-color              disable ANSI colour
   --verify                ask each credential's own vendor if it still authenticates
                           (real network call; see docs/architecture.md)
+  --ocr                   also OCR pasted/tool-returned images and scan the text
+                          (needs tesseract installed; no network call; best-effort)
 
   --seal                  encrypt every transcript with findings into a local vault
   --vault-dir <dir>       vault location (default ./residoo-vault-<stamp>)

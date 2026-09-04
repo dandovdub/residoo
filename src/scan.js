@@ -3,6 +3,7 @@
 const path = require("path");
 const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
 const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("./decode");
+const { isTesseractAvailable, extractImageBlocks, ocrImageBase64 } = require("./ocr");
 const { findPairedSecret, findNearbyCandidate } = require("./pairing");
 const { looksRandom } = require("./rarity");
 const { decodeJwtExpiryMs } = require("./jwtExpiry");
@@ -266,8 +267,15 @@ function localTimestamp(d) {
  * absolute path can itself carry a username or a project name the rest of
  * this report is careful never to print.
  */
-async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, verifyOnlyFingerprint = null, onBeforeVerify = null, noColor = false } = {}) {
+async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, verifyOnlyFingerprint = null, onBeforeVerify = null, noColor = false, ocr = false } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
+  // --ocr: checked once, not per line/image -- isTesseractAvailable shells
+  // out, and this scan can touch thousands of lines. ocrRequestedButMissing
+  // flows back to the caller (see the return value below) so a user who
+  // asked for --ocr without tesseract installed gets a clear, once-per-scan
+  // message, not silence and zero image findings.
+  const ocrReady = ocr && isTesseractAvailable();
+  const ocrRequestedButMissing = ocr && !ocrReady;
   // The decode pass (see decode.js) only applies high-confidence, vendor-
   // prefixed rules to decoded bytes: random binary that decodes to printable
   // text can shape-match a generic rule, but not a vendor prefix. NOISY rules
@@ -559,6 +567,34 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     }
   };
 
+  // --ocr only: a line whose JSON shape holds a pasted or tool-returned
+  // image (see ocr.js's docstring for the exact confirmed shape) gets each
+  // image block decoded and OCR'd, and the extracted text runs through the
+  // same high-confidence rules the decode pass above uses, for the same
+  // reason -- a step removed from literal transcript text deserves the
+  // higher bar. Every finding carries an `ocr: true` marker so a report can
+  // say where the value actually came from.
+  const ocrLine = (line, file, relFile, lineNo, mtimeMs) => {
+    if (!ocrReady) return;
+    for (const block of extractImageBlocks(line)) {
+      const { text } = ocrImageBase64(block.data);
+      if (!text) continue;
+      for (const rule of highRules) {
+        rule.re.lastIndex = 0;
+        let m;
+        while ((m = rule.re.exec(text)) !== null) {
+          const suppressedReason = suppressionReason(m[0], null, rule.id);
+          if (suppressedReason && !includeSuppressed) {
+            suppressedCount++;
+            continue;
+          }
+          record(rule, m[0], relFile, file, lineNo, mtimeMs,
+            suppressedReason ? "low" : rule.confidence, suppressedReason, { ocr: true });
+        }
+      }
+    }
+  };
+
   // Feature 2: split-line boundary join. A finding here means one credential
   // was split across this line and the next and is contiguous on neither. It
   // is recorded against BOTH contributing lines (each holds a fragment of the
@@ -668,6 +704,13 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
             decodeLine(line, file, relFile, i + 1, mtimeMs);
           } catch (err) {
             flagFailed();
+          }
+          if (ocrReady) {
+            try {
+              ocrLine(line, file, relFile, i + 1, mtimeMs);
+            } catch (err) {
+              flagFailed();
+            }
           }
           try {
             const content = contentProjection(line);
@@ -872,7 +915,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
 
   const distinctCounts = {};
   for (const [ruleId, set] of distinctByRule) distinctCounts[ruleId] = set.size;
-  return { findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount, distinctCounts, unreadableFiles };
+  return { findings, filesScanned, sourcesScanned, bytesScanned, suppressedCount, distinctCounts, unreadableFiles, ocrRequestedButMissing };
 }
 
 /**
@@ -884,7 +927,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
 function emptyResult() {
   return {
     findings: [], filesScanned: 0, sourcesScanned: [], bytesScanned: 0,
-    suppressedCount: 0, distinctCounts: {}, unreadableFiles: [],
+    suppressedCount: 0, distinctCounts: {}, unreadableFiles: [], ocrRequestedButMissing: false,
   };
 }
 

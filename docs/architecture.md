@@ -132,6 +132,45 @@ The same mechanism, scoped to one credential per call, is also available
 from inside a Claude Code conversation via the `residoo_verify_finding` MCP
 tool — see [features.md](features.md#mcp-query-findings-from-inside-claude-code).
 
+## Reading secrets out of pasted screenshots
+
+Every rule above matches text already sitting in a transcript. `--ocr`
+covers a real, different gap: a user pastes a screenshot of a `.env` file
+or a cloud console page into their AI agent, and the credential in that
+image is invisible to a text-only scanner — a verified-unclaimed gap in
+this space as of this writing (competitor research checked; the closest
+thing found is an unshipped roadmap item elsewhere).
+
+Real, ground-truth inspection of this machine's own Claude Code session
+files confirmed the exact shape a pasted or tool-returned image takes,
+both as a direct message content block and nested inside a tool result:
+
+```json
+{"type":"image","source":{"type":"base64","media_type":"image/png","data":"<base64>"}}
+```
+
+`--ocr` walks each transcript line for that shape, decodes the image
+bytes, and pipes them to a locally-installed `tesseract` over stdin —
+never a temp file, never the network, the same shell-out-to-an-already-
+installed-tool posture `--verify`'s AWS check already has, for the same
+reason: residoo ships zero runtime dependencies and a from-scratch OCR
+engine isn't something this project could build or verify. The extracted
+text then runs through the exact same high-confidence rules and
+`redact()` every other line in a transcript does — no new detection
+logic, no new false-positive surface, just a new place text can come
+from.
+
+Off by default: it needs `tesseract` installed (`brew install tesseract`
+or your distro's package), and it's real CPU work per image, unlike every
+other rule here. **Best-effort, stated plainly**: OCR is lossy. A real
+test against a clean, large, monospace rendering of a fake key
+misread `0` as `@` and `Y` as `*` even at 2x resolution — visually
+confusable characters are a genuine, inherent OCR failure mode, not a bug
+in how this is invoked. A single misread character breaks an exact-format
+regex match, so `--ocr` is additional coverage on a previously
+zero-coverage surface, not a guarantee every credential in every
+screenshot is caught. See [`src/ocr.js`](../src/ocr.js).
+
 ## Rotation: from found to closed
 
 Detection without rotation is theater: 64% of secrets leaked publicly in
