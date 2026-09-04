@@ -16,7 +16,7 @@ const { makeFinding } = require("../lib");
 module.exports = {
   id: "residoo",
   displayName: "residoo",
-  homepage: "https://github.com/dubinerdan/residoo",
+  homepage: "https://github.com/dandovdub/residoo",
   kind: "node",
 
   // Claim source: residoo's own help text and README: transcripts of coding
