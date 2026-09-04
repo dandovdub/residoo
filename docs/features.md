@@ -15,7 +15,7 @@ instead of waiting for you to remember to run `scan` again.
 
 ```
 $ residoo watch
-watching 43 sources, 118 files (61 tailed, 57 rescanned on change)
+watching 44 sources, 118 files (61 tailed, 57 rescanned on change)
 polling every 5s; fs.watch is not used, every alert comes from polling
 
 2026-09-03 14:02:11  [high]  AWS Access Key ID  AKIA****ABCD

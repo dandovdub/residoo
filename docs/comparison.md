@@ -8,11 +8,11 @@ for anyone deciding between residoo and an adjacent tool.
 | | residoo | gitleaks | trufflehog | agentsweep |
 |---|---|---|---|---|
 | Scans | AI-agent transcripts, configs | git commits | git commits, cloud, more | AI-agent transcripts |
-| Detection rules | 50, high-confidence only | broad | 800+ detectors | 209 |
+| Detection rules | 79, high-confidence only | broad | 800+ detectors | 209 |
 | Verification | opt-in, 35 vendors | none | on **by default**, 700+ vendors | none |
 | Remediation | `--seal` (encrypted copy) | none | none | in-place redaction |
 | Runtime deps | 0 (Node only) | 0 (Go binary) | 0 (Go binary) | Python 3.11+, 3 pip packages |
-| Agent sources covered | 43 | n/a | n/a | 31 |
+| Agent sources covered | 44 | n/a | n/a | 31 |
 | Continuous mode | `residoo watch` | none | none | none |
 
 The rows above (rule counts, deps, sources) are documented facts, not
@@ -25,8 +25,8 @@ split-across-lines) this corpus plants — it found 71% of distinct
 credentials. TruffleHog's 800+ detectors span every domain it scans
 (cloud infra, git, chats, more), not this one specifically — it found
 64%. agentsweep is the most directly comparable, since it targets this
-exact niche: 209 rules to residoo's 50, and it still found fewer
-credentials, 79% to residoo's 100%. residoo's 50 are "high-confidence
+exact niche: 209 rules to residoo's 79, and it still found fewer
+credentials, 79% to residoo's 100%. residoo's 79 are "high-confidence
 only" by deliberate design (see [`src/patterns.js`](../src/patterns.js)'s
 own header), trading rule-count breadth for a lower false-positive rate;
 the benchmark, not the row above, is the actual answer to "does more
@@ -58,7 +58,7 @@ Two newer categories are adjacent but solve a different problem:
 
 Broader on detection rules (209 to residoo's smaller, deliberately
 high-confidence set) and it does in-place redaction, where residoo's
-`--seal` makes an encrypted copy instead. residoo has more agent sources (43
+`--seal` makes an encrypted copy instead. residoo has more agent sources (44
 to 31), and both now ship SARIF output and a pre-commit hook.
 
 The tradeoffs are worth naming precisely:
