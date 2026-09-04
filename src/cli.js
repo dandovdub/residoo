@@ -5,7 +5,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { availableSources, ALL_SOURCES } = require("./sources");
 const { scan, emptyResult } = require("./scan");
-const { render, renderIntegrity, renderJson, renderSarif, makeProgressReporter, printIntro } = require("./report");
+const { render, renderIntegrity, renderJson, renderSarif, renderHtml, makeProgressReporter, printIntro } = require("./report");
 const { checkIntegrity } = require("./integrity");
 const {
   ROTATION_GUIDANCE, guidanceFor, loadAcks, loadDismissed, ackFinding, dismissFinding, renderRotation,
@@ -78,6 +78,15 @@ Scan options:
                           GitHub code scanning's Security tab and inline PR
                           annotations. Use --json for the full picture
                           (findings + integrity + rotation) instead.
+  --html [path]           also write a self-contained HTML report (default:
+                          residoo-report-<timestamp>.html in the current
+                          directory) -- a filterable table with a rotation
+                          guide per finding, safe to screenshot or share:
+                          same redacted preview as every other output, no
+                          raw value in any code path, no external CSS/JS/
+                          fonts, no network access needed to open it.
+                          Independent of --json/--sarif; can combine with
+                          either.
   --project [dir]         scan a repository checkout instead of this machine
                           (default dir: current directory). Covers committed
                           agent transcripts, agent config/rules files, and
@@ -338,6 +347,23 @@ async function resolveUnsealSecret(args, vaultDir) {
       "vault is not portable across machines."
     );
   }
+}
+
+// --html [path]: writes the self-contained HTML report to disk (default
+// residoo-report-<timestamp>.html in the cwd, same naming convention as
+// --seal's default vault dir) and prints where it went. Independent of
+// which stdout format was chosen (text/--json/--sarif), same relationship
+// --seal already has to those — this is a side effect, not another
+// mutually-exclusive output mode.
+function writeHtmlReport(result, integrity, rotation, args) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  // Bare --html is valid (auto-named), so the next token is only taken as a
+  // path when it doesn't itself look like another flag — same guard --project
+  // uses for the same reason.
+  const next = argValue(args, "--html");
+  const out = next && !next.startsWith("--") ? path.resolve(next) : path.resolve(`residoo-report-${stamp}.html`);
+  fs.writeFileSync(out, renderHtml(result, integrity, rotation));
+  process.stdout.write(`HTML report written to ${out}\n`);
 }
 
 async function runSeal(result, args) {
@@ -955,6 +981,7 @@ async function main(argv) {
       // a planted repo-level hook in the CWD is exactly as dangerous here.
       if (integrity) process.stdout.write(renderIntegrity(integrity, { noColor }) + "\n");
     }
+    if (args.includes("--html")) writeHtmlReport(empty, integrity, renderRotation([], acks, dismissed), args);
     return failOnFind && integrityWarnCount(integrity) > 0 ? 1 : 0;
   }
 
@@ -983,6 +1010,8 @@ async function main(argv) {
     const sealExit = await runSeal(result, args);
     if (sealExit !== 0) return sealExit;
   }
+
+  if (args.includes("--html")) writeHtmlReport(result, integrity, rotation, args);
 
   // --allow-acked narrows the SECRET gate only: an acknowledged rotation says
   // nothing about a planted hook, so integrity warnings always fail. Without

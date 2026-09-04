@@ -116,6 +116,9 @@ while losing rows, then fixed in public against the classes it was losing
 - Redacts everything in its own output, including `--json`: you get a
   shape and a first/last-4 preview, never the real value.
 - `--sarif` emits SARIF 2.1.0 for GitHub code scanning.
+- `--html [path]` writes a self-contained, filterable HTML report with a
+  rotation guide per finding — same redaction guarantee as every other
+  output, no external CSS/JS, nothing to open it needs the network.
 - `--seal --keychain` encrypts every transcript with a finding into a
   local vault. See [docs/architecture.md](docs/architecture.md#sealing-what-it-finds).
 - Tells you how many **distinct** secrets it found versus how many times
@@ -186,6 +189,8 @@ faith.
 residoo scan [options]
 
   --json                  machine-readable output (full detail, still redacted)
+  --html [path]           also write a self-contained HTML report (default:
+                          residoo-report-<stamp>.html); combines with --json
   --project [dir]         scan a repository checkout instead of this machine
                           (committed transcripts, agent configs, root .env)
   --include-noisy         also run broad, false-positive-prone rules

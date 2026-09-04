@@ -145,11 +145,14 @@ story, and (as of its last update) no continuous/watch mode either.
 similar pitch: local-first, no telemetry, "isn't a replacement for
 gitleaks or trufflehog... fills a different gap: scanning your own chat
 history that no other tool touches" -- its own README makes almost the
-identical framing residoo's own docs make. It ships two things residoo
-doesn't: a self-contained HTML dashboard per scan (drag-and-drop,
-filterable, screenshot-friendly) and a combined credentials-plus-PII
-scope (SSN, IBAN, Luhn-validated card numbers, email, phone), where
-residoo is deliberately credentials-only.
+identical framing residoo's own docs make. Both now ship a self-contained,
+filterable HTML report (`residoo scan --html`, added right after this
+comparison was first written, DidILeak's own dashboard predating it); the
+one thing DidILeak still has that residoo doesn't is a combined
+credentials-plus-PII scope (SSN, IBAN, Luhn-validated card numbers,
+email, phone) plus a drag-and-drop web upload UI (a separate Next.js app,
+optionally run via Docker) -- residoo is deliberately credentials-only
+and CLI-generated, no server involved at any point.
 
 The scope difference that matters most: DidILeak scans **export files**,
 not live session state, for its two best-known targets. Its ChatGPT and

@@ -23,7 +23,7 @@ Add to `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.8.8
+    rev: v0.9.0
     hooks:
       - id: residoo
 ```
@@ -32,7 +32,7 @@ The pre-commit framework installs this repo with npm in its own isolated environ
 
 ## GitHub Action
 
-The repository doubles as a composite action. The action tag and the CLI version move together: `@v0.8.8` runs residoo 0.8.8 from npm.
+The repository doubles as a composite action. The action tag and the CLI version move together: `@v0.9.0` runs residoo 0.9.0 from npm.
 
 ```yaml
 name: residoo
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dandovdub/residoo@v0.8.8
+      - uses: dandovdub/residoo@v0.9.0
 ```
 
 Inputs, all optional:
@@ -69,7 +69,7 @@ jobs:
       security-events: write   # required for the SARIF upload step
     steps:
       - uses: actions/checkout@v4
-      - uses: dandovdub/residoo@v0.8.8
+      - uses: dandovdub/residoo@v0.9.0
         with:
           sarif: "true"
 ```
@@ -95,5 +95,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm install -g residoo@0.8.8 && residoo scan --project . --fail-on-find
+      - run: npm install -g residoo@0.9.0 && residoo scan --project . --fail-on-find
 ```

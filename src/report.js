@@ -643,4 +643,202 @@ function renderSarif(result) {
   }, null, 2);
 }
 
-module.exports = { render, renderIntegrity, renderRotationSection, renderJson, renderSarif, makeProgressReporter, printIntro };
+function escapeHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+const HTML_REPORT_STYLE = `
+:root { color-scheme: dark; --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#c9d1d9;
+  --dim:#8b949e; --red:#f85149; --yellow:#d29922; --green:#3fb950; --cyan:#58a6ff; --accent:#238636; }
+* { box-sizing: border-box; }
+body { margin:0; padding:32px; background:var(--bg); color:var(--text);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+.wrap { max-width: 1100px; margin: 0 auto; }
+h1 { font-size:20px; margin:0 0 4px; }
+.meta { color:var(--dim); font-size:12px; margin-bottom:24px; }
+.cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:24px; }
+.card { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+  padding:14px 18px; min-width:140px; }
+.card .n { font-size:24px; font-weight:700; }
+.card .l { color:var(--dim); font-size:12px; margin-top:2px; }
+.clean { background:var(--panel); border:1px solid var(--accent); border-radius:8px;
+  padding:20px; color:var(--green); font-weight:600; }
+input#filter { width:100%; padding:10px 12px; margin-bottom:14px; background:var(--panel);
+  border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:14px; }
+input#filter:focus { outline:1px solid var(--cyan); }
+table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--border);
+  border-radius:8px; overflow:hidden; margin-bottom:24px; }
+th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--border); font-size:13px; }
+th { color:var(--dim); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.03em; }
+tr:last-child td { border-bottom:none; }
+tr.row:hover { background:#1c232c; cursor:pointer; }
+.conf-high { color:var(--red); font-weight:600; } .conf-medium { color:var(--yellow); font-weight:600; }
+.conf-low { color:var(--dim); }
+.status-pending { color:var(--yellow); } .status-acked { color:var(--green); } .status-dismissed { color:var(--dim); }
+code.preview { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; background:#0000004d;
+  padding:1px 6px; border-radius:4px; }
+.guide { display:none; background:#0000004d; padding:12px 16px; }
+.guide.open { display:table-row; }
+.guide td { border-bottom:1px solid var(--border); }
+.guide ol { margin:6px 0; padding-left:20px; }
+.guide a { color:var(--cyan); }
+.note { color:var(--dim); font-size:12px; margin-top:2px; }
+.section-title { font-size:15px; font-weight:600; margin:24px 0 10px; }
+.warn-badge { display:inline-block; background:#f8514922; color:var(--red); border:1px solid var(--red);
+  border-radius:4px; padding:1px 8px; font-size:11px; font-weight:600; margin-left:8px; }
+.footer { color:var(--dim); font-size:12px; margin-top:32px; border-top:1px solid var(--border); padding-top:16px; }
+`;
+
+const HTML_REPORT_SCRIPT = `
+document.getElementById("filter")?.addEventListener("input", function (e) {
+  var q = e.target.value.toLowerCase();
+  document.querySelectorAll("tr.row").forEach(function (row) {
+    var hit = row.getAttribute("data-search").includes(q);
+    row.style.display = hit ? "" : "none";
+    var g = row.nextElementSibling;
+    if (g && g.classList.contains("guide") && !hit) g.classList.remove("open");
+  });
+});
+document.querySelectorAll("tr.row").forEach(function (row) {
+  row.addEventListener("click", function () {
+    var g = row.nextElementSibling;
+    if (g && g.classList.contains("guide")) g.classList.toggle("open");
+  });
+});
+`;
+
+/**
+ * Self-contained, single-file HTML report (residoo scan --html). Same data
+ * as renderJson (findings deduped by rotation.js into distinct-value rows,
+ * plus integrity), presented for the audience --json/--sarif don't serve
+ * well: a screenshot for an incident channel, or a non-CLI teammate.
+ *
+ * Every value shown is `f.preview`/`entry.preview` — already redacted by
+ * patterns.js's redact() before it ever reaches this function, the same
+ * guarantee every other output format has. Unlike a competitor's own HTML
+ * report (which explicitly notes only its HTML mode masks values, and its
+ * JSON mode ships full raw secrets "for incident response"), residoo has
+ * no output mode, in any format, that ever writes a raw value — this
+ * function has no code path that could regress that, since it never
+ * receives the raw value in the first place.
+ *
+ * No external CSS/JS/fonts/images: everything is inlined below, so the
+ * file opens correctly with no network access, matching residoo's own
+ * "no network calls in the default path" posture for the report itself,
+ * not just the scan that produced it.
+ */
+function renderHtml(result, integrity = null, rotation = null) {
+  const { version } = require("../package.json");
+  const findings = result.findings || [];
+  const scannedAt = localTimestamp(new Date());
+  const distinct = rotation && rotation.counts ? rotation.counts.distinct : 0;
+  const pending = rotation && rotation.counts ? rotation.counts.pending : 0;
+  const confirmedDead = rotation && rotation.counts ? rotation.counts.confirmedDead || 0 : 0;
+  const needsReview = Math.max(0, pending - confirmedDead);
+  const byFile = new Set(findings.map((f) => f.file)).size;
+  const integrityWarns = integrity ? integrity.findings.filter((f) => f.severity === "warn").length : 0;
+
+  const head =
+    `<!doctype html><html><head><meta charset="utf-8">` +
+    `<meta name="viewport" content="width=device-width, initial-scale=1">` +
+    `<meta name="robots" content="noindex">` +
+    `<title>residoo report -- ${escapeHtml(scannedAt)}</title>` +
+    `<style>${HTML_REPORT_STYLE}</style></head><body><div class="wrap">` +
+    `<h1>residoo report</h1>` +
+    `<div class="meta">v${escapeHtml(version)} &middot; scanned ${escapeHtml(scannedAt)} &middot; ` +
+    `generated locally, never uploaded &mdash; safe to share, values below are redacted</div>`;
+
+  if (findings.length === 0) {
+    const body =
+      `<div class="clean">&#10003; No exposed secrets found: ${filesScannedLine(result)}</div>` +
+      (integrity ? renderIntegrityHtml(integrity) : "") +
+      `</div></body></html>`;
+    return head + body;
+  }
+
+  const cards =
+    `<div class="cards">` +
+    card(String(findings.length), `finding${findings.length === 1 ? "" : "s"} across ${byFile} file${byFile === 1 ? "" : "s"}`) +
+    card(String(distinct), `distinct value${distinct === 1 ? "" : "s"}`) +
+    card(String(needsReview), `need${needsReview === 1 ? "s" : ""} review`) +
+    card(String(result.filesScanned), "files scanned") +
+    `</div>`;
+
+  const rows = (rotation && rotation.entries ? [...rotation.entries] : [])
+    .sort((a, b) => b.occurrences - a.occurrences)
+    .map((e) => rotationRowHtml(e))
+    .join("");
+
+  const table =
+    `<input id="filter" type="text" placeholder="Filter by rule, file, or preview...">` +
+    `<table><thead><tr><th>Rule</th><th>Status</th><th>Preview</th><th>Seen</th><th>Files</th></tr></thead>` +
+    `<tbody>${rows}</tbody></table>`;
+
+  const integritySection = integrity
+    ? `<div class="section-title">Integrity checks${integrityWarns > 0 ? `<span class="warn-badge">${integrityWarns} warning${integrityWarns === 1 ? "" : "s"}</span>` : ""}</div>` +
+      renderIntegrityHtml(integrity)
+    : "";
+
+  const footer =
+    `<div class="footer">Values are redacted (first/last 4 characters only). Nothing in this file, or in the scan` +
+    ` that produced it, ever left this machine. Generated by <code class="preview">residoo scan --html</code> --` +
+    ` github.com/dandovdub/residoo</div>`;
+
+  return head + cards + table + integritySection + footer + `<script>${HTML_REPORT_SCRIPT}</script></div></body></html>`;
+}
+
+function card(n, label) {
+  return `<div class="card"><div class="n">${escapeHtml(n)}</div><div class="l">${escapeHtml(label)}</div></div>`;
+}
+
+function filesScannedLine(result) {
+  return `${result.filesScanned} file${result.filesScanned === 1 ? "" : "s"} scanned across ${(result.sourcesScanned || []).join(", ") || "no sources"}`;
+}
+
+const HTML_STATUS_LABEL = { pending: "pending", acked: "rotated", dismissed: "dismissed" };
+
+function rotationRowHtml(e) {
+  const search = escapeHtml(`${e.label} ${e.ruleId} ${e.preview} ${(e.files || []).join(" ")}`.toLowerCase());
+  const filesShown = (e.files || []).slice(0, 3).map((f) => safeBasename(f));
+  const moreFiles = (e.files || []).length - filesShown.length;
+  const g = e.guidance || {};
+  const link = g.rotateUrl
+    ? `<a href="${escapeHtml(g.rotateUrl)}" target="_blank" rel="noopener">${escapeHtml(g.rotateUrl)}</a>`
+    : escapeHtml(g.consolePath || "");
+  const steps = (g.steps || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("");
+  return (
+    `<tr class="row" data-search="${search}">` +
+    `<td>${escapeHtml(e.label)}</td>` +
+    `<td class="status-${escapeHtml(e.status)}">${escapeHtml(HTML_STATUS_LABEL[e.status] || e.status)}</td>` +
+    `<td><code class="preview">${escapeHtml(e.preview)}</code></td>` +
+    `<td>${e.occurrences}&times;</td>` +
+    `<td>${escapeHtml(filesShown.join(", "))}${moreFiles > 0 ? ` +${moreFiles} more` : ""}</td>` +
+    `</tr>` +
+    `<tr class="guide"><td colspan="5">` +
+    `<div><strong>${escapeHtml(g.label || e.label)}</strong></div>` +
+    (link ? `<div class="note">${link}</div>` : "") +
+    (steps ? `<ol>${steps}</ol>` : "") +
+    (g.revokeNote ? `<div class="note">${escapeHtml(g.revokeNote)}</div>` : "") +
+    `</td></tr>`
+  );
+}
+
+function renderIntegrityHtml(integrity) {
+  if (!integrity.findings || integrity.findings.length === 0) {
+    return `<div class="clean" style="margin-bottom:24px">&#10003; No integrity findings.</div>`;
+  }
+  const rows = integrity.findings.map((f) =>
+    `<tr><td class="status-${f.severity === "warn" ? "pending" : "dismissed"}">${escapeHtml(f.severity)}</td>` +
+    `<td>${escapeHtml(f.kind)}</td><td>${escapeHtml(safeBasename(f.file))}</td>` +
+    `<td>${escapeHtml(f.detail || "")}</td></tr>`
+  ).join("");
+  return (
+    `<table><thead><tr><th>Severity</th><th>Kind</th><th>File</th><th>Detail</th></tr></thead>` +
+    `<tbody>${rows}</tbody></table>` +
+    (integrity.scopeNote ? `<div class="note">${escapeHtml(integrity.scopeNote)}</div>` : "")
+  );
+}
+
+module.exports = { render, renderIntegrity, renderRotationSection, renderJson, renderSarif, renderHtml, makeProgressReporter, printIntro };

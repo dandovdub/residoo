@@ -1044,6 +1044,39 @@ structurally unsafe bare/unprefixed shape) or already covered by an
 existing rule, each with its reasoning disclosed in the relevant commit
 and in `src/patterns.js`'s own comments.
 
+## residoo 0.9.0: a shareable HTML report, one new capability, zero scan-path change (added 2026-09-04)
+
+`residoo scan --html [path]` writes a self-contained, filterable HTML
+report: a stats banner, a search box, a click-to-expand rotation guide per
+distinct finding, and the same integrity-findings table the text report
+shows. Motivated directly by the DidILeak comparison added earlier today
+(bench/RESULTS.md and docs/comparison.md) -- its own README calls out a
+self-contained HTML dashboard as one of the two things it has that residoo
+didn't. Built on `rotation.js`'s already-deduped, already-guidance-attached
+entries and `report.js`'s existing `render`/`renderJson`/`renderSarif`
+pattern, not a new data path: every value shown is `f.preview`/`entry.preview`,
+already redacted by `patterns.js`'s `redact()` before this function ever
+sees it, the same guarantee every other output format has -- unlike
+DidILeak's own JSON mode, which explicitly ships full unmasked values "for
+incident response." No CDN, no external CSS/JS/fonts: the stylesheet and a
+small vanilla-JS filter/expand script are both inlined in the file, so it
+opens correctly with the network off, matching residoo's own "no network
+calls in the default path" posture for the report artifact itself, not
+just the scan that produced it. Verified by opening real generated output
+in a browser (both the findings case and the "nothing found" case) and
+confirming the filter box and click-to-expand actually work, not just that
+the HTML parses.
+
+Touches `src/report.js` (new `renderHtml`) and `src/cli.js` (the `--html`
+flag, independent of `--json`/`--sarif` the same way `--seal` already is) --
+zero lines changed in `scan.js`, `decode.js`, or `patterns.js`. The full
+12-invocation reproduce sequence was not run for this release: unlike
+0.8.0's MCP-verify addition (which touched `scan.js` and warranted a
+reproduce run even though the new code path was provably unreachable from
+the benchmark harness), this change has no code path through any file the
+benchmark scores at all, provable by grep, not just by reasoning about
+call graphs. Pattern count unchanged at 79.
+
 ## Reproduce
 
 ```

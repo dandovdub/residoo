@@ -2163,6 +2163,61 @@ async function main() {
     try { sarifEmpty = JSON.parse(sarifEmptyRes.stdout); } catch { /* checked below */ }
     check("sarif: a scan with nothing to report still emits a valid, empty SARIF document (not plain text)",
       !!sarifEmpty && Array.isArray(sarifEmpty.runs[0].results) && sarifEmpty.runs[0].results.length === 0);
+
+    // ── --html (see src/report.js's renderHtml) ─────────────────────────────
+    const htmlOutPath = path.join(tmp, "e2e-report.html");
+    const htmlRes = spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--html", htmlOutPath, "--no-integrity"], {
+        cwd: eCwd, encoding: "utf-8",
+        env: {
+          ...process.env,
+          HOME: eHome, USERPROFILE: eHome,
+          XDG_CONFIG_HOME: path.join(eHome, ".config"), XDG_DATA_HOME: path.join(eHome, ".local", "share"),
+          GEMINI_CLI_HOME: eHome, CODEX_HOME: path.join(eHome, ".codex"),
+        },
+      });
+    check("html: exits 0 and prints where the file went, on stdout",
+      htmlRes.status === 0 && htmlRes.stdout.includes(htmlOutPath));
+    check("html: still prints the normal plain-text report too (a side effect, not a replacement output mode)",
+      htmlRes.stdout.includes("potential secret"));
+    let htmlContent = "";
+    try { htmlContent = fs.readFileSync(htmlOutPath, "utf-8"); } catch { /* checked below */ }
+    check("html: file exists, is a complete, well-formed HTML document",
+      htmlContent.startsWith("<!doctype html>") && htmlContent.trim().endsWith("</html>"));
+    check("html: shows the redacted preview, never the raw planted key, anywhere in the file",
+      htmlContent.includes("AKIA") && !htmlContent.includes("SM0KETESTFAKEKEY"));
+    check("html: the rule label and a rotation step from its guidance both appear",
+      htmlContent.includes("AWS Access Key ID") && htmlContent.includes("Console: IAM"));
+    check("html: no external resource is ever loaded (no <link>, no remote <script src>, no CDN)",
+      !/<link\b/.test(htmlContent) && !/<script[^>]+src=/.test(htmlContent));
+    check("html: filter input and click-to-expand script are both present, inlined, no CDN dependency",
+      htmlContent.includes('id="filter"') && htmlContent.includes("<script>") && !htmlContent.includes("cdn."));
+
+    const htmlBareOutPath = path.join(eCwd, `residoo-report-${new Date().toISOString().slice(0, 4)}`); // just the year prefix, for a loose existence check below
+    const htmlBareRes = spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--html", "--no-integrity"], {
+        cwd: eCwd, encoding: "utf-8",
+        env: {
+          ...process.env,
+          HOME: eHome, USERPROFILE: eHome,
+          XDG_CONFIG_HOME: path.join(eHome, ".config"), XDG_DATA_HOME: path.join(eHome, ".local", "share"),
+          GEMINI_CLI_HOME: eHome, CODEX_HOME: path.join(eHome, ".codex"),
+        },
+      });
+    const bareWritten = fs.readdirSync(eCwd).find((f) => f.startsWith("residoo-report-") && f.endsWith(".html"));
+    check("html: bare --html (no path given) auto-names the file rather than swallowing the next arg",
+      htmlBareRes.status === 0 && !!bareWritten);
+    if (bareWritten) fs.unlinkSync(path.join(eCwd, bareWritten));
+
+    const htmlEmptyRes = spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--html", path.join(tmp, "e2e-report-empty.html"), "--no-integrity", "--project", eCwd], {
+        cwd: eCwd, encoding: "utf-8", env: process.env,
+      });
+    let htmlEmptyContent = "";
+    try { htmlEmptyContent = fs.readFileSync(path.join(tmp, "e2e-report-empty.html"), "utf-8"); } catch { /* checked below */ }
+    check("html: a scan with nothing to report still writes a valid, well-formed HTML file (not skipped)",
+      htmlEmptyRes.status === 0 && htmlEmptyContent.startsWith("<!doctype html>") &&
+      htmlEmptyContent.includes("No exposed secrets found"));
   }
 
   // ── version/date banner + progress reporter (see src/report.js) ────────────
