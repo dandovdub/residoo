@@ -772,6 +772,32 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "Deletion is immediate; the key stops authenticating on the next request.",
   },
+  // Fetched docs.langchain.com/langsmith/create-account-api-key
+  // (2026-09-04): both personal access tokens and service keys are
+  // created and managed from the workspace's own API Keys settings page.
+  langsmith_key: {
+    label: "LangSmith API key",
+    consolePath: "smith.langchain.com > Settings > API Keys",
+    steps: [
+      "Open API Keys under the workspace's settings",
+      "Delete the leaked key (personal access token or service key)",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; the key stops authenticating on the next request.",
+  },
+  // Fetched resend.com/docs/dashboard/api-keys/introduction (2026-09-04):
+  // keys are removed from the dashboard's API Keys list (More options ->
+  // Remove API key), or programmatically via the DELETE /api-keys endpoint.
+  resend_key: {
+    label: "Resend API key",
+    consolePath: "resend.com/api-keys",
+    steps: [
+      "Open the API Keys list in the Resend dashboard",
+      "Click More options on the leaked key, then Remove API key",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; the key stops authenticating on the next request.",
+  },
 
   // ── NOISY_PATTERNS (only reachable via --include-noisy) ───────────────
   generic_password_assignment: {

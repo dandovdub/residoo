@@ -272,6 +272,31 @@ const PATTERNS = [
   // than a doc-confirmed exact count.
   { id: "posthog_key", label: "PostHog personal API key", confidence: "high",
     re: /\bphx_[A-Za-z0-9]{40,}\b/g },
+  // LangSmith personal access token (lsv2_pt_) / service key (lsv2_sk_).
+  // Found missing by cross-checking agentsweep's own open-issue tracker.
+  // The first segment (32 hex, UUID-shaped) is consistent across every
+  // real example checked (docs.langchain.com and independent citations of
+  // it); the trailing segment's exact length is NOT confirmed by any
+  // primary source found (two secondary citations of the same example
+  // key disagreed by one character), so it's a generous bound, not a
+  // doc-confirmed exact count -- same honesty standard as posthog_key
+  // above. "lsv2_" itself is distinctive enough that this bound doesn't
+  // meaningfully raise false-positive risk either way.
+  { id: "langsmith_key", label: "LangSmith API key", confidence: "high",
+    re: /\blsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{6,16}\b/g },
+  // Resend API key (re_). Found missing the same way. No primary source
+  // publishes an exact length spec; the one real example seen (Resend's
+  // own docs) is an 8-char id segment + a 24-char secret segment, both
+  // mixed-case alphanumeric, joined by one underscore. Bounded generously
+  // around that shape rather than pinned to it exactly. The two-segment,
+  // underscore-joined, both-high-entropy structure is deliberately what
+  // makes this safe as a DEFAULT (non-noisy) rule despite the short,
+  // otherwise-generic "re_" prefix: tested against realistic re_-prefixed
+  // code identifiers (re_try, re_send, re_connect, re_validate...) and
+  // none match, since none of them have a second underscore-delimited
+  // random-looking segment.
+  { id: "resend_key", label: "Resend API key", confidence: "high",
+    re: /\bre_[A-Za-z0-9]{6,12}_[A-Za-z0-9]{18,32}\b/g },
 ];
 
 /**

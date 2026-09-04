@@ -596,6 +596,28 @@ unchanged. A Cloudflare-family corpus addition (covering all three
 prefixes) is a natural next corpus update, not done here to keep this
 change scoped to the one real gap found.
 
+## residoo 0.8.3: two more vendors closed the same way (added 2026-09-04)
+
+Continuing the same cross-check against agentsweep's open issues: LangSmith
+(`lsv2_pt_`/`lsv2_sk_`) and Resend (`re_`) API keys, both entirely missing
+from residoo before this release. Neither vendor publishes an exact-length
+spec for its key format (checked LangSmith's own docs directly, and
+Resend's -- neither states one), so both rules use a generously-bounded
+length rather than a doc-confirmed exact count, stated plainly in
+`src/patterns.js`'s own comments rather than presented as more certain
+than it is. Resend's short, otherwise-generic `re_` prefix was tested
+against realistic `re_`-prefixed code identifiers (`re_try`, `re_send`,
+`re_connect`, `re_validate`...) before being trusted as a DEFAULT
+(non-noisy) rule -- none match, since none have the second underscore-
+delimited high-entropy segment a real key has.
+
+Same corpus-coverage caveat as 0.8.2: no LangSmith- or Resend-family
+plant exists in this corpus yet, so the full reproduce sequence (still
+run, corpus regenerated, same 72/55/44 counts) confirms no regression,
+not a new win: residoo stays 45/45 (100%), 100% precision, none-observed
+egress, byte-identical to 0.8.2 except the version label. Every other
+tool's row reproduced unchanged.
+
 Monitored per scan, spawn to exit, by two dynamic layers: a refuse-and-log proxy trap
 (all proxy env pinned to it) and lsof polling of the scanner's own process tree at
 ~150ms. Cadence honesty: ~150ms is the sleep between poll ticks, and each tick shells

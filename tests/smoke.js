@@ -96,6 +96,20 @@ async function main() {
     matchesOnly("cloudflare_api_token", "cfut_" + "a".repeat(40) + "deadbeef"));
   check("Cloudflare Global API Key (cfk_) matched, only by cloudflare_api_token",
     matchesOnly("cloudflare_api_token", "cfk_" + "a".repeat(40) + "deadbeef"));
+  // LangSmith + Resend: also found missing by cross-checking agentsweep's
+  // open-issue tracker. See src/patterns.js's own comments for the
+  // honesty caveat on exact-length confidence for both.
+  check("LangSmith personal access token (lsv2_pt_) matched, only by langsmith_key",
+    matchesOnly("langsmith_key", "lsv2_pt_" + "a".repeat(32) + "_" + "b".repeat(10)));
+  check("LangSmith service key (lsv2_sk_) matched, only by langsmith_key",
+    matchesOnly("langsmith_key", "lsv2_sk_" + "a".repeat(32) + "_" + "b".repeat(10)));
+  // Split-literal fake, not the vendor's own documented example value
+  // concatenated whole (GitHub's own push protection correctly flags a
+  // contiguous pattern-true string, same reasoning as plantedAwsKey above).
+  check("Resend key matched, only by resend_key",
+    matchesOnly("resend_key", "re_" + "SM0KE" + "TEST" + "_" + "a".repeat(24)));
+  check("re_-prefixed code identifiers are never mistaken for a Resend key",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("re_try_again_later()") || (p.re.lastIndex = 0, p.re.test("function re_send(email) {}"));  }));
 
   // ── sealcrypto: round-trip, wrong passphrase, tamper ──────────────────────
   const { sealFile, unsealFile, sealBuffer, unsealBuffer } = require("../src/sealcrypto");
