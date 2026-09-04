@@ -78,6 +78,17 @@ observed, not just documented. All 8, not just the closest one:
 | trufflehog | 29/45 (64%) | 97% | attempts calls in default mode |
 | detect-secrets | 25/45 (56%) | 2% | attempts calls in default mode |
 
+"none-observed" is a measured result, not a default assumption: every run
+sits under a live proxy trap and process-tree polling, and a deliberate
+canary connection is fired and confirmed caught *before* each real
+benchmark run, specifically so a clean result is falsifiable evidence, not
+silence. The 3 rows with real outbound calls prove the monitor was
+watching them too — kingfisher, trufflehog, and detect-secrets each ship
+an *optional* live-verification feature (checking a found secret against
+the vendor's own API), scored here in their documented offline mode for a
+fair recall comparison, with their default mode's real connection
+attempts reported factually rather than hidden.
+
 GitGuardian's `ggshield` is documented, not scored: it refuses to run
 without a server account, so there's no local result to measure. Published
 while losing rows, then fixed in public against the classes it was losing
