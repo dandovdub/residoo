@@ -242,6 +242,36 @@ async function main() {
   check("Akamai EdgeGrid token matched, only by akamai_edgegrid_token",
     matchesOnly("akamai_edgegrid_token", "akab-" + "a".repeat(20) + "-" + "b".repeat(20)));
 
+  // ── batch 4: Doppler, Postman, Figma, Bitbucket App Password, SonarQube (2026-09-05) ──
+  check("Doppler personal token matched, only by doppler_token",
+    matchesOnly("doppler_token", "dp.pt." + "a".repeat(42)));
+  check("Doppler service account token matched, only by doppler_token",
+    matchesOnly("doppler_token", "dp.sa." + "a".repeat(42)));
+  check("Doppler service token WITH an environment segment matched, only by doppler_token",
+    matchesOnly("doppler_token", "dp.st.prod-env." + "a".repeat(42)));
+  check("Doppler service token WITHOUT an environment segment also matched, only by doppler_token",
+    matchesOnly("doppler_token", "dp.st." + "a".repeat(42)));
+  check("Postman API key matched, only by postman_token",
+    matchesOnly("postman_token", "PMAK-" + "a".repeat(24) + "-" + "b".repeat(34)));
+  check("Figma personal access token (figd_, established form) matched, only by figma_token",
+    matchesOnly("figma_token", "figd_" + "a".repeat(40)));
+  check("Figma personal access token (figp_, newer form) matched, only by figma_token",
+    matchesOnly("figma_token", "figp_" + "a".repeat(50)));
+  check("Bitbucket App Password matched, only by bitbucket_app_password",
+    matchesOnly("bitbucket_app_password", "ATBB" + "a".repeat(32)));
+  check("SonarQube project token (sqp_) matched, only by sonarqube_token",
+    matchesOnly("sonarqube_token", "sqp_" + "a".repeat(40)));
+  check("SonarQube user token (squ_) matched, only by sonarqube_token",
+    matchesOnly("sonarqube_token", "squ_" + "a".repeat(40)));
+  check("SonarSource's own documented example token is on VENDOR_EXAMPLE_VALUES and is a full match of sonarqube_token",
+    (() => {
+      const ex = "sqp_" + "1aa323ae0689cd4a1abd062a2ad0a224ae8a1d13";
+      const rule = PATTERNS.find((p) => p.id === "sonarqube_token");
+      rule.re.lastIndex = 0;
+      const m = rule.re.exec(ex);
+      return m && m[0] === ex;
+    })());
+
   // ── ocr: extractImageBlocks (pure, no process spawn) ───────────────────────
   {
     const { extractImageBlocks } = require("../src/ocr");

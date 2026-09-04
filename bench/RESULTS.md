@@ -1190,6 +1190,61 @@ scan()'s own body at all, provable by `git diff`. Covered instead by
 `tests/smoke.js` (new UserPromptSubmit pure-function and full-CLI-dispatch
 cases) and a new `tests/fuzz.js` property.
 
+## residoo 0.12.0: five more vendors, cleared from the research backlog (added 2026-09-05)
+
+Working through the candidate backlog earlier research passes this session
+flagged but didn't ship yet. Five new rules, each independently verified:
+
+- **Doppler** (`dp.<tag>.`) -- Doppler's own docs
+  (docs.doppler.com/reference/auth-token-formats) state plainly that "each
+  token type uses a distinct prefix to enable identification during secret
+  scanning operations": seven kinds bundled into one rule (personal,
+  service, service account, service account identity, SCIM, audit; service
+  tokens alone carry an optional environment segment).
+- **Postman** (`PMAK-`) -- Postman's own docs don't publish the format;
+  sourced from gitleaks' production-tested rule instead, same tier as
+  azure_ad_client_secret's sourcing.
+- **Figma** (`figd_`/`figp_`) -- same situation, sourced from trufflehog's
+  own shipped detectors, which track two real generations. A third, older
+  bare-UUID form (trufflehog's v1) was declined: keyword-dependent, no
+  standalone prefix, the same reason Bitbucket's Client ID/Secret rules
+  were declined earlier.
+- **Bitbucket App Password** (`ATBB`) -- confirmed via the same Atlassian
+  staff forum reply already used for atlassian_api_token. Distinct from,
+  and not to be confused with, Bitbucket's Client ID/Secret (declined,
+  keyword-dependent with no standalone prefix).
+- **SonarQube/SonarCloud** (`squ_`/`sqp_`/`sqa_`) -- gitleaks' own rule
+  needs "sonar" keyword-proximity because its body class also has to catch
+  a bare unprefixed fallback; only the three confirmed literal prefixes are
+  used here, which need no such context. SonarSource's own documentation
+  export confirms `sqp_` is real and current (a worked example repeated
+  five times across their docs), and that example is now also in
+  VENDOR_EXAMPLE_VALUES.
+
+One implementation mistake caught before shipping: the first draft of the
+Figma regex tried to bundle both prefixes as `fig[dp][a-z]?_`, adding a
+stray optional middle character that would have matched a whole alphabet
+of prefixes nobody uses (`figda_`...`figdz_`, `figpa_`...`figpz_`). Found
+by re-reading the regex against its own intent before running it, not by a
+test catching it after the fact -- fixed to the literal two-prefix
+alternation it should have been from the start.
+
+Also researched and declined, for the record: NuGet's newer ApiKeyV5/CASK
+format (Microsoft's own security-utilities repo doesn't publish the exact
+byte-offset signature anywhere findable after real effort -- source code
+alone wasn't enough to reconstruct it safely) and Segment (its production
+detector needs keyword-proximity with no standalone-safe prefix, the same
+disqualifying shape as Bitbucket Client ID/Secret -- this corrects an
+earlier research pass's imprecise note about a `sgp_`-prefixed Segment
+token, which turned out to be a mix-up with Sourcegraph's already-shipped
+rule, not a real second format).
+
+Pattern count moved 79 to 84. Full benchmark reproduce run: residoo stays
+45/45 (100%), 100% precision, none-observed egress, byte-identical except
+the version label. No corpus plant exists yet for any of these five
+families, so this confirms no regression rather than exercising the new
+coverage directly.
+
 ## Reproduce
 
 ```

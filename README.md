@@ -99,7 +99,7 @@ while losing rows, then fixed in public against the classes it was losing
 
 ## What it does
 
-- Scans your local AI-agent session transcripts for 79 high-confidence
+- Scans your local AI-agent session transcripts for 84 high-confidence
   secret patterns: cloud provider keys, private key blocks, OAuth/API
   tokens, database connection strings, and more. See
   [`src/patterns.js`](src/patterns.js).

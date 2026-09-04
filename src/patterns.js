@@ -539,6 +539,49 @@ const PATTERNS = [
   // same bare/opaque shape already excluded elsewhere in this file.
   { id: "akamai_edgegrid_token", label: "Akamai EdgeGrid token", confidence: "high",
     re: /\bakab-[a-z0-9]{16,32}-[a-z0-9]{6,32}\b/g },
+  // Doppler: seven distinct token kinds, all sharing the same dp.<tag>.
+  // structure. Confirmed via Doppler's own docs
+  // (docs.doppler.com/reference/auth-token-formats), which state plainly
+  // that "each token type uses a distinct prefix to enable identification
+  // during secret scanning operations" -- a format designed to be
+  // regex-detected, not inferred. Service tokens (dp.st.) alone carry an
+  // optional environment segment between the tag and the body; every other
+  // kind goes straight from the tag to the 40-44-char body.
+  { id: "doppler_token", label: "Doppler token", confidence: "high",
+    re: /\bdp\.(?:ct|pt|sa|said|scim|audit)\.[A-Za-z0-9]{40,44}\b|\bdp\.st\.(?:[a-z0-9_-]{2,35}\.)?[A-Za-z0-9]{40,44}\b/g },
+  // Postman API key. Postman's own docs describe how to generate one but
+  // not its literal format; sourced instead from gitleaks' own
+  // production-tested rule (config/gitleaks.toml, id "postman-api-token"),
+  // same tier as azure_ad_client_secret's sourcing earlier in this file.
+  { id: "postman_token", label: "Postman API key", confidence: "high",
+    re: /\bPMAK-[a-f0-9]{24}-[a-f0-9]{34}\b/gi },
+  // Figma personal access token. Figma's own docs don't publish the
+  // format either; sourced from trufflehog's own shipped detectors, which
+  // track two real, distinct generations: figd_ (the long-established
+  // form, trufflehog's v2 detector) and figp_ (a newer form, trufflehog's
+  // v3 detector, no keyword-proximity needed unlike v1's bare UUID shape,
+  // which is NOT included here for the same reason Bitbucket's keyword-
+  // dependent Client ID/Secret rules were declined -- no distinctive
+  // standalone prefix).
+  { id: "figma_token", label: "Figma personal access token", confidence: "high",
+    re: /\bfig[dp]_[A-Za-z0-9_=-]{40,54}\b/g },
+  // Bitbucket App Password (distinct from Bitbucket's Client ID/Secret,
+  // declined elsewhere in this file's history for being keyword-dependent
+  // with no standalone prefix). Confirmed via an Atlassian staff reply on
+  // Atlassian's own community forum naming ATBB as the current App
+  // Password prefix -- the same source already used for atlassian_api_token.
+  { id: "bitbucket_app_password", label: "Bitbucket App Password", confidence: "high",
+    re: /\bATBB[a-zA-Z0-9]{32}\b/g },
+  // SonarQube/SonarCloud token. gitleaks' own rule needs "sonar" keyword
+  // proximity because its body class also has to catch a bare unprefixed
+  // 40-char fallback -- unsafe as a standalone rule, so only the three
+  // confirmed literal prefixes are used here, which need no such context.
+  // squ_/sqp_/sqa_ confirmed real and current via SonarSource's own docs
+  // (docs.sonarsource.com), whose own worked example (sqp_ followed by
+  // 1aa323...8a1d13) is added to VENDOR_EXAMPLE_VALUES in scan.js as a
+  // documented example, not a findable secret.
+  { id: "sonarqube_token", label: "SonarQube/SonarCloud token", confidence: "high",
+    re: /\b(?:squ|sqp|sqa)_[a-z0-9=_-]{40}\b/g },
 ];
 
 /**

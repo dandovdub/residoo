@@ -1093,6 +1093,58 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "Deactivation is immediate; anything still using the old credential starts failing authentication at once.",
   },
+  // docs.doppler.com/reference/auth-token-formats confirms the prefix
+  // table; the tokens page itself is login-walled.
+  doppler_token: {
+    label: "Doppler token",
+    consolePath: "dashboard.doppler.com > the relevant project/workplace > Access > Tokens (or Service Tokens / Service Accounts, matching which prefix leaked)",
+    steps: [
+      "Identify which token kind leaked from its prefix (dp.pt. personal, dp.st. service, dp.sa. service account, dp.scim. SCIM, dp.audit. audit log)",
+      "Revoke it from that kind's own settings page",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "A dp.sa. (Service Account) or dp.st. (Service Token) leak can reach every secret in its assigned project/config -- treat it as broader than a personal token leak.",
+  },
+  postman_token: {
+    label: "Postman API key",
+    consolePath: "Postman > Settings (gear icon) > API keys",
+    steps: [
+      "Open API keys under your account settings",
+      "Delete the leaked key",
+      "Generate a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; anything still using the old key starts failing authentication at once.",
+  },
+  figma_token: {
+    label: "Figma personal access token",
+    consolePath: "Figma > account Settings > Personal access tokens",
+    steps: [
+      "Open Personal access tokens under account Settings",
+      "Revoke the leaked token",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Revocation is immediate; anything still using the old token starts failing authentication at once.",
+  },
+  bitbucket_app_password: {
+    label: "Bitbucket App Password",
+    consolePath: "id.atlassian.com > Security > App passwords",
+    steps: [
+      "Open App passwords under account Security settings",
+      "Delete the leaked app password",
+      "Create a replacement with the narrowest scopes it needs",
+    ],
+    revokeNote: "Atlassian is steering users toward API tokens/Access tokens instead of App Passwords -- consider migrating rather than just replacing like-for-like.",
+  },
+  sonarqube_token: {
+    label: "SonarQube/SonarCloud token",
+    consolePath: "SonarQube/SonarCloud > My Account > Security",
+    steps: [
+      "Open the Security tab under My Account",
+      "Revoke the leaked token",
+      "Generate a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Revocation is immediate; anything still using the old token starts failing authentication at once.",
+  },
 
   // ── NOISY_PATTERNS (only reachable via --include-noisy) ───────────────
   generic_password_assignment: {

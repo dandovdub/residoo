@@ -217,6 +217,11 @@ function zeroEntropyTail(value) {
 const VENDOR_EXAMPLE_VALUES = new Set([
   "AKIAIOSFODNN7EXAMPLE",
   "AKIAI44QH8DHBEXAMPLE",
+  // SonarSource's own worked example, repeated across its docs.sonarsource.com
+  // documentation (an API-key usage snippet, not a "this is our example
+  // secret" callout page, but used identically and repeatedly the same way
+  // AWS's own documented example key is).
+  "sqp_" + "1aa323ae0689cd4a1abd062a2ad0a224ae8a1d13",
   "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "gho_16C7e42F292c6912E7710c838347Ae178B4a",
   "ghr_1B4a2e77838347a7E420ce178F2E7c6912E169246c34E1ccbF66C46812d16D5B1A9Dc86A1498",
