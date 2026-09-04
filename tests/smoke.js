@@ -3193,6 +3193,72 @@ async function main() {
     }
   }
 
+  // ── guard: a PreToolUse hook that blocks obviously-sensitive file reads ────
+  // (src/guard.js). Pure-function decision tests first, then a real spawned
+  // `residoo guard` subprocess fed a real hook payload on stdin, matching
+  // this file's spawn-and-parse-stdout precedent used throughout.
+  {
+    const { evaluateToolInput, matchSensitivePath } = require("../src/guard");
+
+    const blockCases = [
+      ["Bash", { command: "cat .env" }],
+      ["Bash", { command: "cat .env.local" }],
+      ["Bash", { command: "grep -r AWS_SECRET .env" }],
+      ["Bash", { command: "cat ~/.ssh/id_rsa" }],
+      ["Bash", { command: "cat ~/.aws/credentials" }],
+      ["Bash", { command: "cat ~/.npmrc" }],
+      ["Read", { file_path: "/Users/dan/project/.env" }],
+      ["Read", { file_path: "/Users/dan/.ssh/id_ed25519" }],
+      ["Read", { file_path: "/Users/dan/creds/service-account-prod.json" }],
+    ];
+    check("guard: every intended-sensitive Bash/Read case is blocked",
+      blockCases.every(([tool, input]) => evaluateToolInput(tool, input).block === true));
+
+    const allowCases = [
+      ["Bash", { command: "echo hello world" }],
+      ["Bash", { command: "cat package.json" }],
+      ["Bash", { command: "cat .envrc" }], // direnv's own file, distinct from .env
+      ["Bash", { command: "echo my .envfile is safe" }], // word-boundary: not an exact ".env" segment
+      ["Read", { file_path: "/Users/dan/project/README.md" }],
+      ["Write", { file_path: "/Users/dan/.env" }], // not a guarded tool at all
+      ["Bash", null],
+      ["Bash", {}],
+      ["SomeOtherTool", { command: "cat .env" }],
+    ];
+    check("guard: unrelated commands, near-miss filenames, and non-guarded tools are never blocked",
+      allowCases.every(([tool, input]) => evaluateToolInput(tool, input).block === false));
+
+    check("guard: a block decision's reason names what matched, never invents a generic message with no basis",
+      evaluateToolInput("Bash", { command: "cat .env" }).reason.indexOf(".env") !== -1);
+    check("guard: matchSensitivePath returns null for non-string/empty input rather than throwing",
+      matchSensitivePath(null) === null && matchSensitivePath("") === null && matchSensitivePath(42) === null);
+
+    // Real spawned subprocess: a well-formed PreToolUse payload on stdin
+    // produces the documented hookSpecificOutput JSON on stdout; a payload
+    // for an allowed command produces zero stdout bytes (implicit allow);
+    // a malformed payload fails open rather than crashing or hanging.
+    const { spawnSync } = require("child_process");
+    const residooBin = path.join(__dirname, "..", "bin", "residoo.js");
+    const runGuardCli = (input) => spawnSync(process.execPath, [residooBin, "guard"], { input, encoding: "utf-8" });
+
+    const blockRun = runGuardCli(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "cat .env" } }));
+    check("guard CLI: a sensitive Bash command produces a well-formed PreToolUse deny decision on stdout, exit 0",
+      blockRun.status === 0 && (() => {
+        const parsed = JSON.parse(blockRun.stdout.trim());
+        return parsed.hookSpecificOutput && parsed.hookSpecificOutput.hookEventName === "PreToolUse" &&
+          parsed.hookSpecificOutput.permissionDecision === "deny" &&
+          typeof parsed.hookSpecificOutput.permissionDecisionReason === "string";
+      })());
+
+    const allowRun = runGuardCli(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "echo hello" } }));
+    check("guard CLI: an unremarkable command produces zero stdout bytes (implicit allow) and exit 0",
+      allowRun.status === 0 && allowRun.stdout === "");
+
+    const malformedRun = runGuardCli("{ not json");
+    check("guard CLI: a malformed hook payload fails open -- exit 0, zero stdout, never a crash",
+      malformedRun.status === 0 && malformedRun.stdout === "");
+  }
+
   // ── mcp: hand-rolled MCP server over stdio (src/mcp.js + src/mcpTools.js) ───
   // Real spawned subprocess, real HOME-pinned fixture, matching this file's
   // existing spawnSync CLI-testing precedent for the fully scripted flows;
@@ -3377,6 +3443,115 @@ async function main() {
       check("mcp: residoo_check's second call, after a REAL new secret was written, reports exactly one new finding",
         secondPayload.firstCheckThisSession === false && secondPayload.newFindings.length === 1 &&
         secondPayload.newFindings[0].ruleId === "aws_access_key_id");
+    }
+  }
+
+  // ── mcp: residoo_verify_finding -- opt-in gate, one-credential scoping,
+  // never-return-the-raw-value, real local HTTP server standing in for the
+  // vendor. Separate fixture from the block above so this test's assertions
+  // never depend on that block's own counts/state.
+  {
+    const { spawn } = require("child_process");
+    const { fingerprintFinding } = require("../src/rotation");
+    const { redact: redactValue } = require("../src/patterns");
+    const residooBin = path.join(__dirname, "..", "bin", "residoo.js");
+    const http = require("http");
+
+    const vfHome = fs.mkdtempSync(path.join(tmp, "mcp-verify-"));
+    const vfProjDir = path.join(vfHome, ".claude", "projects", "vfproj");
+    fs.mkdirSync(vfProjDir, { recursive: true });
+    const vfSessionFile = path.join(vfProjDir, "session1.jsonl");
+
+    const liveSlack = "xoxb-VFLIVE00-" + "aQ7mK2xR9vL4nP6z";
+    const otherSlack = "xoxb-VFOTHR00-" + "cZ1nM5tS8wK2pJ4x";
+    const vfAwsKey = "AKIA" + "VF0000000TESTKEY";
+    fs.writeFileSync(vfSessionFile, [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "one: " + liveSlack }] } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "two: " + otherSlack }] } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "aws: " + vfAwsKey }] } }),
+      "",
+    ].join("\n"));
+
+    const liveFp = fingerprintFinding({ ruleId: "slack_token", preview: redactValue(liveSlack), relFile: "session1.jsonl" });
+    const otherFp = fingerprintFinding({ ruleId: "slack_token", preview: redactValue(otherSlack), relFile: "session1.jsonl" });
+    const awsFp = fingerprintFinding({ ruleId: "aws_access_key_id", preview: redactValue(vfAwsKey), relFile: "session1.jsonl" });
+    const fakeFp = "rf1-00000000000000000000000000000000";
+
+    const calls = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => { body += c; });
+      req.on("end", () => {
+        const token = (req.headers.authorization || "").replace(/^Bearer /, "");
+        calls.push(token);
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ ok: true, team: "T1", user: "U1" }));
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+
+    // Async spawn, not spawnSync: the local HTTP server above lives in THIS
+    // process, and spawnSync blocks this process's entire event loop until
+    // the child exits -- the child's fetch back to 127.0.0.1 would never be
+    // serviced and would time out. Matches this file's own existing async-
+    // spawn precedent for the one other MCP test that needs the parent
+    // process to stay responsive while a child MCP server runs.
+    async function runVerifyMcp(fingerprint, env) {
+      const seq = [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "0.0.1" } } },
+        { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+        { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "residoo_verify_finding", arguments: { fingerprint } } },
+      ];
+      const child = spawn(process.execPath, [residooBin, "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
+      const outChunks = [];
+      child.stdout.on("data", (d) => outChunks.push(d));
+      for (const msg of seq) child.stdin.write(JSON.stringify(msg) + "\n");
+      child.stdin.end();
+      await new Promise((resolve) => child.on("exit", resolve));
+      const raw = Buffer.concat(outChunks).toString("utf-8");
+      const lines = raw.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return { __unparseable: l }; } });
+      return { raw, list: lines.find((m) => m.id === 2), call: lines.find((m) => m.id === 3) };
+    }
+
+    const baseEnv = { ...process.env, HOME: vfHome, RESIDOO_TEST_SLACK_API_URL: `http://127.0.0.1:${port}/api/auth.test` };
+    try {
+      const without = await runVerifyMcp(liveFp, baseEnv);
+      check("mcp: residoo_verify_finding is absent from tools/list when RESIDOO_MCP_ALLOW_VERIFY is unset",
+        !without.list.result.tools.some((t) => t.name === "residoo_verify_finding"));
+      check("mcp: calling it anyway while unconfigured 404s via the standard -32602 Unknown tool path",
+        !without.call.result && without.call.error && without.call.error.code === -32602);
+      check("mcp: with the tool unconfigured, no network call was made at all",
+        calls.length === 0);
+
+      const withEnv = { ...baseEnv, RESIDOO_MCP_ALLOW_VERIFY: "1" };
+      const activeRun = await runVerifyMcp(liveFp, withEnv);
+      check("mcp: residoo_verify_finding is present in tools/list once RESIDOO_MCP_ALLOW_VERIFY is set",
+        activeRun.list.result.tools.some((t) => t.name === "residoo_verify_finding"));
+      const activePayload = activeRun.call.result && !activeRun.call.result.isError ? JSON.parse(activeRun.call.result.content[0].text) : null;
+      check("mcp: verifying a real live-mocked Slack token reports verified:\"active\"",
+        !!activePayload && activePayload.found === true && activePayload.verifiable === true && activePayload.verified === "active");
+      check("mcp: verifying one fingerprint makes EXACTLY ONE network call, for that credential's value only (one-credential-per-call scoping)",
+        calls.length === 1 && calls[0] === liveSlack);
+      check("mcp: the other, unrequested Slack token was never sent to the vendor",
+        !calls.includes(otherSlack));
+      check("mcp: the raw Slack token value never appears anywhere in stdout",
+        !activeRun.raw.includes(liveSlack) && !activeRun.raw.includes(otherSlack));
+
+      const notFoundRun = await runVerifyMcp(fakeFp, withEnv);
+      const notFoundPayload = notFoundRun.call.result && !notFoundRun.call.result.isError ? JSON.parse(notFoundRun.call.result.content[0].text) : null;
+      check("mcp: a well-formed but unknown fingerprint reports found:false rather than erroring",
+        !!notFoundPayload && notFoundPayload.found === false && notFoundPayload.verified === null);
+
+      const pairedRun = await runVerifyMcp(awsFp, withEnv);
+      const pairedPayload = pairedRun.call.result && !pairedRun.call.result.isError ? JSON.parse(pairedRun.call.result.content[0].text) : null;
+      check("mcp: a paired-credential type (aws_access_key_id) reports found:true, verifiable:false, and makes no network call",
+        !!pairedPayload && pairedPayload.found === true && pairedPayload.verifiable === false && pairedPayload.verified === null);
+      check("mcp: the AWS key's raw value never appears anywhere in stdout across any of these runs",
+        !without.raw.includes(vfAwsKey) && !activeRun.raw.includes(vfAwsKey) &&
+        !notFoundRun.raw.includes(vfAwsKey) && !pairedRun.raw.includes(vfAwsKey));
+    } finally {
+      server.close();
     }
   }
 

@@ -523,6 +523,35 @@ Nothing in this fix trades recall for precision; it closes a fabrication
 path the benchmark's own methodology exists to catch, the same way the
 0.3.1 guard it extends was found the same way.
 
+## residoo 0.8.0: two new capabilities, zero scan-path behavior change by construction (added 2026-09-04)
+
+This release adds `residoo_verify_finding` (a narrowly-scoped MCP tool that
+asks a credential's own vendor, live, whether it is still active, one
+credential per call) and `residoo guard` (a Claude Code `PreToolUse` hook
+that blocks an obviously-sensitive file read before it happens). Included
+here only because the first of those two required a small change to
+`src/scan.js` itself: a new optional `verifyOnlyFingerprint` parameter that
+scopes an existing `verify: true` pass to one specific finding instead of
+every eligible credential on the machine, so an MCP tool call asking about
+one fingerprint can never trigger a live network check against unrelated
+credentials it was never asked about.
+
+This parameter defaults to `null`, and every one of the four places
+`scan.js` decides whether to queue a credential for a real verification
+call was changed from `if (verify && ...)` to `if (verify && matchesTarget
+&& ...)`, where `matchesTarget` is `!verifyOnlyFingerprint || ...` --
+unconditionally `true` whenever the parameter is absent. Neither the CLI
+nor the benchmark harness ever passes it, so the scan path this benchmark
+measures is unreachable by this change: not "believed unaffected," but
+structurally incapable of taking a different branch. The full 12-invocation
+reproduce sequence was still run rather than trusting that reasoning alone,
+on a freshly regenerated corpus (same 72 files, 55 plants, 44 chaff as
+every prior run): residoo's own table is byte-identical to 0.7.2's, still
+45/45 (100%) distinct credentials, 100% precision, none-observed egress.
+Every other tool's row reproduced unchanged. `residoo guard` touches no
+file this benchmark scores at all -- it is a separate hook binary path,
+not part of `scan()`.
+
 Monitored per scan, spawn to exit, by two dynamic layers: a refuse-and-log proxy trap
 (all proxy env pinned to it) and lsof polling of the scanner's own process tree at
 ~150ms. Cadence honesty: ~150ms is the sleep between poll ticks, and each tick shells

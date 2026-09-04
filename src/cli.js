@@ -13,6 +13,7 @@ const {
 const { startWatch, isTailable } = require("./watch");
 const { startMcpServer } = require("./mcp");
 const { buildTools } = require("./mcpTools");
+const { runGuard: runGuardEngine } = require("./guard");
 
 /**
  * A source is unavailable for the ordinary reason (not installed — nothing
@@ -162,6 +163,10 @@ MCP:
                           with "claude mcp add residoo -- residoo mcp".
                           Zero runtime dependencies: the protocol is hand-
                           rolled, not the official SDK.
+  A 7th tool, residoo_verify_finding, asks a credential's own vendor, live,
+  whether it's still active -- the one MCP tool that makes a real network
+  call, so it does not exist unless RESIDOO_MCP_ALLOW_VERIFY=1 is set in the
+  server's own environment. See the README for the full scope and limits.
 
 Cred:
   residoo cred set <name> --env <ENV_VAR_NAME> [--env <ENV_VAR_NAME_2> ...]
@@ -190,6 +195,26 @@ Cred:
                           residual risk.
   residoo mcp exposes the same operation as the residoo_run_with_cred
   tool, present only when RESIDOO_CRED_ALLOWED_COMMANDS is configured.
+
+Guard:
+  residoo guard             a Claude Code PreToolUse hook that blocks an
+                          obviously-sensitive file read (.env, id_rsa,
+                          .aws/credentials, and similar) before it can be
+                          written to the session transcript at all --
+                          prevention, not just detection. Reads one hook
+                          payload from stdin, writes a deny decision to
+                          stdout only when it matches; never blocks on
+                          anything it doesn't recognize. This is narrower
+                          than it sounds: Claude Code's hooks API can see a
+                          proposed Bash command or Read path before it
+                          runs, but never the command's OUTPUT, so this
+                          cannot catch a secret typed into a prompt or one
+                          arriving through an unrelated command's output --
+                          scan/watch/mcp remain the real safety net. Add to
+                          .claude/settings.json:
+                            {"hooks":{"PreToolUse":[{"matcher":"Bash|Read",
+                            "hooks":[{"type":"command",
+                            "command":"residoo guard"}]}]}}
 
 Rotation:
   residoo explain <rule-id>     full rotation runbook for one detection rule
@@ -806,6 +831,7 @@ async function main(argv) {
   if (cmd === "watch") return runWatch(args);
   if (cmd === "mcp") return runMcp(args);
   if (cmd === "cred") return runCred(args);
+  if (cmd === "guard") return runGuardEngine();
   if (cmd !== "scan") {
     process.stderr.write(`Unknown command "${cmd}". Try "residoo --help".\n`);
     return 2;

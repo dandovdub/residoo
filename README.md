@@ -87,7 +87,7 @@ A reproducible benchmark against 8 real competing tools, on a synthetic-but-
 pattern-true corpus (72 Claude Code sessions, 45 planted credentials, zero
 real secrets), with live egress monitoring so "no network calls" is
 observed, not just documented. Re-run against every meaningful release,
-most recently v0.7.2:
+most recently v0.8.0:
 
 | | residoo | best of the rest |
 |---|---|---|
@@ -331,7 +331,7 @@ As a GitHub Action (this repo doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.7.2
+  - uses: dandovdub/residoo@v0.8.0
 ```
 
 As a pre-commit hook:
@@ -339,7 +339,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.7.2
+    rev: v0.8.0
     hooks:
       - id: residoo
 ```
@@ -498,6 +498,18 @@ directly, not built on `@modelcontextprotocol/sdk`: zero runtime
 dependencies stays true here too. A sixth, opt-in tool exists for
 injected-credential execution, covered below.
 
+A seventh tool, `residoo_verify_finding`, is genuinely different from the
+other six: it asks a credential's own vendor, live, whether it's still
+active (the same mechanism as `scan --verify`, scoped to exactly one
+credential per call). This is the one MCP tool that makes a real network
+call, so it does not exist at all unless you set
+`RESIDOO_MCP_ALLOW_VERIFY=1` in the environment `residoo mcp` runs in — a
+default install stays true to "zero network calls" without a caveat.
+Once enabled, pass a `fingerprint` from a prior `residoo_scan`; you get
+back `active`, `invalid`, or `unknown`, never the raw value. Paired
+credentials (AWS access key + secret, PlanetScale, MongoDB Atlas) aren't
+supported yet — use `residoo scan --verify` from a terminal for those.
+
 ## Cred: run commands with injected credentials
 
 The usual way an AI coding agent ends up able to use a real credential is
@@ -568,6 +580,41 @@ Storage is macOS (`security`) or Linux (`secret-tool`) only, matching
 `--seal --keychain`'s own existing platform support; Windows is refused
 with a clear message rather than half-built. There is no `residoo cred
 list` in v1: you need to already know the name you set.
+
+## Guard: block a sensitive read before it happens
+
+Everything above finds a leak after it's already written to disk. `residoo
+guard` is the one piece of residoo that tries to stop one from happening in
+the first place — a Claude Code `PreToolUse` hook that blocks an obviously-
+sensitive file read (`.env`, `id_rsa`, `.aws/credentials`, and similar)
+before the command runs at all.
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash|Read", "hooks": [{ "type": "command", "command": "residoo guard" }] }
+    ]
+  }
+}
+```
+in `.claude/settings.json`. It reads one hook payload from stdin and writes
+a deny decision to stdout only when the proposed command or file path
+matches; anything it doesn't recognize falls through untouched, with zero
+output, exit 0.
+
+This is narrower than it might sound, and the gap is worth stating
+plainly rather than implying more than it does: Claude Code's hooks API
+lets a `PreToolUse` hook see the proposed tool INPUT (a Bash command
+string, a Read file path) before it runs, but there is no documented
+mechanism for a hook to see or redact a tool's OUTPUT — by the time a
+`PostToolUse` hook fires, that output is already committed to the
+transcript. So this can only block on the shape of the request, never
+clean up what a command already printed. It will not catch a secret typed
+directly into a prompt, or one arriving in the output of an otherwise
+unremarkable command (`curl`, a build log). `residoo scan` / `watch` /
+`mcp` remain the actual safety net; this is a best-effort tripwire on top
+of them, not a replacement.
 
 ## Sources supported today
 

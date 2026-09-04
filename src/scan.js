@@ -18,6 +18,7 @@ const {
   verifyFlyioBearerToken, verifyMongoDbAtlasCredential, verifyNeonKey, verifyPostHogKey,
 } = require("./verify");
 const { c, makePaint } = require("./color");
+const { fingerprintFinding } = require("./rotation");
 
 // PlanetScale's id half: 12 lowercase alphanumeric characters, no prefix —
 // confirmed via planetscale.com/docs/api/reference/service-tokens. Searched
@@ -265,7 +266,7 @@ function localTimestamp(d) {
  * absolute path can itself carry a username or a project name the rest of
  * this report is careful never to print.
  */
-async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, onBeforeVerify = null, noColor = false } = {}) {
+async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, verifyOnlyFingerprint = null, onBeforeVerify = null, noColor = false } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
   // The decode pass (see decode.js) only applies high-confidence, vendor-
   // prefixed rules to decoded bytes: random binary that decodes to printable
@@ -481,7 +482,18 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           // re-echoed across several lines gets several finding objects, and
           // the eventual result is applied to every one of them, not only
           // the first.
-          if (verify && secretFinding && rawPairedSecret) {
+          //
+          // verifyOnlyFingerprint (residoo_verify_finding, src/mcpTools.js):
+          // when set, this scan still WALKS every file as normal, but only
+          // the one finding whose fingerprint matches is ever queued for a
+          // real network call -- every other eligible credential on the
+          // machine is silently skipped, matching that MCP tool's own
+          // documented "one credential per call" promise exactly. Computed
+          // from primaryFinding, not secretFinding/idFinding, because the
+          // fingerprint a caller holds always names the record they saw in
+          // a prior scan/check result, which is always the primary one.
+          const matchesTarget = !verifyOnlyFingerprint || fingerprintFinding(primaryFinding) === verifyOnlyFingerprint;
+          if (verify && matchesTarget && secretFinding && rawPairedSecret) {
             if (!pendingAwsVerifications.has(m[0]) && pendingAwsVerifications.size < MAX_VERIFICATIONS_PER_VENDOR) {
               pendingAwsVerifications.set(m[0], { secretValue: rawPairedSecret, refs: [] });
             }
@@ -490,7 +502,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           }
           // --verify, PlanetScale: same dedup-by-anchor-value shape as AWS
           // above, keyed by the secret (the confirmed anchor) this time.
-          if (verify && planetScaleIdFinding && rawPlanetScaleId) {
+          if (verify && matchesTarget && planetScaleIdFinding && rawPlanetScaleId) {
             if (!pendingPlanetScaleVerifications.has(m[0]) && pendingPlanetScaleVerifications.size < MAX_VERIFICATIONS_PER_VENDOR) {
               pendingPlanetScaleVerifications.set(m[0], { idValue: rawPlanetScaleId, refs: [] });
             }
@@ -499,7 +511,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           }
           // --verify, MongoDB Atlas: same dedup-by-anchor-value shape as
           // AWS/PlanetScale above, keyed by the secret this time.
-          if (verify && mongoDbIdFinding && rawMongoDbId) {
+          if (verify && matchesTarget && mongoDbIdFinding && rawMongoDbId) {
             if (!pendingMongoDbAtlasVerifications.has(m[0]) && pendingMongoDbAtlasVerifications.size < MAX_VERIFICATIONS_PER_VENDOR) {
               pendingMongoDbAtlasVerifications.set(m[0], { idValue: rawMongoDbId, refs: [] });
             }
@@ -512,7 +524,7 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           // dedup-by-value / accumulate-all-refs shape as the AWS map above,
           // just one level deeper (keyed by rule id too, since several
           // vendors share this path).
-          if (verify && !suppressedReason && SIMPLE_VERIFY_FNS[rule.id]) {
+          if (verify && matchesTarget && !suppressedReason && SIMPLE_VERIFY_FNS[rule.id]) {
             let byValue = pendingSimpleVerifications.get(rule.id);
             if (!byValue) {
               byValue = new Map();
@@ -879,4 +891,13 @@ function emptyResult() {
 // VENDOR_EXAMPLE_VALUES is exported for the smoke tests, which assert every
 // literal in it is still matched IN FULL by some detection rule — a literal
 // no rule can produce as a whole match is dead weight that suppresses nothing.
-module.exports = { scan, emptyResult, VENDOR_EXAMPLE_VALUES };
+// Rule ids `scan({verify: true})` knows how to check live, for callers (the
+// residoo_verify_finding MCP tool) that need to tell a caller upfront
+// whether a given finding's ruleId is even eligible, without attempting a
+// scan first. AWS/PlanetScale/MongoDB Atlas pairs are deliberately excluded
+// here even though `scan()` itself does verify them: each needs BOTH halves
+// of a pair in hand at once, which a single fingerprint alone can't express,
+// so residoo_verify_finding's v1 only supports the single-token vendors below.
+const VERIFIABLE_RULE_IDS = new Set(Object.keys(SIMPLE_VERIFY_FNS));
+
+module.exports = { scan, emptyResult, VENDOR_EXAMPLE_VALUES, VERIFIABLE_RULE_IDS };

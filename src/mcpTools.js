@@ -1,7 +1,7 @@
 "use strict";
 
 const path = require("path");
-const { scan } = require("./scan");
+const { scan, VERIFIABLE_RULE_IDS } = require("./scan");
 const {
   ROTATION_GUIDANCE, guidanceFor, loadAcks, loadDismissed,
   ackFinding, dismissFinding, renderRotation,
@@ -20,13 +20,17 @@ const keychain = require("./keychain");
  * human-facing presenters), and this file's whole job is to never let a
  * byte reach stdout except through mcp.js's own `send()`.
  *
- * `verify` is not exposed as a parameter on ANY tool here, on purpose: a
- * human typing `--verify` at a terminal is a deliberate, legible act; an
- * autonomous model choosing a network-triggering parameter mid-
- * conversation is a different trust boundary, and a generic tool-approval
- * prompt may not surface that a given call also makes a live vendor API
- * request with a real secret. Every `scan()`/`sweepOnce()` call below
- * hardcodes `verify: false`.
+ * `verify` is not exposed as a parameter on residoo_scan/residoo_check, on
+ * purpose: a human typing `--verify` at a terminal is a deliberate, legible
+ * act; an autonomous model choosing a network-triggering parameter
+ * mid-conversation is a different trust boundary, and a generic
+ * tool-approval prompt may not surface that a given call also makes a live
+ * vendor API request with a real secret. Both hardcode `verify: false`. Live
+ * verification instead gets its own narrowly-scoped tool, residoo_verify_finding
+ * (one credential per call, gated behind RESIDOO_MCP_ALLOW_VERIFY so it does
+ * not exist at all unless an operator deliberately opts in) -- see its own
+ * comment below for why that is a materially different, honestly-labeled
+ * trust boundary rather than the same one wearing a different name.
  */
 
 const FINGERPRINT_PATTERN = /^rf1-[0-9a-f]{32}$/;
@@ -283,6 +287,62 @@ function buildTools({ sources }) {
     });
   }
 
+  async function handleVerifyFinding(args) {
+    const errs = rejectUnknownKeys(args, new Set(["fingerprint"]));
+    if (typeof args.fingerprint !== "string") {
+      errs.push("fingerprint is required and must be a string");
+    } else if (!FINGERPRINT_PATTERN.test(args.fingerprint)) {
+      errs.push("fingerprint must match ^rf1-[0-9a-f]{32}$ -- copy it verbatim from a prior residoo_scan/residoo_check result, never construct or guess one");
+    }
+    if (errs.length) return errorResult(`Invalid arguments: ${errs.join("; ")}`);
+
+    const findEntry = async () => {
+      const result = await scan({ sources, includeNoisy: true, includeSuppressed: true, verify: false, noColor: true });
+      const rotation = renderRotation(result.findings, loadAcks(), loadDismissed());
+      return rotation.entries.find((e) => e.fingerprint === args.fingerprint) || null;
+    };
+
+    const before = await findEntry();
+    if (!before) {
+      return textResult({
+        fingerprint: args.fingerprint, found: false, verifiable: null, verified: null,
+        summary: "No finding with this fingerprint is currently on disk. It may have been resolved, the source file may have changed since it was last seen, or you may need to call residoo_scan first to see current fingerprints.",
+      });
+    }
+    if (!VERIFIABLE_RULE_IDS.has(before.ruleId)) {
+      return textResult({
+        fingerprint: args.fingerprint, found: true, ruleId: before.ruleId, verifiable: false, verified: null,
+        summary: `residoo cannot live-verify a ${before.ruleId} credential yet. Paired credentials (AWS, PlanetScale, MongoDB Atlas) and credential types with no vendor whoami-style endpoint (JWTs, private keys, bearer tokens of unknown origin, connection strings) are not supported by this tool. Run "residoo scan --project <dir> --verify" from a terminal for AWS/PlanetScale/MongoDB Atlas pairs.`,
+      });
+    }
+
+    // The actual network call: scoped so ONLY this one fingerprint's
+    // credential is ever queued for verification inside scan() (see
+    // verifyOnlyFingerprint in src/scan.js), regardless of how many other
+    // verifiable credentials exist on this machine. This is the whole reason
+    // this tool takes one fingerprint and not a list.
+    const result = await scan({ sources, includeNoisy: true, includeSuppressed: true, verify: true, verifyOnlyFingerprint: args.fingerprint, noColor: true });
+    const rotation = renderRotation(result.findings, loadAcks(), loadDismissed());
+    const after = rotation.entries.find((e) => e.fingerprint === args.fingerprint);
+    const checkedAt = new Date().toISOString();
+    if (!after || after.verified == null) {
+      return textResult({
+        fingerprint: args.fingerprint, found: true, ruleId: before.ruleId, verifiable: true, verified: "unknown",
+        checkedAt, summary: "The vendor check could not be completed (network error, timeout, or unexpected response). This does not mean the credential is inactive -- treat it as unverified, not as safe.",
+      });
+    }
+    const verified = after.verified === "active" ? "active" : after.verified === "invalid" ? "invalid" : "unknown";
+    const summary = verified === "active"
+      ? `ACTIVE: this is a real, working credential. Rotate it. Checked ${checkedAt}.`
+      : verified === "invalid"
+        ? `Inactive: the vendor rejected it. Checked ${checkedAt}.`
+        : `Could not verify${after.verifiedDetail ? `: ${after.verifiedDetail}` : ""}. Treat as unverified, not as safe. Checked ${checkedAt}.`;
+    return textResult({
+      fingerprint: args.fingerprint, found: true, ruleId: before.ruleId, verifiable: true, verified,
+      verifiedDetail: after.verifiedDetail || null, checkedAt, summary,
+    });
+  }
+
   const tools = new Map();
   tools.set("residoo_scan", {
     name: "residoo_scan",
@@ -388,6 +448,39 @@ function buildTools({ sources }) {
         additionalProperties: false,
       },
       handler: handleRunWithCred,
+    });
+  }
+
+  // Genuinely different from residoo_scan/residoo_check even though it also
+  // only reads local disk first: its SECOND step makes a real outbound
+  // network request to the credential's own vendor, using the actual secret
+  // value, to ask whether it still works. Nothing else in this file ever
+  // leaves the machine. Dynamically OMITTED from this Map (same pattern as
+  // residoo_run_with_cred above) unless RESIDOO_MCP_ALLOW_VERIFY is set to
+  // "1" or "true" -- an operator must deliberately opt in, outside the
+  // conversation, before this tool exists at all, so a default `residoo mcp`
+  // install stays true to "zero network calls" without qualification. This
+  // is a STRICTER gate than residoo_scan/residoo_check need, because giving
+  // this its own clearly-named, clearly-described tool (rather than a
+  // boolean flag buried on residoo_scan) only solves the discovery/approval-
+  // prompt-legibility problem the original MCP design flagged -- it does not
+  // by itself decide whether an autonomous model should ever be allowed to
+  // trigger a real vendor API call with a real secret. That is the
+  // operator's call, made once, outside any conversation.
+  const mcpAllowVerify = process.env.RESIDOO_MCP_ALLOW_VERIFY === "1" || process.env.RESIDOO_MCP_ALLOW_VERIFY === "true";
+  if (mcpAllowVerify) {
+    tools.set("residoo_verify_finding", {
+      name: "residoo_verify_finding",
+      description: "Ask ONE credential's own vendor, live, whether it is still active -- unlike every other residoo tool, this makes a real outbound network request (e.g. to Slack's auth.test, GitHub's user endpoint) using the actual secret value found on disk. The raw value itself is still never returned to you, only the vendor's answer: active (a real, working credential -- rotate it), invalid (the vendor already rejected it), or unknown (the check failed or timed out -- treat this the same as active, not as reassurance). fingerprint MUST be copied verbatim from a fingerprint field returned by a prior residoo_scan or residoo_check call in this conversation -- never construct or guess one. Only single-token credential types are supported (Slack, GitHub, OpenAI, Anthropic, Stripe, and similar) -- paired credentials (AWS access key + secret, PlanetScale, MongoDB Atlas) return verifiable:false; use `residoo scan --verify` from a terminal for those. This tool only exists because an operator deliberately enabled it outside this conversation (RESIDOO_MCP_ALLOW_VERIFY) -- never ask a human to paste a raw credential value to use it; it already reads the value residoo found on disk.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fingerprint: { type: "string", pattern: "^rf1-[0-9a-f]{32}$", description: "Exact fingerprint string from a prior scan/check finding. Never invent one." },
+        },
+        required: ["fingerprint"],
+        additionalProperties: false,
+      },
+      handler: handleVerifyFinding,
     });
   }
 
