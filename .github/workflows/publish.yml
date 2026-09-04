@@ -97,13 +97,23 @@ jobs:
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
           tag="${GITHUB_REF_NAME}"
-          # Small retry: the attestation can take a few seconds to be
-          # indexed on the registry right after publish completes.
-          for i in 1 2 3 4 5; do
-            curl -sf "https://registry.npmjs.org/-/npm/v1/attestations/residoo@${version}" -o /tmp/attestations.json && break
-            echo "attestation not indexed yet, retrying in 10s ($i/5)..."
-            sleep 10
+          # Retry budget found too short by a real failure (v0.8.3): 5x10s
+          # wasn't enough, indexing took longer than 50s that run. 15x15s
+          # (3.75min) is a generous margin over that one observed data
+          # point, not a guess. Prints the HTTP status on each miss (curl
+          # -f alone swallows it) so a future failure is diagnosable from
+          # the log instead of a bare "file not found" from the next step.
+          ok=""
+          for i in $(seq 1 15); do
+            status="$(curl -s -o /tmp/attestations.json -w '%{http_code}' "https://registry.npmjs.org/-/npm/v1/attestations/residoo@${version}")"
+            if [ "$status" = "200" ]; then ok=1; break; fi
+            echo "attestation not indexed yet (HTTP $status), retrying in 15s ($i/15)..."
+            sleep 15
           done
+          if [ -z "$ok" ]; then
+            echo "::warning::npm attestation never became available for residoo@${version} after 15 retries; skipping the GitHub Release provenance attachment for this run. npm's own publish already succeeded and is unaffected -- backfill manually later with: curl -s https://registry.npmjs.org/-/npm/v1/attestations/residoo@${version}"
+            exit 0
+          fi
           node -e "
             const fs = require('fs');
             const d = JSON.parse(fs.readFileSync('/tmp/attestations.json', 'utf-8'));
