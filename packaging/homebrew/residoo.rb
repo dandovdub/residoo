@@ -8,7 +8,7 @@ class Residoo < Formula
   homepage "https://github.com/dandovdub/residoo"
   url "https://registry.npmjs.org/residoo/-/residoo-0.8.2.tgz"
   # sha256 of the real published tarball: curl -sL <url> | shasum -a 256
-  sha256 "27ccc76cc6fcc98c949bd72d6ed72502c8684dbfba648d4a66c17f2bc2330699"
+  sha256 "b456ecd35fec8801f801f7bfccb1272afeb5eec00f1f133df4d04a87f359d8f4"
   license "MIT"
 
   depends_on "node"
