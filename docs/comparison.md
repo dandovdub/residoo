@@ -16,11 +16,23 @@ for anyone deciding between residoo and an adjacent tool.
 | Continuous mode | `residoo watch` | none | none | none |
 
 The rows above (rule counts, deps, sources) are documented facts, not
-measured ones. For actual detection quality, precision, and egress,
-measured head to head against 8 real tools including gitleaks, trufflehog,
-and agentsweep on a synthetic-but-pattern-true corpus: see
-[`bench/`](../bench/) and [`bench/RESULTS.md`](../bench/RESULTS.md). That
-benchmark, not this table, is the answer to "does it actually work better."
+measured ones, and "Detection rules" specifically is the one most likely
+to mislead if read alone: more rules is not the same claim as finding
+more credentials, and the benchmark shows the two diverging for every
+tool in this row. gitleaks' broad, generic rule set is tuned for git
+commits, not the transcript-specific disguises (JSON-nested, base64,
+split-across-lines) this corpus plants — it found 71% of distinct
+credentials. TruffleHog's 800+ detectors span every domain it scans
+(cloud infra, git, chats, more), not this one specifically — it found
+64%. agentsweep is the most directly comparable, since it targets this
+exact niche: 209 rules to residoo's 50, and it still found fewer
+credentials, 79% to residoo's 100%. residoo's 50 are "high-confidence
+only" by deliberate design (see [`src/patterns.js`](../src/patterns.js)'s
+own header), trading rule-count breadth for a lower false-positive rate;
+the benchmark, not the row above, is the actual answer to "does more
+rules mean it works better." Full methodology, per-class breakdown, and
+how to reproduce it: [`bench/`](../bench/) and
+[`bench/RESULTS.md`](../bench/RESULTS.md).
 
 ## Why not just use a git scanner
 
