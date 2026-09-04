@@ -306,6 +306,25 @@ function findDecodedMatches(line, rules) {
 const BOUNDARY_WINDOW = 300;   // chars taken from each side of the seam
 const BOUNDARY_MIN_CONTENT = 24; // shorter "longest string" is treated as non-content
 
+// Minimum characters EACH side of the seam must contribute to a straddling
+// match for it to be trusted as a genuine split, not coincidence. Found via
+// this project's own benchmark stress-testing (2026-09-03), not hypothetical:
+// a variable-length rule (bearer_header, {16,1000}) can sit ONE character
+// short of its own minimum at the end of a line (a near-miss, not a complete
+// match — the existing greedy-extension guard above only recognizes COMPLETE
+// tail-alone matches, so it never sees this case), and if the very next
+// line's content happens to start with even one or two more characters the
+// pattern's class allows, the straddle pass stitches two entirely unrelated,
+// benign lines into a fabricated value that exists in neither. Existing
+// legitimate-split tests (tests/smoke.js) cut real secrets 9-11 characters
+// from each end, comfortably clear of this floor; a genuine chunked-
+// streaming boundary landing with less than this on one side, while
+// possible, is far rarer than the coincidental-concatenation failure mode
+// this exists to close, and the fragment still gets caught by the raw,
+// single-line pass once enough of it lands on either side to satisfy the
+// rule outright.
+const BOUNDARY_MIN_CONTRIBUTION = 4;
+
 /**
  * Escape-aware list of JSON string-literal CONTENTS on a line. Field names
  * are included (this walker does not distinguish keys from values); the
@@ -395,8 +414,15 @@ function findBoundaryMatches(contentA, contentB, rules) {
       const start = m.index;
       const end = m.index + m[0].length;
       // Straddle-only: the match must cross the seam, else it lay wholly in
-      // one line and the single-line pass already reported it.
-      if (start < seam && end > seam) straddles.push({ start, end, value: m[0] });
+      // one line and the single-line pass already reported it. Each side
+      // must also contribute a real fragment (BOUNDARY_MIN_CONTRIBUTION,
+      // see its own doc comment) -- otherwise this is a near-miss single-
+      // line match that unrelated adjacent content happened to push over a
+      // length-quantifier's minimum, not a genuine split.
+      if (start < seam && end > seam &&
+          (seam - start) >= BOUNDARY_MIN_CONTRIBUTION && (end - seam) >= BOUNDARY_MIN_CONTRIBUTION) {
+        straddles.push({ start, end, value: m[0] });
+      }
       if (m.index === rule.re.lastIndex) rule.re.lastIndex++;
     }
     let flush = null;

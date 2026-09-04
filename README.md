@@ -87,7 +87,7 @@ A reproducible benchmark against 8 real competing tools, on a synthetic-but-
 pattern-true corpus (72 Claude Code sessions, 45 planted credentials, zero
 real secrets), with live egress monitoring so "no network calls" is
 observed, not just documented. Re-run against every meaningful release,
-most recently v0.4.14:
+most recently v0.7.2:
 
 | | residoo | best of the rest |
 |---|---|---|
@@ -331,7 +331,7 @@ As a GitHub Action (this repo doubles as a composite action):
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: dandovdub/residoo@v0.7.1
+  - uses: dandovdub/residoo@v0.7.2
 ```
 
 As a pre-commit hook:
@@ -339,7 +339,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.7.1
+    rev: v0.7.2
     hooks:
       - id: residoo
 ```

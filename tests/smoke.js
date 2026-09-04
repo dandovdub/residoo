@@ -1225,6 +1225,46 @@ async function main() {
       JSON.stringify({ message: { content: "some reauthorization: Bearer aB3xY9qZ1mN4pQ7rS2tU5vW8zzzz" } }) + "\n");
     check("bearer_header: does NOT fire on 'reauthorization:' (word-glued, not \\n-glued) -- the fix is scoped, not a dropped boundary",
       !noFalseMatchRes.findings.some((f) => f.ruleId === "bearer_header"));
+
+    // A real false positive found via this project's own adversarial
+    // benchmark stress-test (2026-09-03), not hypothetical: "YOUR_TOKEN_HERE"
+    // is 15 characters, one short of bearer_header's own {16,1000} minimum --
+    // a near-miss, not a complete single-line match, so the EXISTING greedy-
+    // extension guard (which only recognizes COMPLETE tail-alone matches)
+    // never saw it. The very next JSONL record's content happened to start
+    // with "an" (from an entirely unrelated sentence), and those two
+    // characters alone were enough to push the near-miss over the length
+    // threshold, fabricating a value ("YOUR_TOKEN_HEREan") that exists in
+    // neither line. Two completely unrelated, benign lines must not combine
+    // into a finding.
+    const nearMissA = JSON.stringify({ type: "assistant", message: { content: [{ type: "text",
+      text: "a bearer-shaped but clearly-fake placeholder: Authorization: Bearer YOUR_TOKEN_HERE" }] } });
+    const nearMissB = JSON.stringify({ type: "assistant", message: { content: [{ type: "text",
+      text: "an env var NAME containing KEY but a non-secret value: STRIPE_API_KEY_DOCS_URL=https://stripe.com/docs/keys" }] } });
+    const nearMissRes = await scanOneFile("bearer-nearmiss-boundary.jsonl", nearMissA + "\n" + nearMissB + "\n");
+    check("bearer_header: a sub-minimum-length near-miss at a line's end is NOT fabricated into a finding by unrelated content starting the next line",
+      !nearMissRes.findings.some((f) => f.ruleId === "bearer_header"));
+
+    // The fix (BOUNDARY_MIN_CONTRIBUTION in decode.js) must not break a
+    // GENUINE split with a substantial contribution on each side -- confirms
+    // the general boundary-joining mechanism still works for bearer_header
+    // specifically, not just for aws_access_key_id (Feature 2a above).
+    const realToken = "aB3xY9qZ1mN4pQ7rS2tU5vW8zzzz1234567890AB";
+    // Must land BELOW bearer_header's own {16,1000} minimum on the tail
+    // side, or the tail fragment is already a complete match by itself and
+    // the existing greedy-extension guard correctly reports it as that
+    // fragment rather than a reconstruction (see decode.js's own "LIMITS"
+    // comment) -- a real split, not the near-miss case above.
+    const bCut = 10;
+    const bRecA = JSON.stringify({ type: "assistant", message: { content: [{ type: "text",
+      text: "curl -H 'Authorization: Bearer " + realToken.slice(0, bCut) }] } });
+    const bRecB = JSON.stringify({ type: "assistant", message: { content: [{ type: "text",
+      text: realToken.slice(bCut) + "' https://api.example.com" }] } });
+    check("bearer split sanity: the real token appears on neither line contiguously",
+      !bRecA.includes(realToken) && !bRecB.includes(realToken));
+    const bearerSplitRes = await scanOneFile("bearer-split.jsonl", bRecA + "\n" + bRecB + "\n");
+    check("bearer_header: a genuine cross-line split with a real contribution on each side is still correctly reconstructed after the fix",
+      bearerSplitRes.findings.some((f) => f.ruleId === "bearer_header" && Array.isArray(f.spanLines)));
   }
 
   // ── scan + --verify: Slack, real fetch, real local HTTP server ─────────────

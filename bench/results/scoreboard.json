@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-03T15:32:21.337Z",
+  "generatedAt": "2026-09-04T00:03:18.551Z",
   "fixtureRoot": "bench/corpus/data",
   "manifestSeed": 20260902,
   "scores": [
@@ -7,7 +7,7 @@
       "tool": "agentsweep",
       "displayName": "AgentSweep",
       "version": "agentsweep 0.1.9",
-      "wallMs": 636,
+      "wallMs": 652,
       "egressVerdict": "none-observed",
       "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
       "egressObserved": {
@@ -179,7 +179,7 @@
       "tool": "betterleaks",
       "displayName": "Betterleaks",
       "version": "1.8.1",
-      "wallMs": 455,
+      "wallMs": 496,
       "egressVerdict": "none-observed",
       "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
       "egressObserved": {
@@ -356,7 +356,7 @@
       "tool": "detect-secrets",
       "displayName": "detect-secrets (Yelp)",
       "version": "1.5.0",
-      "wallMs": 2544,
+      "wallMs": 2917,
       "egressVerdict": "none-observed",
       "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
       "egressObserved": {
@@ -577,7 +577,7 @@
           "proxyConnectAttempts": 0,
           "nonProxySockets": 0,
           "connectTargets": [],
-          "wallMs": 2544
+          "wallMs": 2917
         },
         {
           "mode": "default mode (network verification enabled)",
@@ -586,10 +586,10 @@
           "proxyConnectAttempts": 24,
           "nonProxySockets": 0,
           "connectTargets": [
-            "sts.amazonaws.com:443",
-            "slack.com:443"
+            "slack.com:443",
+            "sts.amazonaws.com:443"
           ],
-          "wallMs": 2636,
+          "wallMs": 2957,
           "citation": "detect-secrets' own CLI help documents scan-time verification and its off-switch: \"-n, --no-verify  Disables additional verification of secrets via network call.\" and \"--only-verified  Only flags secrets that can be verified.\" In the installed 1.5.0 package, detect_secrets/filters/common.py enables the verification filter (is_ignored_due_to_verification_policies, which calls each plugin's verify()) unless -n is passed.",
           "fakeValuesNote": "the corpus contains only pattern-true fake credentials, so a verification attempt sends only fake values at worst; on this harness the refuse-and-log proxy trap refuses all connections, so no verification request can leave the machine",
           "version": "1.5.0"
@@ -600,7 +600,7 @@
       "tool": "ggshield",
       "displayName": "ggshield (GitGuardian)",
       "version": "ggshield, version 1.54.0",
-      "wallMs": 288,
+      "wallMs": 282,
       "egressVerdict": "by-design-requires-server",
       "egressDetail": "Observed unauthenticated on this harness: the scan command refuses to run without a GitGuardian API key (exit 3, 'A GitGuardian API key is needed to use ggshield'), which is the server dependency demonstrated live. Observed during the scan window: proxy CONNECT attempt \"CONNECT api.github.com:443 HTTP/1.1\".",
       "egressObserved": {
@@ -782,7 +782,7 @@
       "tool": "gitleaks",
       "displayName": "gitleaks",
       "version": "8.30.1",
-      "wallMs": 593,
+      "wallMs": 560,
       "egressVerdict": "none-observed",
       "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
       "egressObserved": {
@@ -959,7 +959,7 @@
       "tool": "kingfisher",
       "displayName": "Kingfisher",
       "version": "kingfisher 2.1.0",
-      "wallMs": 3574,
+      "wallMs": 3581,
       "egressVerdict": "none-observed",
       "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
       "egressObserved": {
@@ -1139,7 +1139,7 @@
           "proxyConnectAttempts": 0,
           "nonProxySockets": 0,
           "connectTargets": [],
-          "wallMs": 3574
+          "wallMs": 3581
         },
         {
           "mode": "default mode (validation enabled)",
@@ -1149,12 +1149,12 @@
           "nonProxySockets": 0,
           "connectTargets": [
             "api.github.com:443",
-            "gitlab.com:443",
             "api.anthropic.com:443",
+            "gitlab.com:443",
             "registry.npmjs.org:443",
             "sts.us-east-1.amazonaws.com:443"
           ],
-          "wallMs": 10782,
+          "wallMs": 10351,
           "citation": "Kingfisher README: 'Validate discovered credentials against provider APIs to reduce false positives'; its top-level help: 'Detect and validate secrets across files and full Git history'. Offline flag per its --help: --no-validate, 'Disable secret validation'.",
           "fakeValuesNote": "every planted credential is a pattern-true fake no provider ever issued, and the refuse-and-log proxy trap refuses all connections, so at worst an ATTEMPT carrying fake values is observed; nothing reaches any provider on this harness",
           "version": "kingfisher 2.1.0"
@@ -1164,8 +1164,8 @@
     {
       "tool": "residoo",
       "displayName": "residoo",
-      "version": "residoo 0.4.14",
-      "wallMs": 450,
+      "version": "residoo 0.7.2",
+      "wallMs": 434,
       "egressVerdict": "none-observed",
       "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
       "egressObserved": {
@@ -1344,7 +1344,7 @@
       "tool": "trufflehog",
       "displayName": "TruffleHog",
       "version": "trufflehog 3.97.2",
-      "wallMs": 1079,
+      "wallMs": 1112,
       "egressVerdict": "none-observed",
       "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
       "egressObserved": {
@@ -1529,25 +1529,25 @@
           "proxyConnectAttempts": 0,
           "nonProxySockets": 0,
           "connectTargets": [],
-          "wallMs": 1079
+          "wallMs": 1112
         },
         {
           "mode": "default mode (verification enabled)",
           "verdict": "attempted",
-          "detail": "62 proxy connection attempt(s), 4 non-proxy socket(s) observed during the scan window",
-          "proxyConnectAttempts": 62,
+          "detail": "64 proxy connection attempt(s), 4 non-proxy socket(s) observed during the scan window",
+          "proxyConnectAttempts": 64,
           "nonProxySockets": 4,
           "connectTargets": [
             "oss.trufflehog.org:443",
-            "slack.com:443",
             "sts.us-east-1.amazonaws.com:443",
-            "registry.npmjs.org:443",
+            "slack.com:443",
             "gitlab.com:443",
+            "registry.npmjs.org:443",
             "api.anthropic.com:443",
             "api.github.com:443",
             "keychecker.trufflesecurity.com:443"
           ],
-          "wallMs": 9386,
+          "wallMs": 9206,
           "citation": "TruffleHog README (shipped in the release tarball): 'For every potential credential that is detected, we've painstakingly implemented programmatic verification against the API that we think it belongs to.' Offline flag per its --help: --no-verification, 'Don't verify the results.'",
           "fakeValuesNote": "every planted credential is a pattern-true fake no provider ever issued, and the refuse-and-log proxy trap refuses all connections, so at worst an ATTEMPT carrying fake values is observed; nothing reaches any provider on this harness",
           "version": "trufflehog 3.97.2"
@@ -1558,7 +1558,7 @@
       "tool": "whatileaked",
       "displayName": "whatileaked",
       "version": "whatileaked 0.3.0",
-      "wallMs": 466,
+      "wallMs": 431,
       "egressVerdict": "none-observed",
       "egressDetail": "no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window",
       "egressObserved": {

@@ -470,6 +470,59 @@ checked, and explained side effects:
 
 Every other row for every other tool reproduced unchanged.
 
+## residoo 0.7.2: a false-positive bug in the boundary-join guard itself, found by adversarially stress-testing this benchmark's own claim (added 2026-09-03)
+
+The 0.3.1 section above documents the split-line boundary join and its
+greedy-extension guard: without that guard, "any open-ended rule
+fabricates token-plus-neighbor chimera values on real transcripts, which
+is exactly what the first real-machine run of the unguarded join did."
+That guard only recognizes one shape of false positive: a straddling
+match that merely extends a complete match already sitting flush at the
+seam. Stress-testing this benchmark's own 100%-precision claim against
+documented false-positive patterns from gitleaks' and TruffleHog's own
+issue trackers (not hypothetical inputs) found a second, narrower shape
+the original guard does not cover: a **near-miss**, sitting one or more
+characters short of a variable-length rule's own minimum at a line's
+end, is not a complete match, so the guard never sees it. If the very
+next line's content happens to start with even a few more characters the
+rule's class allows, the straddle pass stitches two unrelated, benign
+lines into a fabricated value that exists in neither. Reproduced
+concretely: a line ending in a bearer-shaped placeholder
+(`Authorization: Bearer YOUR_TOKEN_HERE`, 14 characters past `Bearer `,
+two short of `bearer_header`'s `{16,1000}` minimum) followed by an
+unrelated line starting with `' https://api.example.com`, whose leading
+apostrophe and space alone push the straddle over the 16-character floor
+and get reported as a bearer token that was never typed by either line.
+
+Fix (`src/decode.js`): `BOUNDARY_MIN_CONTRIBUTION = 4`, a floor on how
+many characters EACH side of the seam must contribute to a straddling
+match before it is trusted as a genuine split rather than coincidence,
+applied symmetrically alongside the existing greedy-extension guard, not
+in place of it. Two regression tests added to `tests/smoke.js`: the near
+miss above is confirmed NOT fabricated into a finding, and a genuine
+cross-line split with a real contribution on each side (a 41-character
+token cut 10 characters from its start, comfortably clear of the new
+floor) is confirmed still correctly reconstructed. Limit stated in code:
+a legitimate chunked-streaming split landing with fewer than 4 characters
+on one side, while possible, is far rarer than the coincidental-
+concatenation failure mode this closes, and such a fragment is still
+caught by the raw single-line pass once enough of it lands on either side
+to satisfy the rule outright.
+
+The full 12-invocation reproduce sequence was rerun on a freshly
+regenerated corpus (same determinism guarantee as every section above:
+72 session files, 55 plant sites, 44 chaff, byte-identical family
+counts). residoo's own row is unaffected end to end: still 45/45 (100%)
+distinct credentials across all claimed classes, 100% precision (0
+chaff/suppress/unplanted false positives), none-observed egress, and the
+pre-existing, already-disclosed `transcript-split` 5/6 (83%) gap
+(unrelated to this fix, present unchanged since 0.3.1 and confirmed via
+`git diff`/`git show` against the previously committed scoreboard) is
+exactly where it was. Every other tool's row reproduced unchanged.
+Nothing in this fix trades recall for precision; it closes a fabrication
+path the benchmark's own methodology exists to catch, the same way the
+0.3.1 guard it extends was found the same way.
+
 Monitored per scan, spawn to exit, by two dynamic layers: a refuse-and-log proxy trap
 (all proxy env pinned to it) and lsof polling of the scanner's own process tree at
 ~150ms. Cadence honesty: ~150ms is the sleep between poll ticks, and each tick shells
