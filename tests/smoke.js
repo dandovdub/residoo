@@ -163,6 +163,46 @@ async function main() {
   check("Supabase secret API key matched, only by supabase_secret_key",
     matchesOnly("supabase_secret_key", "sb_secret_" + "a".repeat(40)));
 
+  // ── batch 2: package registries + dev-platform tokens (2026-09-04) ────────
+  // PyPI publishes its own regex directly (docs.pypi.org/api/secrets/).
+  check("PyPI API token matched, only by pypi_token",
+    matchesOnly("pypi_token", "pypi-" + "a".repeat(85)));
+  // crates.io: verified against the vendor's own live token-generation
+  // source (rust-lang/crates.io), the strongest sourcing in this batch.
+  check("crates.io API token matched, only by crates_io_key",
+    matchesOnly("crates_io_key", "cio" + "a".repeat(32)));
+  check("RubyGems API key matched, only by rubygems_key",
+    matchesOnly("rubygems_key", "rubygems_" + "a".repeat(48)));
+  check("Docker Hub PAT matched, only by docker_hub_token",
+    matchesOnly("docker_hub_token", "dckr_pat_" + "a".repeat(40)));
+  check("Docker Hub organization access token matched, only by docker_hub_token",
+    matchesOnly("docker_hub_token", "dckr_oat_" + "a".repeat(40)));
+  // GitLab's other token kinds, bundled into one rule (docs.gitlab.com/security/tokens/).
+  check("GitLab deploy token matched, only by gitlab_other_token",
+    matchesOnly("gitlab_other_token", "gldt-" + "a".repeat(30)));
+  check("GitLab runner registration token matched, only by gitlab_other_token",
+    matchesOnly("gitlab_other_token", "glrt-" + "a".repeat(30)));
+  check("GitLab runner AUTHENTICATION token (glrtr-, longer prefix) matched, only by gitlab_other_token",
+    matchesOnly("gitlab_other_token", "glrtr-" + "a".repeat(30)));
+  check("GitLab CI/CD job token matched, only by gitlab_other_token",
+    matchesOnly("gitlab_other_token", "glcbt-" + "a".repeat(30)));
+  check("GitLab token never double-matched by gitlab_pat (glpat- is a distinct prefix)",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("gldt-" + "a".repeat(30)) && p.id !== "gitlab_other_token"; }));
+  // Azure DevOps PAT: anchored on the fixed AZDO signature Microsoft's own
+  // docs describe (learn.microsoft.com), with a window rather than a
+  // single hard-coded offset since that doc's own position description is
+  // imprecise (see src/patterns.js's comment).
+  check("Azure DevOps PAT matched, only by azure_devops_pat",
+    matchesOnly("azure_devops_pat", "a".repeat(70) + "AZDO" + "a".repeat(10)));
+  check("random text that happens to contain the substring AZDO is never mistaken for a PAT (too short before/after it)",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("the AZDO team announced a change"); }));
+  check("Atlassian Cloud API token matched, only by atlassian_api_token",
+    matchesOnly("atlassian_api_token", "ATATT3xFfGF0" + "a".repeat(40) + "=" + "ABCDEF01"));
+  check("Discord bot token matched, only by discord_bot_token (never jwt)",
+    matchesOnly("discord_bot_token", "M" + "a".repeat(24) + "." + "a".repeat(6) + "." + "a".repeat(27)));
+  check("a JWT is never mistaken for a Discord bot token (JWT segments start with the literal eyJ, not M/N/O)",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("eyJ" + "a".repeat(20) + ".eyJ" + "a".repeat(20) + "." + "a".repeat(20)) && p.id === "discord_bot_token"; }));
+
   // ── sealcrypto: round-trip, wrong passphrase, tamper ──────────────────────
   const { sealFile, unsealFile, sealBuffer, unsealBuffer } = require("../src/sealcrypto");
   const src = path.join(tmp, "orig.bin");

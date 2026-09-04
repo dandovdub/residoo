@@ -164,6 +164,19 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "Rotate revokes the old token and issues its replacement in one step.",
   },
+  // docs.gitlab.com/security/tokens/ documents every token kind's own
+  // settings location; this rule bundles several, so the guidance points
+  // at the relevant scope's own settings rather than one fixed page.
+  gitlab_other_token: {
+    label: "GitLab token (deploy/runner/CI/other)",
+    consolePath: "GitLab > the relevant scope's Settings > Access Tokens (project Settings for deploy/CI-job/trigger tokens, group Settings for group-scoped ones, admin area for runner registration tokens)",
+    steps: [
+      "Identify which token kind leaked from its prefix (gldt- deploy, glrt-/glrtr- runner, glcbt- CI/CD job, glptt- trigger, and so on)",
+      "Revoke it from that scope's Access Tokens or Runners settings",
+      "Issue a replacement and update whatever used the old one (CI variable, deploy config, webhook)",
+    ],
+    revokeNote: "A CI/CD job token (glcbt-) is normally short-lived and scoped to a single pipeline run -- if this is one, confirm the run has already finished before treating it as urgent.",
+  },
   // Fetched https://docs.slack.dev/reference/methods/auth.revoke (2026-09-02):
   // "This method revokes an access token." (api.slack.com/methods/auth.revoke
   // now 302s here.) App-level management lives at api.slack.com/apps.
@@ -229,6 +242,32 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "Deletion is immediate. Prefer create-then-delete over delete-then-create if the app can tolerate two live secrets briefly -- it avoids an outage window for whatever depends on this secret.",
   },
+  // learn.microsoft.com/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate
+  // (fetched 2026-09-04): PAT management lives under User settings in the
+  // Azure DevOps web UI, login-walled, hence the path in words.
+  azure_devops_pat: {
+    label: "Azure DevOps personal access token",
+    consolePath: "Azure DevOps > User settings (top right) > Personal access tokens",
+    steps: [
+      "Open Personal access tokens under User settings",
+      "Revoke the leaked token",
+      "Create a replacement with the narrowest scopes and a short expiry",
+    ],
+    revokeNote: "Revocation is immediate; anything still using the old token starts failing authentication at once.",
+  },
+  // Atlassian's own community forum, staff reply (fetched 2026-09-04):
+  // confirms the token families and that revocation happens from the
+  // account's own API tokens page, login-walled.
+  atlassian_api_token: {
+    label: "Atlassian Cloud API token",
+    consolePath: "id.atlassian.com > Security > API tokens",
+    steps: [
+      "Open the API tokens page under account Security settings",
+      "Revoke the leaked token",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "This is a personal API token tied to the account that created it -- check that account's recent activity across every Atlassian product it has access to (Jira, Confluence, Bitbucket), not just one.",
+  },
   // Fetched tailscale.com/kb/1085/auth-keys (2026-09-04): exact console
   // path and the important revoke-vs-deauthorize distinction are quoted
   // from that page, not inferred.
@@ -293,6 +332,52 @@ const ROTATION_GUIDANCE = {
       "Mint a granular replacement with a short expiry",
     ],
     revokeNote: "Check your packages' recent publishes afterward: a leaked npm token is a supply-chain foothold, not just an account problem.",
+  },
+  // docs.pypi.org/api/secrets/ (fetched 2026-09-04): PyPI documents its own
+  // token format on this page and links account management from there.
+  pypi_token: {
+    label: "PyPI API token",
+    rotateUrl: "https://docs.pypi.org/api/secrets/",
+    steps: [
+      "pypi.org > Account settings > API tokens",
+      "Remove the leaked token",
+      "Add a replacement scoped to a single project rather than the whole account, if possible",
+    ],
+    revokeNote: "Check the project's recent releases afterward: a leaked PyPI token is a supply-chain foothold, the same risk class as a leaked npm token.",
+  },
+  // crates.io's own token settings page; management is login-walled.
+  crates_io_key: {
+    label: "crates.io API token",
+    consolePath: "crates.io > Account Settings > API Tokens",
+    steps: [
+      "Open API Tokens under Account Settings",
+      "Revoke the leaked token",
+      "Create a replacement scoped as narrowly as crates.io's scope options allow",
+    ],
+    revokeNote: "Check the account's recent publishes afterward: a leaked crates.io token is a supply-chain foothold for every crate it can publish to.",
+  },
+  // RubyGems' own API dashboard; management is login-walled.
+  rubygems_key: {
+    label: "RubyGems API key",
+    consolePath: "rubygems.org > Edit Profile > API Keys",
+    steps: [
+      "Open API Keys under your profile",
+      "Revoke the leaked key",
+      "Create a replacement with the narrowest scopes (e.g. push-only, not yank/owner)",
+    ],
+    revokeNote: "Check the account's recent gem pushes afterward: a leaked RubyGems key is a supply-chain foothold for every gem it can publish to.",
+  },
+  // Docker's own OpenAPI docs name the two token kinds; management pages
+  // are login-walled.
+  docker_hub_token: {
+    label: "Docker Hub access token",
+    consolePath: "hub.docker.com > Account Settings > Security (or Organization Settings > Access Tokens for an OAT)",
+    steps: [
+      "Open the Security / Access Tokens page for the relevant account or organization",
+      "Delete the leaked token",
+      "Create a replacement with the narrowest read/write/delete permissions it needs",
+    ],
+    revokeNote: "An Organization Access Token (dckr_oat_) can reach every repo in that org -- treat a leak of one as broader than a leaked personal token.",
   },
   // Fetched https://www.twilio.com/docs/sendgrid/ui/account-and-settings/api-keys
   // (2026-09-02): Settings > API Keys, action menu > Delete API Key,
@@ -745,6 +830,18 @@ const ROTATION_GUIDANCE = {
       "Programmatic alternative: the Delete Webhook API endpoint (requires MANAGE_WEBHOOKS)",
     ],
     revokeNote: "The URL is the entire credential: anyone holding it can post to the channel until the webhook is deleted.",
+  },
+  // docs.discord.com/developers/reference (fetched 2026-09-04): bot tokens
+  // are regenerated from the same Developer Portal page as the bot itself.
+  discord_bot_token: {
+    label: "Discord bot token",
+    rotateUrl: "https://docs.discord.com/developers/reference",
+    steps: [
+      "Discord Developer Portal > Applications > your app > Bot",
+      "Click Reset Token to invalidate the old one and issue a new one",
+      "Update whatever hosts the bot with the new token",
+    ],
+    revokeNote: "This is full bot API access, not a single-channel webhook -- resetting immediately disconnects the bot everywhere it's running until redeployed with the new token.",
   },
   // Fetched https://core.telegram.org/bots/features (2026-09-02): "If your
   // existing token is compromised or you lost it for some reason, use the

@@ -935,6 +935,58 @@ alone. Full reproduce run: residoo stays 45/45 (100%), 100% precision, none-obse
 egress, byte-identical to 0.8.5 except the version label. Every other tool's row
 reproduced unchanged.
 
+## residoo 0.8.7: package registries and dev-platform tokens, second batch from the same research pass (added 2026-09-04)
+
+The second of three batches from 0.8.6's four-agent research pass. Eight new
+rules, all individually verified against a primary source rather than ported
+from a competitor's regex on trust:
+
+- **PyPI API token** (`pypi-`) -- PyPI publishes its own regex directly
+  (docs.pypi.org/api/secrets/): `pypi-[A-Za-z0-9-_]{85,}`, no stated upper
+  bound. This one converged independently across three of the four research
+  agents (noseyparker, detect-secrets, ggshield all surfaced it separately),
+  the strongest cross-corroboration of this whole research pass.
+- **crates.io API token** (`cio`) -- verified against crates.io's own live
+  token-generation source code (rust-lang/crates.io), not its docs: exact
+  prefix and length read straight from `TOKEN_PREFIX`/`TOKEN_LENGTH`
+  constants.
+- **RubyGems API key** (`rubygems_`) -- exact 48-hex-char length independently
+  counted against RubyGems' own guide's example token, not assumed from a
+  competitor's rule.
+- **Docker Hub access token** (`dckr_pat_`/`dckr_oat_`) -- confirmed via
+  Docker's own OpenAPI spec file, which names both the personal and
+  organization-scoped prefixes explicitly. (Two research agents disagreed on
+  whether Docker documents this at all; the OpenAPI spec file settled it --
+  checked directly before shipping, not just trusted from one agent's report.)
+- **GitLab's other token kinds** (deploy/runner/CI-job/trigger/etc, `gldt-`
+  through `gloas-`) -- one bundled rule for eleven prefixes GitLab's own docs
+  publish in a table (docs.gitlab.com/security/tokens/), on top of the
+  existing `glpat-` personal-access-token rule. Bundled rather than split
+  eleven ways since they share both risk profile and rotation path.
+- **Azure DevOps PAT** -- anchored on the fixed `AZDO` signature Microsoft's
+  own docs describe as sitting at "positions 76-80" of an 84-character token.
+  That description doesn't cleanly fit a 4-character literal into a 5-position
+  range, so rather than risk a hard-coded offset that's off by one and never
+  matches a real token, the rule allows a window around where AZDO can sit.
+  Disclosed as an imprecise vendor description, not treated as more certain
+  than it is.
+- **Atlassian Cloud API token** (`ATATT3xFfGF0...=<8 hex>`) -- structure from
+  noseyparker's shipped rule, independently confirmed current via an
+  Atlassian staff reply on Atlassian's own community forum.
+- **Discord bot token** -- three dot-separated segments, first starting with
+  M/N/O, confirmed via Discord's own current developer docs. A materially
+  different, more sensitive credential than the webhook URL residoo already
+  covered (full bot API access vs. a single channel post). Verified it can
+  never collide with the existing `jwt` rule: a JWT's first two segments must
+  start with the literal `eyJ`, never M/N/O.
+
+Pattern count moved 59 to 67. This corpus has no plant for any of these eight
+families yet, so the full reproduce sequence confirms no regression, not a new
+win: residoo stays 45/45 (100%), 100% precision, none-observed egress,
+byte-identical to 0.8.6 except the version label. Every other tool's row
+reproduced unchanged. One more batch (AI/ML vendors and other SaaS) from the
+same research pass is still queued for the next release.
+
 ## Reproduce
 
 ```

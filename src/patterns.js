@@ -33,6 +33,17 @@ const PATTERNS = [
     re: /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_.-]{20,600}\b/g },
   { id: "gitlab_pat", label: "GitLab personal access token", confidence: "high",
     re: /\bglpat-[A-Za-z0-9_-]{20,100}\b/g },
+  // GitLab's OTHER token kinds, beyond the personal access token above --
+  // deploy, runner, CI/CD job, trigger, feed, incoming-mail, agent,
+  // workspace, SCIM, feature-flags-client, and OAuth-app-secret tokens.
+  // All prefixes taken directly from GitLab's own published table
+  // (docs.gitlab.com/security/tokens/), which gives every prefix but no
+  // exact body length for any of them -- one bundled rule rather than
+  // eleven near-identical ones, since they share the same risk profile
+  // (repo/registry/CI access) and the same rotation path (Settings >
+  // Access Tokens for the relevant scope).
+  { id: "gitlab_other_token", label: "GitLab token (deploy/runner/CI/other)", confidence: "high",
+    re: /\bgl(?:oas|dt|rtr|rt|cbt|ptt|ft|imt|agent|wt|soat|ffct)-[A-Za-z0-9_-]{16,100}\b/g },
   { id: "slack_token", label: "Slack token", confidence: "high",
     re: /\bxox[baprs]-[0-9A-Za-z-]{10,500}\b/g },
   { id: "stripe_key", label: "Stripe API key (live mode)", confidence: "high",
@@ -84,6 +95,29 @@ const PATTERNS = [
   // already excluded for Weights & Biases' classic key format.
   { id: "azure_ad_client_secret", label: "Azure AD (Entra ID) client secret", confidence: "high",
     re: /(?<![A-Za-z0-9_.~-])[A-Za-z0-9_.~]{2,4}\dQ~[A-Za-z0-9_.~-]{28,36}(?![A-Za-z0-9_.~-])/g },
+  // Azure DevOps PAT. Microsoft's own current docs (learn.microsoft.com,
+  // .../use-personal-access-tokens-to-authenticate, updated 2026-07-08)
+  // state: "Tokens are 84 characters long, with 52 characters being
+  // randomized data... Tokens issued by Azure DevOps include a fixed AZDO
+  // signature at positions 76-80." That description is imprecise about
+  // the exact byte offset (a 4-char literal can't cleanly occupy a
+  // 5-position range), so rather than hard-code a single offset that
+  // might be off by one and never match a real token, this allows a
+  // window for where AZDO can sit while still requiring both the fixed
+  // literal anchor and a close-to-84 overall length -- the anchor is what
+  // actually carries the false-positive protection.
+  { id: "azure_devops_pat", label: "Azure DevOps personal access token", confidence: "high",
+    re: /\b[A-Za-z0-9]{65,75}AZDO[A-Za-z0-9]{5,15}\b/g },
+  // Atlassian Cloud API token (classic/scoped). Prefix and structure from
+  // noseyparker's own shipped rule; independently confirmed current via
+  // an Atlassian staff reply on Atlassian's own community forum naming
+  // the three current token families and their prefixes (API Token:
+  // ATAT, App Password: ATBB, Access Tokens: ATCT) -- this rule covers
+  // only the first, most common one. The newer Access Token family
+  // (ATCTT3xFfGN0...) exists per that same staff reply but with no
+  // length/charset spec found anywhere, so it isn't guessed at here.
+  { id: "atlassian_api_token", label: "Atlassian Cloud API token", confidence: "high",
+    re: /\bATATT3xFfGF0[A-Za-z0-9_-]{20,200}=[0-9A-F]{8}\b/g },
   // Tailscale auth key. Found missing via gitleaks/gitleaks#1778 (still
   // open there too). No fully authoritative current spec found: Tailscale's
   // own kb/1085/auth-keys page shows an older bare "tskey-<hex>" example,
@@ -108,6 +142,32 @@ const PATTERNS = [
     re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
   { id: "npm_token", label: "npm access token", confidence: "high",
     re: /\bnpm_[A-Za-z0-9]{36}\b/g },
+  // Found via a competitor research pass mining noseyparker/ggshield/
+  // detect-secrets (2026-09-04). PyPI publishes its own regex directly
+  // (docs.pypi.org/api/secrets/): "pypi-[A-Za-z0-9-_]{85,}", no stated
+  // upper bound ("can be arbitrarily long") -- capped here at 700 as a
+  // practical ceiling, not a vendor limit.
+  { id: "pypi_token", label: "PyPI API token", confidence: "high",
+    re: /\bpypi-[A-Za-z0-9_-]{85,700}\b/g },
+  // Verified against crates.io's own current token-generation source
+  // (rust-lang/crates.io, crates/crates_io_database/src/utils/token.rs):
+  // TOKEN_PREFIX = "cio", TOKEN_LENGTH = 32, generated via
+  // rand::distr::Alphanumeric -- the strongest sourcing in this batch,
+  // read from the vendor's actual live code rather than its docs.
+  { id: "crates_io_key", label: "crates.io API token", confidence: "high",
+    re: /\bcio[A-Za-z0-9]{32}\b/g },
+  // Exact length independently counted against RubyGems' own guide
+  // (guides.rubygems.org/rubygems-org-api/), whose worked example shows
+  // the body as exactly 48 lowercase hex characters after the prefix.
+  { id: "rubygems_key", label: "RubyGems API key", confidence: "high",
+    re: /\brubygems_[a-f0-9]{48}\b/g },
+  // Docker's own OpenAPI spec (docker/docs, content/reference/api/
+  // ai-governance/api.yaml) names both prefixes explicitly -- Personal
+  // Access Token dckr_pat_*, Organization Access Token dckr_oat_* -- but
+  // gives no exact body length/charset for either, hence the generous
+  // bound already used elsewhere in this file for the same situation.
+  { id: "docker_hub_token", label: "Docker Hub access token", confidence: "high",
+    re: /\bdckr_(?:pat|oat)_[A-Za-z0-9_-]{20,200}\b/g },
   { id: "sendgrid_key", label: "SendGrid API key", confidence: "high",
     re: /\bSG\.[A-Za-z0-9_-]{16,100}\.[A-Za-z0-9_-]{16,100}\b/g },
   { id: "twilio_key", label: "Twilio API key", confidence: "high",
@@ -307,6 +367,17 @@ const PATTERNS = [
   // ── Comms / SaaS ───────────────────────────────────────────────────────
   { id: "discord_webhook", label: "Discord webhook URL", confidence: "high",
     re: /\bhttps:\/\/discord\.com\/api\/webhooks\/[0-9]{18,19}\/[0-9a-zA-Z_-]{68}\b/g },
+  // Discord BOT token -- a different, more sensitive credential than the
+  // webhook URL above (full bot API access vs. a single channel post).
+  // Three dot-separated base64url segments, first starting with M/N/O
+  // (the base64 encoding of a Discord user-id snowflake's leading byte
+  // range). Confirmed via Discord's own current developer docs
+  // (docs.discord.com/developers/reference, shows a live example token in
+  // this exact shape); same structure as detect-secrets' own shipped
+  // plugin. Never collides with the jwt rule below since a JWT's first two
+  // segments must start with the literal "eyJ", not M/N/O.
+  { id: "discord_bot_token", label: "Discord bot token", confidence: "high",
+    re: /\b[MNO][A-Za-z0-9_-]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}\b/g },
   { id: "telegram_bot_token", label: "Telegram bot token", confidence: "high",
     re: /\b[0-9]{8,10}:[a-zA-Z0-9_-]{35}\b/g },
   { id: "mailgun_key", label: "Mailgun API key", confidence: "high",
