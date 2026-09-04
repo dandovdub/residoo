@@ -472,6 +472,10 @@ you running the CLI in a terminal:
 claude mcp add residoo -- residoo mcp
 ```
 
+or run `scripts/install-mcp.sh` (also in this repo), which installs residoo
+itself first if it isn't already, then registers it and verifies the
+connection.
+
 or add it directly to `.mcp.json`:
 
 ```json
