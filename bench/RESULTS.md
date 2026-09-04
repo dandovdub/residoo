@@ -1,5 +1,15 @@
 # Results: the transcript-shaped secrets benchmark
 
+**Latest numbers: residoo 0.8.0, still 45/45 (100%) distinct credentials,
+100% precision, none-observed egress** — see "residoo 0.8.0: two new
+capabilities, zero scan-path behavior change by construction" near the end
+of this file. The `0.3.0`/commit `16c911f` details right below are the
+ORIGINAL publication, kept unchanged on purpose for reproducibility; every
+dated section after it is a full rerun on a freshly regenerated corpus,
+not an edit to what came before. If you only want the current numbers,
+skip to the bottom; if you want the full history of how residoo got there
+(including the bugs found and fixed along the way), read straight through.
+
 Eight scored tools (residoo, gitleaks, AgentSweep, whatileaked, TruffleHog,
 Betterleaks, Kingfisher, detect-secrets) plus ggshield
 (documented, not scored: server-side detection by design). All eight were run
