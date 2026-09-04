@@ -23,7 +23,7 @@
 const fc = require("fast-check");
 const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("../src/decode");
 const { PATTERNS, NOISY_PATTERNS, redact } = require("../src/patterns");
-const { evaluateToolInput, matchSensitivePath } = require("../src/guard");
+const { evaluateToolInput, matchSensitivePath, evaluatePromptText } = require("../src/guard");
 const { fingerprintFinding } = require("../src/rotation");
 const { extractImageBlocks } = require("../src/ocr");
 
@@ -116,6 +116,18 @@ property("evaluateToolInput never throws on any tool name and any input shape",
 property("matchSensitivePath never throws on any input type, not just strings",
   fc.anything(),
   (input) => { matchSensitivePath(input); return true; });
+
+// evaluatePromptText runs on every single UserPromptSubmit event in every
+// session (no matcher support -- see guard.js's own docstring), directly on
+// whatever a human typed. A crash here has a worse failure mode than a
+// crash in evaluateToolInput: the whole prompt-submission path stalls
+// until Claude Code's own timeout fires, not just one tool call.
+property("evaluatePromptText never throws on any string, any input type",
+  fc.anything(),
+  (input) => {
+    const r = evaluatePromptText(input);
+    return typeof r === "object" && typeof r.block === "boolean";
+  });
 
 // ── rotation.js: fingerprintFinding is called on every scan result before
 // anything reaches the ledger or an MCP response. Must never throw, and

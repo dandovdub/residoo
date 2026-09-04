@@ -192,46 +192,80 @@ Storage is macOS (`security`) or Linux (`secret-tool`) only, matching
 with a clear message rather than half-built. There is no `residoo cred
 list` in v1: you need to already know the name you set.
 
-## Guard: block a sensitive read before it happens
+## Guard: block a sensitive read, or a sensitive prompt, before it happens
 
 Everything above finds a leak after it's already written to disk. `residoo
-guard` is the one piece of residoo that tries to stop one from happening in
-the first place — a Claude Code `PreToolUse` hook that blocks an obviously-
-sensitive file read (`.env`, `id_rsa`, `.aws/credentials`, and similar)
-before the command runs at all.
+guard` is one binary covering two Claude Code hooks, dispatched on the
+payload's own `hook_event_name` field, that both try to stop a leak from
+happening in the first place instead of finding it afterward.
+
+**`PreToolUse`** blocks an obviously-sensitive file read (`.env`,
+`id_rsa`, `.aws/credentials`, and similar) before the command runs at all.
+
+**`UserPromptSubmit`** closes the gap `PreToolUse` explicitly can't:
+Claude Code's hooks API lets a `PreToolUse` hook see the proposed tool
+INPUT before it runs, but never a secret typed directly into the prompt
+box, or one arriving in an unrelated command's OUTPUT (by the time a
+`PostToolUse` hook fires, that output is already committed to the
+transcript). `UserPromptSubmit` runs before either of those: Claude
+Code's own docs (`code.claude.com/docs/en/hooks`, read directly, not
+summarized secondhand) confirm it "runs before every prompt and blocks
+model processing until it completes," and a JSON response with
+`"decision": "block"` "prevents the prompt from being processed and
+erases it from context" — a real prevention point, not an after-the-fact
+alert. It checks the user's own typed text against residoo's 79
+high-confidence rules only — never `--verify` (a network call), never
+`--ocr` (irrelevant to text anyway, and both are too slow): this event has
+no matcher support, so it fires on **every single prompt** with a default
+30-second budget, confirmed to run in practice in well under 5ms even
+against a 220KB pasted block (measured directly, not assumed). Because a
+wrong block here erases the user's *entire* typed message — a materially
+higher cost than denying one tool call — this path is deliberately more
+conservative than `PreToolUse`'s: a documented vendor-example key or an
+obvious placeholder is suppressed before ever blocking, the same
+suppression `residoo scan` itself applies.
+
+Best-effort, stated plainly rather than oversold: per Claude Code's own
+docs, a `command`-type hook (what this is) that times out on
+`UserPromptSubmit` has its output discarded and the prompt still reaches
+Claude unscanned — the same "never stall the session over uncertainty"
+posture `PreToolUse` already has, not a new risk introduced here.
+`residoo scan` / `watch` / `mcp` remain the actual safety net either way;
+this is prevention layered on top of detection, not a replacement for it.
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       { "matcher": "Bash|Read", "hooks": [{ "type": "command", "command": "residoo guard" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "residoo guard" }] }
     ]
   }
 }
 ```
-in `.claude/settings.json`. It reads one hook payload from stdin and writes
-a deny decision to stdout only when the proposed command or file path
-matches; anything it doesn't recognize falls through untouched, with zero
-output, exit 0.
-
-This is narrower than it might sound, and the gap is worth stating
-plainly rather than implying more than it does: Claude Code's hooks API
-lets a `PreToolUse` hook see the proposed tool INPUT (a Bash command
-string, a Read file path) before it runs, but there is no documented
-mechanism for a hook to see or redact a tool's OUTPUT — by the time a
-`PostToolUse` hook fires, that output is already committed to the
-transcript. So this can only block on the shape of the request, never
-clean up what a command already printed. It will not catch a secret typed
-directly into a prompt, or one arriving in the output of an otherwise
-unremarkable command (`curl`, a build log). `residoo scan` / `watch` /
-`mcp` remain the actual safety net; this is a best-effort tripwire on top
-of them, not a replacement.
+in `.claude/settings.json` (no `matcher` on `UserPromptSubmit` — Claude
+Code doesn't support one there). Same binary, same behavior either way: it
+reads one hook payload from stdin and writes a decision to stdout only
+when something matches; anything it doesn't recognize falls through
+untouched, with zero output, exit 0.
 
 ### Measured, not claimed
 
-Within that scope — does the pattern list itself catch what it should,
-without wrongly blocking ordinary work — this is measured the same way
-`scan()` is, on its own scored corpus:
+The numbers below are for `PreToolUse`'s path-pattern list specifically.
+`UserPromptSubmit`'s own detection accuracy is not separately re-measured
+on a dedicated corpus — it reuses residoo's 79 high-confidence rules
+exactly as `residoo scan` already scores them (see
+[docs/benchmark.md](benchmark.md)), and the new code on top of that (the
+dispatch, and the vendor-example/placeholder suppression) is covered by
+`tests/smoke.js` and a `tests/fuzz.js` property, not a scored benchmark of
+its own — stated plainly rather than implying a number that wasn't
+measured.
+
+Within `PreToolUse`'s own scope — does the pattern list itself catch what
+it should, without wrongly blocking ordinary work — this is measured the
+same way `scan()` is, on its own scored corpus:
 
 | metric | result |
 |---|---|

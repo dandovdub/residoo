@@ -943,4 +943,4 @@ function emptyResult() {
 // so residoo_verify_finding's v1 only supports the single-token vendors below.
 const VERIFIABLE_RULE_IDS = new Set(Object.keys(SIMPLE_VERIFY_FNS));
 
-module.exports = { scan, emptyResult, VENDOR_EXAMPLE_VALUES, VERIFIABLE_RULE_IDS };
+module.exports = { scan, emptyResult, VENDOR_EXAMPLE_VALUES, VERIFIABLE_RULE_IDS, zeroEntropyTail };

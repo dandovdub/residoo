@@ -1129,6 +1129,67 @@ exercising the new coverage directly: residoo stays 45/45 (100%), 100%
 precision, none-observed egress, byte-identical to 0.8.8 except the
 version label. Every other tool's row reproduced unchanged.
 
+## residoo 0.11.0: from retroactive-only to real-time prevention, on one narrow surface (added 2026-09-04)
+
+A second deep-research pass (the first found the technique; this one dug
+into how it actually works) confirmed, directly against Claude Code's own
+primary docs (code.claude.com/docs/en/hooks, fetched and read in full, not
+summarized secondhand -- an earlier WebFetch summary lost the exact
+schema, so the raw HTML was pulled and read directly) that Claude Code has
+a `UserPromptSubmit` hook that "runs before every prompt and blocks model
+processing until it completes," with an exact, confirmed payload shape
+(`prompt` field carries the exact submitted text -- a specific claim that
+this field was instead named `user_prompt` did not survive this session's
+own adversarial verification) and an exact decision contract
+(`"decision": "block"` "prevents the prompt from being processed and
+erases it from context"). This is residoo's first move from purely
+retroactive, at-rest detection into real prevention, on the one gap
+`guard`'s existing PreToolUse hook explicitly could not close: a secret
+typed directly into the prompt box.
+
+The same research pass also mapped the real, funded competition already in
+this exact sub-niche -- Strac, Cyberhaven, Nightfall AI, and ORION Security
+all market "block secrets before they leave your machine" for Claude Code
+by name, via an OS-level endpoint agent, not Claude Code's own hook API.
+This is not green-field: it's residoo (free, local, zero-deps) entering a
+category four venture-funded companies already occupy. Shipped anyway,
+honestly framed as the free/local alternative to that category for one
+narrow thing, not a claim of being first.
+
+Implementation: `evaluatePromptText()` in `src/guard.js`, dispatched
+alongside the existing PreToolUse path in the same `residoo guard` binary
+via the payload's own `hook_event_name` common field (also confirmed from
+the same primary docs). Deliberately narrow, for reasons the docs
+themselves surfaced, not assumed: this event has no matcher support --
+confirmed to fire on *every single prompt* in every session -- so only
+residoo's 79 high-confidence `PATTERNS` rules run here, never `--verify`
+(network) or `--ocr` (irrelevant to text, and both too slow). Measured
+directly before shipping, not assumed fast: under 5ms even against a
+220KB pasted block, comfortably inside the 30-second budget Claude Code's
+own docs specify for this event's command hooks. Because a wrong block
+here erases the user's entire typed message -- a materially higher cost
+than denying one tool call -- this path additionally runs the same
+vendor-example/placeholder suppression `residoo scan` itself uses
+(`VENDOR_EXAMPLE_VALUES`/`zeroEntropyTail`, newly exported from `scan.js`
+for this reuse) before ever blocking.
+
+Disclosed, not hidden: per Claude Code's own docs, a `command`-type hook
+(what this is) that times out on this event has its output discarded and
+the prompt still reaches Claude unscanned -- consistent with `guard`'s own
+already-stated "never stall the session over uncertainty" posture, not a
+new risk introduced here, but it does mean this is best-effort additive
+coverage, not an absolute guarantee, same honesty tier as `--ocr`.
+
+`guard.js`'s new code path touches no file this benchmark scores --
+`scan.js`'s only change is a single additive export
+(`zeroEntropyTail`, already used internally, now also reused by guard.js),
+zero lines of scan() behavior changed. No reproduce run needed for the
+same reason 0.8.0's MCP-verify addition didn't need one for its
+provably-unreachable code path, except here there's no touched code in
+scan()'s own body at all, provable by `git diff`. Covered instead by
+`tests/smoke.js` (new UserPromptSubmit pure-function and full-CLI-dispatch
+cases) and a new `tests/fuzz.js` property.
+
 ## Reproduce
 
 ```

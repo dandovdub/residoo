@@ -3600,6 +3600,60 @@ async function main() {
     const malformedRun = runGuardCli("{ not json");
     check("guard CLI: a malformed hook payload fails open -- exit 0, zero stdout, never a crash",
       malformedRun.status === 0 && malformedRun.stdout === "");
+
+    // ── UserPromptSubmit: evaluatePromptText, pure-function tests ───────────
+    // Real fake-but-pattern-true values throughout (never a live secret),
+    // same convention as every other rule test in this file. Varied
+    // characters, never repeated-character strings -- those trip the SAME
+    // zero-entropy suppression this feature deliberately reuses from
+    // scan.js, which is exactly what one of the tests below checks for.
+    const { evaluatePromptText } = require("../src/guard");
+    check("guard UserPromptSubmit: a prompt containing a real-shaped AWS key is blocked",
+      evaluatePromptText("here is my AWS key: AKIA" + "SM0KETESTFAKEKEY").block === true);
+    check("guard UserPromptSubmit: an unremarkable prompt is never blocked",
+      evaluatePromptText("write a function to calculate the factorial of a number").block === false);
+    check("guard UserPromptSubmit: non-string/empty input never throws, never blocks",
+      evaluatePromptText(null).block === false && evaluatePromptText("").block === false && evaluatePromptText(undefined).block === false);
+    check("guard UserPromptSubmit: a documented AWS vendor-example key is suppressed, never blocked (same VENDOR_EXAMPLE_VALUES scan.js itself uses)",
+      evaluatePromptText("the docs show AKIAIOSFODNN7EXAMPLE as a sample").block === false);
+    check("guard UserPromptSubmit: an obvious placeholder (zero-entropy tail) is suppressed, never blocked",
+      evaluatePromptText("stripe key: sk_live_" + "x".repeat(24)).block === false);
+    check("guard UserPromptSubmit: a real-shaped Stripe live key (varied characters) IS blocked",
+      evaluatePromptText("stripe key: sk_live_" + "4eK9pQ2xN7tR5wL8" + "mB3vC6yH").block === true);
+    check("guard UserPromptSubmit: the block reason names the matched rule's label and a redacted preview, never the raw value",
+      (() => {
+        const r = evaluatePromptText("here is my AWS key: AKIA" + "SM0KETESTFAKEKEY");
+        return r.reason.includes("AWS Access Key ID") && !r.reason.includes("SM0KETESTFAKEKEY");
+      })());
+    check("guard UserPromptSubmit: only high-confidence rules apply -- a NOISY_PATTERNS-only shape (bare password= assignment) is never blocked",
+      evaluatePromptText("password=hunter2").block === false);
+
+    // ── UserPromptSubmit: full CLI dispatch, real spawned subprocess ────────
+    // Same residoo guard binary as the PreToolUse tests above -- dispatch is
+    // on the payload's own hook_event_name field, confirmed via a real
+    // process boundary, not just the pure function.
+    const upsBlockRun = runGuardCli(JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      prompt: "my stripe key is sk_live_" + "4eK9pQ2xN7tR5wL8" + "mB3vC6yH",
+    }));
+    check("guard CLI: UserPromptSubmit with a real-shaped secret produces the documented decision:\"block\" JSON, exit 0",
+      upsBlockRun.status === 0 && (() => {
+        const parsed = JSON.parse(upsBlockRun.stdout.trim());
+        return parsed.decision === "block" && typeof parsed.reason === "string" && parsed.reason.includes("Stripe");
+      })());
+    check("guard CLI: UserPromptSubmit response never uses PreToolUse's hookSpecificOutput shape -- the two events do not share a schema",
+      !upsBlockRun.stdout.includes("hookSpecificOutput"));
+
+    const upsAllowRun = runGuardCli(JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      prompt: "please refactor this function to be more readable",
+    }));
+    check("guard CLI: UserPromptSubmit with an unremarkable prompt produces zero stdout bytes (implicit allow), exit 0",
+      upsAllowRun.status === 0 && upsAllowRun.stdout === "");
+
+    const upsMissingPromptRun = runGuardCli(JSON.stringify({ hook_event_name: "UserPromptSubmit" }));
+    check("guard CLI: UserPromptSubmit with no prompt field at all fails open, never crashes",
+      upsMissingPromptRun.status === 0 && upsMissingPromptRun.stdout === "");
   }
 
   // ── mcp: hand-rolled MCP server over stdio (src/mcp.js + src/mcpTools.js) ───

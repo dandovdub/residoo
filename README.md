@@ -51,8 +51,10 @@ into the conversation at all — which also means a long session compacting
 away the exact value you pasted days ago can't force you to paste it
 again, since there's nothing to lose. `residoo guard` blocks an obviously
 sensitive file read before it happens (100% recall, 0% false positives on
-its own [scored 81-case corpus](bench/guard/RESULTS.md)). All four are
-covered in [docs/features.md](docs/features.md).
+its own [scored 81-case corpus](bench/guard/RESULTS.md)) and, via a second
+hook, a secret typed directly into the prompt itself — confirmed against
+Claude Code's own docs to block before the model ever processes it. All
+four are covered in [docs/features.md](docs/features.md).
 
 > [!NOTE]
 > gitleaks and trufflehog scan **commits**. residoo scans the **conversation
@@ -138,7 +140,8 @@ while losing rows, then fixed in public against the classes it was losing
   for CI and pre-commit. See [docs/ci.md](docs/ci.md).
 - `residoo watch` / `residoo mcp` / `residoo cred` / `residoo guard`:
   continuous scanning, conversational queries, credential injection
-  without pasting, and pre-read blocking. See [docs/features.md](docs/features.md).
+  without pasting, and blocking a sensitive file read or a sensitive
+  prompt before either happens. See [docs/features.md](docs/features.md).
 
 ## What it does not do
 

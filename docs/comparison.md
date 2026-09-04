@@ -48,8 +48,14 @@ Two newer categories are adjacent but solve a different problem:
   scanning via its MCP server) intercept a prompt or a code change *as it
   happens*, going forward, only in a session that has the hook installed.
   They do nothing for months of transcripts already on disk, or for any
-  session run without the hook active. residoo scans **retroactively, at
-  rest**: every file already there, from every past session.
+  session run without the hook active. `residoo scan` / `watch` / `mcp`
+  cover the opposite, load-bearing case: **retroactively, at rest**, every
+  file already there, from every past session -- and, as of `residoo
+  guard`'s `UserPromptSubmit` hook, residoo now ALSO does real-time
+  prevention on one narrow surface (a secret typed directly into the
+  prompt box, blocked before Claude processes it), on top of the
+  retroactive coverage, not instead of it. See
+  [Guard](features.md#guard-block-a-sensitive-read-or-a-sensitive-prompt-before-it-happens).
 - This isn't a gap Anthropic plans to close upstream either: a
   [request to scrub secrets from `~/.claude/projects` natively](https://github.com/anthropics/claude-code/issues/50014)
   was filed and closed as **not planned**.

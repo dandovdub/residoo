@@ -218,24 +218,47 @@ Cred:
   tool, present only when RESIDOO_CRED_ALLOWED_COMMANDS is configured.
 
 Guard:
-  residoo guard             a Claude Code PreToolUse hook that blocks an
-                          obviously-sensitive file read (.env, id_rsa,
-                          .aws/credentials, and similar) before it can be
-                          written to the session transcript at all --
-                          prevention, not just detection. Reads one hook
-                          payload from stdin, writes a deny decision to
-                          stdout only when it matches; never blocks on
-                          anything it doesn't recognize. This is narrower
-                          than it sounds: Claude Code's hooks API can see a
-                          proposed Bash command or Read path before it
-                          runs, but never the command's OUTPUT, so this
-                          cannot catch a secret typed into a prompt or one
-                          arriving through an unrelated command's output --
-                          scan/watch/mcp remain the real safety net. Add to
+  residoo guard             one binary, two Claude Code hooks, dispatched on
+                          the payload's own hook_event_name:
+
+                          PreToolUse blocks an obviously-sensitive file read
+                          (.env, id_rsa, .aws/credentials, and similar)
+                          before it can be written to the session
+                          transcript at all. Narrower than it sounds:
+                          Claude Code's hooks API can see a proposed Bash
+                          command or Read path before it runs, but never
+                          the command's OUTPUT, so this alone cannot catch
+                          a secret typed into a prompt or one arriving
+                          through an unrelated command's output.
+
+                          UserPromptSubmit closes exactly that gap: it
+                          checks the user's own typed prompt against
+                          residoo's 79 high-confidence rules (never
+                          --verify, never --ocr -- this hook has no matcher
+                          and fires on every single prompt, so it must stay
+                          fast) and can block it before Claude processes it
+                          at all -- confirmed directly against Claude
+                          Code's own docs, not assumed. A block ERASES the
+                          user's whole typed message, so this path is
+                          extra-conservative: a documented vendor-example
+                          key or an obvious placeholder is suppressed, same
+                          as residoo scan itself. Best-effort, not a
+                          guarantee: per Claude Code's own docs, a slow
+                          hook here fails OPEN (the prompt goes through
+                          unscanned) rather than stalling the session,
+                          consistent with this hook never blocking on
+                          anything it doesn't recognize.
+
+                          scan/watch/mcp remain the real safety net either
+                          way -- this is prevention on top of detection,
+                          not a replacement for it. Add both to
                           .claude/settings.json:
-                            {"hooks":{"PreToolUse":[{"matcher":"Bash|Read",
-                            "hooks":[{"type":"command",
-                            "command":"residoo guard"}]}]}}
+                            {"hooks":{
+                              "PreToolUse":[{"matcher":"Bash|Read",
+                                "hooks":[{"type":"command",
+                                "command":"residoo guard"}]}],
+                              "UserPromptSubmit":[{"hooks":[{"type":"command",
+                                "command":"residoo guard"}]}]}}
 
 Rotation:
   residoo explain <rule-id>     full rotation runbook for one detection rule

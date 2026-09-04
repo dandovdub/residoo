@@ -1,9 +1,11 @@
 "use strict";
 
 /**
- * `residoo guard`: a Claude Code PreToolUse hook that blocks an obviously-
- * sensitive file read before it happens, instead of finding the leak in the
- * transcript afterward.
+ * `residoo guard`: two Claude Code hooks in one binary, dispatched on the
+ * payload's own `hook_event_name` field.
+ *
+ * PreToolUse blocks an obviously-sensitive file read before it happens,
+ * instead of finding the leak in the transcript afterward.
  *
  * Scope, stated plainly because it is much narrower than "prevent secrets
  * from leaking": Claude Code's hooks API gives a PreToolUse hook the
@@ -17,16 +19,52 @@
  * and similar) -- it cannot catch a secret typed directly into a prompt, a
  * secret arriving in the output of an otherwise-unremarkable command
  * (curl, a build log), or any file path this pattern list does not name.
- * `residoo scan`/`watch`/`mcp` remain the actual safety net; this is a
- * narrower, best-effort tripwire on top, not a replacement for them.
+ *
+ * UserPromptSubmit closes exactly the "typed directly into a prompt" gap
+ * named above: Claude Code's own docs (code.claude.com/docs/en/hooks,
+ * fetched and read directly, not summarized secondhand) confirm this hook
+ * "runs before every prompt and blocks model processing until it
+ * completes" -- a real prevention point, not an after-the-fact alert.
+ * Verified precisely, not assumed: the payload's `prompt` field carries the
+ * exact submitted text (the field is `prompt`, NOT `user_prompt` -- a
+ * specific claim to the contrary did not survive this session's own
+ * adversarial verification pass), and a JSON response with
+ * `"decision": "block"` "prevents the prompt from being processed and
+ * erases it from context." Checked against residoo's existing 79
+ * high-confidence PATTERNS.js rules ONLY -- never NOISY_PATTERNS, never
+ * --verify (a network call), never --ocr (tesseract, and irrelevant to a
+ * text prompt anyway) -- because this hook has NO matcher support (it
+ * fires on every single prompt in every session, confirmed in the same
+ * docs) and must stay fast: Claude Code's own default timeout for this
+ * event's command hooks is 30s, down from 600s elsewhere, specifically
+ * because "a stuck hook stalls the session." A false positive here also
+ * costs more than a PreToolUse block: it erases the user's entire typed
+ * message, not one denied tool call, which is why this path additionally
+ * runs the same vendor-example/placeholder suppression `residoo scan`
+ * itself uses (see scan.js's VENDOR_EXAMPLE_VALUES/zeroEntropyTail) before
+ * ever blocking -- a documented AWS example key or an obvious placeholder
+ * must never eat a real prompt.
+ *
+ * Same fail-open timeout reality as scan.js's whole 30-vendor --verify
+ * surface, disclosed rather than hidden: per Claude Code's own docs, a
+ * command/http/mcp_tool hook (this one) that times out on UserPromptSubmit
+ * has its output discarded and "the prompt still reaches Claude" unblocked
+ * -- a genuinely slow scan cannot stall the session, but that also means
+ * this is best-effort, additive coverage, not an absolute guarantee, the
+ * same honesty already applied to --ocr.
  *
  * Fails safe in the direction of NOT blocking on any uncertainty: a
  * malformed hook payload, an unrecognized tool name, or a parse error all
  * fall through to "allow" (no stdout, exit 0) rather than denying a call
  * this module does not understand. The one thing this module must never do
- * is silently hang or crash the agent's turn over a tool call that was
- * always going to be fine.
+ * is silently hang or crash the agent's turn over a tool call -- or a
+ * prompt -- that was always going to be fine. `residoo scan`/`watch`/`mcp`
+ * remain the actual safety net; this is a narrower, best-effort tripwire on
+ * top, not a replacement for them.
  */
+
+const { PATTERNS, redact } = require("./patterns");
+const { VENDOR_EXAMPLE_VALUES, zeroEntropyTail } = require("./scan");
 
 // A matched path fragment must be preceded by a path separator or the start
 // of the string, and followed by either the end of the string (the common
@@ -127,12 +165,49 @@ function evaluateToolInput(toolName, toolInput) {
   };
 }
 
+// High-confidence only, computed once at module load (PATTERNS is a static
+// array): never NOISY_PATTERNS, matching the same elevated bar decodeLine/
+// ocrLine already use in scan.js for content one step removed from a plain
+// file line -- a user's own live-typed prompt deserves at least that same
+// bar, arguably a higher one given what a wrong block costs here (see this
+// file's own docstring).
+const PROMPT_GUARD_RULES = PATTERNS.filter((r) => r.confidence === "high");
+
 /**
- * Reads one PreToolUse hook payload from `input` (default stdin), decides,
- * and writes the hook's own JSON response protocol to `output` (default
- * stdout) -- exit code is the caller's job (bin/residoo.js), this returns
- * the intended process exit code instead of calling process.exit itself,
- * matching every other run* function in cli.js.
+ * Pure decision function: given a UserPromptSubmit hook payload's raw
+ * `prompt` string, decide whether to block. No I/O, fully unit-testable.
+ * Suppresses the same way `residoo scan` does (a documented vendor-example
+ * key, or an obviously-placeholder zero-entropy tail) before ever blocking
+ * -- a false positive here erases the user's entire typed message, not one
+ * denied tool call, so this path is deliberately more conservative than
+ * evaluateToolInput above, not just a copy of the same bar.
+ */
+function evaluatePromptText(promptText) {
+  if (typeof promptText !== "string" || !promptText) return { block: false, reason: null };
+  for (const rule of PROMPT_GUARD_RULES) {
+    rule.re.lastIndex = 0;
+    const m = rule.re.exec(promptText);
+    if (!m) continue;
+    const value = m[0];
+    if (VENDOR_EXAMPLE_VALUES.has(value) || zeroEntropyTail(value)) continue;
+    return {
+      block: true,
+      reason: `residoo guard: this prompt looks like it contains ${rule.label} (${redact(value)}). ` +
+        `Blocked before it could be sent. If this is a false positive, rephrase or remove it, or disable this hook in .claude/settings.json.`,
+    };
+  }
+  return { block: false, reason: null };
+}
+
+/**
+ * Reads one PreToolUse OR UserPromptSubmit hook payload from `input`
+ * (default stdin) -- distinguished by the payload's own `hook_event_name`
+ * common field, a single binary handling both the way Claude Code's own
+ * hook registration allows -- decides, and writes the hook's own JSON
+ * response protocol to `output` (default stdout) -- exit code is the
+ * caller's job (bin/residoo.js), this returns the intended process exit
+ * code instead of calling process.exit itself, matching every other run*
+ * function in cli.js.
  */
 async function runGuard({ input = process.stdin, output = process.stdout } = {}) {
   const chunks = [];
@@ -144,6 +219,20 @@ async function runGuard({ input = process.stdin, output = process.stdout } = {})
     payload = JSON.parse(raw);
   } catch {
     return 0; // malformed payload: fail open, never block on something we can't parse
+  }
+
+  // hook_event_name is a documented COMMON field present on every hook
+  // event's payload (code.claude.com/docs/en/hooks), not specific to one
+  // event -- checked first so a UserPromptSubmit payload (which has no
+  // tool_name/tool_input at all) never falls through to evaluateToolInput
+  // and is instead routed to its own decision function and its own
+  // response shape (decision:"block", not hookSpecificOutput.
+  // permissionDecision -- the two events do not share a response schema).
+  if (payload.hook_event_name === "UserPromptSubmit") {
+    const decision = evaluatePromptText(payload.prompt);
+    if (!decision.block) return 0;
+    output.write(JSON.stringify({ decision: "block", reason: decision.reason }) + "\n");
+    return 0;
   }
 
   const decision = evaluateToolInput(payload.tool_name, payload.tool_input);
@@ -159,4 +248,4 @@ async function runGuard({ input = process.stdin, output = process.stdout } = {})
   return 0;
 }
 
-module.exports = { evaluateToolInput, matchSensitivePath, runGuard, SENSITIVE_PATH_PATTERNS };
+module.exports = { evaluateToolInput, matchSensitivePath, evaluatePromptText, runGuard, SENSITIVE_PATH_PATTERNS };
