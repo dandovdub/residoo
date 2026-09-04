@@ -570,6 +570,32 @@ Every other tool's row reproduced unchanged. `residoo guard` touches no
 file this benchmark scores at all -- it is a separate hook binary path,
 not part of `scan()`.
 
+## residoo 0.8.2: one detection gap closed by reading a competitor's own issue tracker (added 2026-09-04)
+
+Cross-checking agentsweep's open GitHub issues (a direct competitor, not
+a hypothetical exercise) found three tracked issues for Cloudflare's
+current credential prefixes: `cfat_` and `cfut_`, which residoo's
+`cloudflare_api_token` rule already covered, and `cfk_` (the Global API
+Key -- full account access, arguably the most dangerous of the three),
+which it did not. Verified directly against Cloudflare's own docs
+(developers.cloudflare.com/fundamentals/api/get-started/token-formats,
+which describes all three with the identical `<prefix>_[40 characters]
+[checksum]` shape) before writing the fix, not assumed from the issue
+text alone. `src/patterns.js`'s regex extended from `cf[au]t_` to
+`cf(?:[au]t|k)_`; three new matching tests added (one per prefix,
+confirming each matches only `cloudflare_api_token` and no other rule).
+
+This corpus has no planted Cloudflare-family site (its planted families
+are anthropic/stripe/aws/slack/bearer/github/gitlab/connection-string/
+generic-password/npm/discord/private-key/jwt), so the full reproduce
+sequence -- still run rather than skipped, corpus regenerated, same
+72/55/44 counts -- confirms no regression rather than a new win: residoo
+stays 45/45 (100%), 100% precision, none-observed egress, byte-identical
+to 0.8.1 except the version label. Every other tool's row reproduced
+unchanged. A Cloudflare-family corpus addition (covering all three
+prefixes) is a natural next corpus update, not done here to keep this
+change scoped to the one real gap found.
+
 Monitored per scan, spawn to exit, by two dynamic layers: a refuse-and-log proxy trap
 (all proxy env pinned to it) and lsof polling of the scanner's own process tree at
 ~150ms. Cadence honesty: ~150ms is the sleep between poll ticks, and each tick shells

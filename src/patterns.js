@@ -145,11 +145,16 @@ const PATTERNS = [
   // Confirmed via airtable.com/developers/web/api: pat + 14 alnum + "." + 64 hex.
   { id: "airtable_token", label: "Airtable personal access token", confidence: "high",
     re: /\bpat[A-Za-z0-9]{14}\.[a-f0-9]{64}\b/g },
-  // Current Cloudflare API Token format only (cfat_/cfut_, confirmed via
-  // developers.cloudflare.com). The legacy format is a bare 40-char string
-  // with no prefix, left out for the same reason as CircleCI's legacy form.
+  // Current Cloudflare credential formats only (cfat_/cfut_/cfk_, all three
+  // confirmed via developers.cloudflare.com/fundamentals/api/get-started/token-formats,
+  // which describes all three with the identical "<prefix>_[40 characters]
+  // [checksum]" shape). cfk_ (Global API Key, full account access) found
+  // missing by cross-checking agentsweep's own open issue tracker -- it had
+  // cfat_/cfut_ before this project did, cfk_ after. The legacy formats are
+  // bare unprefixed strings, left out for the same reason as CircleCI's
+  // legacy form.
   { id: "cloudflare_api_token", label: "Cloudflare API token", confidence: "high",
-    re: /\bcf[au]t_[a-zA-Z0-9]{40}[a-f0-9]{8}\b/g },
+    re: /\bcf(?:[au]t|k)_[a-zA-Z0-9]{40}[a-f0-9]{8}\b/g },
   // Current Heroku API key format only (HRKU-AA + 58 chars, confirmed via
   // Heroku's own help docs). The legacy format is a bare UUID, left out:
   // "any UUID-shaped string" is exactly the noisy, unspecific shape this

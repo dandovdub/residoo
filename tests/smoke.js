@@ -86,6 +86,16 @@ async function main() {
   check("Stripe live key matched, only by stripe_key", matchesOnly("stripe_key", "sk_live_" + "a".repeat(24)));
   check("Stripe test secret key matched, only by stripe_test_key", matchesOnly("stripe_test_key", "sk_test_" + "a".repeat(24)));
   check("Stripe test restricted key matched, only by stripe_test_key", matchesOnly("stripe_test_key", "rk_test_" + "a".repeat(24)));
+  // Cloudflare: all three current prefixes (found missing cfk_ by
+  // cross-checking agentsweep's own open-issue tracker; cfat_/cfut_ were
+  // already covered). All three share the same documented "<prefix>_[40
+  // chars][8-char checksum]" shape per developers.cloudflare.com.
+  check("Cloudflare Account API Token (cfat_) matched, only by cloudflare_api_token",
+    matchesOnly("cloudflare_api_token", "cfat_" + "a".repeat(40) + "deadbeef"));
+  check("Cloudflare User API Token (cfut_) matched, only by cloudflare_api_token",
+    matchesOnly("cloudflare_api_token", "cfut_" + "a".repeat(40) + "deadbeef"));
+  check("Cloudflare Global API Key (cfk_) matched, only by cloudflare_api_token",
+    matchesOnly("cloudflare_api_token", "cfk_" + "a".repeat(40) + "deadbeef"));
 
   // ── sealcrypto: round-trip, wrong passphrase, tamper ──────────────────────
   const { sealFile, unsealFile, sealBuffer, unsealBuffer } = require("../src/sealcrypto");
