@@ -84,6 +84,50 @@ choices, and its README is honest about its own tradeoffs too. Worth a look
 if broader source coverage matters more to you than a minimal dependency
 footprint.
 
+## Medusa: the most credible peer found in this space
+
+[Medusa](https://github.com/Pantheon-Security/medusa) (PyPI
+`medusa-security`, AGPL-3.0-or-later) is the best-resourced direct
+competitor found researching this space: 976 stars, last pushed
+2026-08-10, with a real, substantive commit history since (native Rust
+and PHP rulesets, a Claude-Code-compromise detector, an attack-signature
+scanner, a `--trace-rules` diagnostics mode) -- an actively developed
+project, not a weekend script. Its `medusa secrets scan`/`purge`
+sub-feature shipped in release 2026.5.8 (2026-05-20) and covers the same
+target residoo does (Claude Code, Cursor, Copilot, Zed, Gemini CLI, plus
+shell history residoo does not touch: bash/zsh/fish, psql, mysql, python
+REPL), across 21 issuer types with interactive `[y/n/s/a/q]` redaction.
+
+It's one piece of a much bigger, differently-shaped tool: alongside
+secrets, Medusa also scans for prompt injection, MCP vulnerabilities, RAG
+poisoning, and roughly 200 CVE checks -- a broad AI/ML security scanner
+that happens to include transcript-secret-scanning, not a tool built
+around that one job the way residoo, Sieve, agentsweep, and DidILeak all
+are. That's a real, deliberate difference in identity, not a gap on
+either side: a security team already running a broader AI-security
+scanner has a reason to prefer Medusa's single-tool coverage; someone who
+wants the narrowest, most auditable thing that does exactly one job has a
+reason to prefer residoo.
+
+Two things worth naming precisely, in both directions:
+
+- Medusa's `purge` does in-place redaction with a byte-for-byte backup of
+  the original file kept alongside it -- the README states this
+  plainly, and it is the same failure class already documented above for
+  agentsweep: the pre-redaction secret doesn't disappear, it moves to a
+  second file, still in plaintext, still on disk. `--seal` takes a
+  different trade-off (encrypt a copy, touch nothing, never claim a file
+  is "cleaned") specifically to avoid that class.
+- Medusa's `scan --reveal` can print real, unmasked values, gated behind
+  typing `I UNDERSTAND` -- an explicit, opt-in escape hatch, more
+  conservative than DidILeak's JSON export shipping full values by
+  default, but still a capability residoo has no equivalent of anywhere:
+  no flag, no mode, no code path in residoo ever prints a raw value.
+
+Worth taking seriously as the strongest single benchmark for "what does
+excellent look like in this space," not dismissed as inactive or minor --
+it isn't either.
+
 ## Continuous mode: nobody else in the field has one
 
 Every tool in the table above, and every tool in residoo's own benchmark
