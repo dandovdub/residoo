@@ -138,6 +138,42 @@ injected secret could otherwise leak through.
 Sieve is GUI-only and macOS-only, with no CLI, CI, or cross-platform
 story, and (as of its last update) no continuous/watch mode either.
 
+## DidILeak: export-based, not at-rest
+
+[DidILeak](https://github.com/frangelbarrera/DidILeak) is a Python CLI
+(MIT, 7 stars as of 2026-09-04, last pushed 2026-09-01) with a strikingly
+similar pitch: local-first, no telemetry, "isn't a replacement for
+gitleaks or trufflehog... fills a different gap: scanning your own chat
+history that no other tool touches" -- its own README makes almost the
+identical framing residoo's own docs make. It ships two things residoo
+doesn't: a self-contained HTML dashboard per scan (drag-and-drop,
+filterable, screenshot-friendly) and a combined credentials-plus-PII
+scope (SSN, IBAN, Luhn-validated card numbers, email, phone), where
+residoo is deliberately credentials-only.
+
+The scope difference that matters most: DidILeak scans **export files**,
+not live session state, for its two best-known targets. Its ChatGPT and
+Claude support both require the user to manually export a conversation
+first (ChatGPT's Settings > Data controls, or claude.ai's own export) and
+feed that file in -- it has no support for Claude Code's actual
+`~/.claude/projects` session directory at all, the one residoo tails
+directly and by default. Only its Cursor support reads a live local
+store (Cursor's own SQLite, "best-effort" per its own docs, since
+Cursor's schema changes between versions -- residoo's own Cursor source
+hits the same reality, and reports it as a `"failed"` read rather than
+silently returning zero findings). Four
+tools total (ChatGPT, Claude web exports, Cursor, Kimi K3) against
+residoo's 44 sources, needs Python 3.9+ and a pip install (residoo needs
+only Node), no continuous/watch mode, and no live vendor verification.
+
+One real, worth-naming safety difference, the opposite direction from the
+Sieve comparison above: DidILeak's JSON report format explicitly ships
+**full, unmasked secret values** -- "for incident response," by its own
+README's own words; only its HTML report masks them. residoo never
+writes a raw secret value to any output in any format, in any command
+(see [What it does not do](../README.md#what-it-does-not-do)) -- a
+narrower, more conservative default than DidILeak's own stated trade-off.
+
 ## Verifying a found value is still live
 
 The field splits into two real postures, and residoo picked a side.
