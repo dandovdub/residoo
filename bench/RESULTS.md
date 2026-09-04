@@ -1282,6 +1282,63 @@ precedent as 0.11.0's own guard work). Verified directly: a blocked
 decision produces exactly one stderr line with the redacted preview and
 never the raw value; an allowed decision produces zero stderr bytes.
 
+## residoo 0.14.0: opt-in PII detection (SSN, credit card, IBAN) -- a different risk category, not a lower bar (added 2026-09-05)
+
+The other concrete, buildable gap the competitive DLP research named,
+independently corroborated by two direct competitors' own shipped
+detector lists (DidILeak, Medusa both cover PII alongside credentials).
+Kept entirely separate from `PATTERNS`/`NOISY_PATTERNS` in a new
+`src/pii.js`, on purpose: `docs/comparison.md`'s own DidILeak section
+already states residoo is "deliberately credentials-only" -- this doesn't
+change that default, it adds a separate, explicitly opt-in
+(`--include-pii`) category for a different reason than `NOISY_PATTERNS`
+has (a different risk category, not a lower confidence bar).
+
+Only three detectors, deliberately, not the five-plus a typical DLP
+product ships: DidILeak's own list also covers bare email (rated "low")
+and phone numbers (rated "info") -- both declined here as too common in
+ordinary, non-sensitive transcript text to meet this project's own
+high-confidence bar, opt-in or not. The three included all have a REAL
+mathematical validator, not just a shape match, which is what keeps this
+safe to ship as an additive category:
+
+- **US SSN** -- dashed format only (a bare 9-digit run is indistinguishable
+  from countless other numbers in a coding-agent transcript: ports, PIDs,
+  timestamps), with the Social Security Administration's own published
+  invalid-range rules excluded (area 000/666/900-999, group 00, serial
+  0000). No checksum exists for SSNs, so this is the one "medium"
+  confidence entry in the new module, disclosed rather than smoothed into
+  "high" alongside the other two.
+- **Credit card number** -- candidate 13-19-digit runs (ISO/IEC 7812's own
+  real-world range) are Luhn-validated before ever being reported; the
+  regex alone is never the detector.
+- **IBAN** -- candidate `[A-Za-z]{2}\d{2}[A-Za-z0-9]{11,30}` runs are
+  validated against the real ISO 7064 MOD 97-10 checksum. Disclosed scope
+  limit: this checks the generic structural rule and checksum, not each of
+  the ~70 IBAN-issuing countries' own exact fixed length -- a real
+  per-country table would need to be built and kept current, and the
+  checksum alone already rejects the overwhelming majority of non-IBAN
+  digit/letter runs.
+
+Architecture: a new, fully independent `piiLine` pass in `scan.js`,
+mirroring `decodeLine`/`ocrLine`'s shape rather than `matchLine`'s --
+none of `matchLine`'s AWS-pairing/verification machinery applies to PII,
+so reusing that complexity would have been the wrong model to copy.
+Rotation guidance for all three is deliberately framed differently from
+every credential entry in `rotation.js`: there is no issuer, no console,
+no "rotate" action for an SSN or a card number, so the guidance says what
+that actually looks like instead of forcing PII into vocabulary built for
+credentials.
+
+Full benchmark reproduce run: residoo stays 45/45 (100%), 100% precision,
+none-observed egress, byte-identical except the version label -- `--include-pii`
+defaults to false, and the new `piiLine` pass returns immediately when it
+is, so this run confirms no regression on the existing default path rather
+than exercising the new category (which has no corpus plant yet). Covered
+instead by dedicated unit tests (Luhn/IBAN validators against
+synthetically-computed-valid, never-real values) and two new
+`tests/fuzz.js` properties.
+
 ## Reproduce
 
 ```

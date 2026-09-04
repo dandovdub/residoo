@@ -4,6 +4,7 @@ const path = require("path");
 const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
 const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("./decode");
 const { isTesseractAvailable, extractImageBlocks, ocrImageBase64 } = require("./ocr");
+const { PII_PATTERNS } = require("./pii");
 const { findPairedSecret, findNearbyCandidate } = require("./pairing");
 const { looksRandom } = require("./rarity");
 const { decodeJwtExpiryMs } = require("./jwtExpiry");
@@ -272,7 +273,7 @@ function localTimestamp(d) {
  * absolute path can itself carry a username or a project name the rest of
  * this report is careful never to print.
  */
-async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, verifyOnlyFingerprint = null, onBeforeVerify = null, noColor = false, ocr = false } = {}) {
+async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, verifyOnlyFingerprint = null, onBeforeVerify = null, noColor = false, ocr = false, includePii = false } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
   // --ocr: checked once, not per line/image -- isTesseractAvailable shells
   // out, and this scan can touch thousands of lines. ocrRequestedButMissing
@@ -600,6 +601,34 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     }
   };
 
+  // --include-pii: a completely separate pass from every rule above, on
+  // purpose -- PII (see pii.js) is a different RISK CATEGORY from a
+  // credential, not just a lower-confidence version of one, so it gets its
+  // own opt-in flag and its own pass rather than being folded into `rules`.
+  // None of matchLine's AWS-pairing/verification machinery applies to PII
+  // at all, so this mirrors decodeLine/ocrLine's simpler shape, not
+  // matchLine's. `validate` (Luhn, IBAN's MOD 97-10) runs before a
+  // candidate is even considered for suppression -- an invalid checksum
+  // is not a "placeholder," it's simply not a match.
+  const piiLine = (line, file, relFile, lineNo, mtimeMs) => {
+    if (!includePii) return;
+    for (const rule of PII_PATTERNS) {
+      rule.re.lastIndex = 0;
+      let m;
+      while ((m = rule.re.exec(line)) !== null) {
+        if (rule.validate && !rule.validate(m[0])) continue;
+        const before = line.slice(Math.max(0, m.index - CONTEXT_WINDOW), m.index);
+        const suppressedReason = suppressionReason(m[0], before, rule.id);
+        if (suppressedReason && !includeSuppressed) {
+          suppressedCount++;
+          continue;
+        }
+        record(rule, m[0], relFile, file, lineNo, mtimeMs,
+          suppressedReason ? "low" : rule.confidence, suppressedReason, { pii: true });
+      }
+    }
+  };
+
   // Feature 2: split-line boundary join. A finding here means one credential
   // was split across this line and the next and is contiguous on neither. It
   // is recorded against BOTH contributing lines (each holds a fragment of the
@@ -713,6 +742,13 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           if (ocrReady) {
             try {
               ocrLine(line, file, relFile, i + 1, mtimeMs);
+            } catch (err) {
+              flagFailed();
+            }
+          }
+          if (includePii) {
+            try {
+              piiLine(line, file, relFile, i + 1, mtimeMs);
             } catch (err) {
               flagFailed();
             }

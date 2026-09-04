@@ -150,6 +150,14 @@ Scan options:
                           similar characters (0/O, Y/*) can be misread,
                           which breaks an exact-format match, so this is
                           best-effort additional coverage, not a guarantee.
+  --include-pii           also scan for PII: US Social Security Numbers
+                          (dashed format only), credit card numbers
+                          (Luhn-validated), and IBANs (checksum-validated).
+                          A different RISK CATEGORY, not a lower confidence
+                          bar -- residoo is deliberately credentials-only
+                          by default. Deliberately excludes bare email/
+                          phone (too common in ordinary text to meet this
+                          project's own high-confidence bar even opt-in).
 
 Watch:
   residoo watch            continuous scanning instead of one snapshot:
@@ -918,6 +926,12 @@ async function main(argv) {
   // exact confirmed image shape this looks for and its honest accuracy
   // limitations.
   const wantsOcr = args.includes("--ocr");
+  // --include-pii: a different RISK CATEGORY, not a lower confidence bar
+  // (see pii.js) -- residoo is deliberately credentials-only by default;
+  // this opts into three checksum-validated categories (SSN, Luhn-valid
+  // card numbers, IBAN) rather than the shape-only, much noisier
+  // categories (bare email, phone) some competitors also ship.
+  const wantsPii = args.includes("--include-pii");
 
   // --project [dir]: the dir is optional (CI passes ".", a bare --project
   // means the current directory). null means machine mode.
@@ -1029,7 +1043,7 @@ async function main(argv) {
 
   const progress = makeProgressReporter(noColor);
   const result = await scan({
-    sources, includeNoisy, includeSuppressed, verify, noColor, ocr: wantsOcr,
+    sources, includeNoisy, includeSuppressed, verify, noColor, ocr: wantsOcr, includePii: wantsPii,
     onProgress: progress.onProgress,
     // Clears the spinner's last frame before --verify's own stderr lines
     // print; without this the last spinner line sits uncleared on screen

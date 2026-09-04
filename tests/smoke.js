@@ -503,6 +503,71 @@ async function main() {
       typeof missingRes.ocrRequestedButMissing === "boolean");
   }
 
+  // ── pii: luhnValid / ibanValid (pure validators, no process spawn) ─────────
+  {
+    const { luhnValid, ibanValid, PII_PATTERNS } = require("../src/pii");
+    // A synthetic 16-digit number computed to satisfy the real Luhn
+    // checksum -- not any known test-card BIN, never a real card.
+    check("luhnValid: accepts a real Luhn-valid 16-digit number",
+      luhnValid("7901000000000005"));
+    check("luhnValid: rejects the same number with the last digit changed",
+      !luhnValid("7901000000000006"));
+    // A synthetic IBAN (fake XX country code) computed to satisfy the real
+    // ISO 7064 MOD 97-10 checksum.
+    check("ibanValid: accepts a real checksum-valid synthetic IBAN",
+      ibanValid("XX14BANK00001234567890"));
+    check("ibanValid: rejects the same IBAN with the check digits changed",
+      !ibanValid("XX00BANK00001234567890"));
+    check("ibanValid: rejects a too-short string rather than throwing",
+      ibanValid("XX1234") === false);
+
+    check("US SSN (dashed format) matched, only by us_ssn",
+      (() => {
+        const matched = PII_PATTERNS.filter((p) => { p.re.lastIndex = 0; return p.re.test("SSN: 123-45-6789"); }).map((p) => p.id);
+        return matched.length === 1 && matched[0] === "us_ssn";
+      })());
+    check("an SSN-shaped number with an invalid area code (000) is never matched",
+      !PII_PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("000-45-6789"); }));
+    check("an SSN-shaped number with the invalid area code 666 is never matched",
+      !PII_PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("666-45-6789"); }));
+    check("a bare 9-digit number with no dashes is never matched (too noisy to be high-confidence)",
+      !PII_PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("123456789"); }));
+    check("credit_card_number rule matches the Luhn-valid synthetic number, and only after validation",
+      (() => {
+        const rule = PII_PATTERNS.find((p) => p.id === "credit_card_number");
+        rule.re.lastIndex = 0;
+        const m = rule.re.exec("card on file: 7901000000000005 exp 12/30");
+        return m && rule.validate(m[0]);
+      })());
+    check("credit_card_number rule's own regex matches a non-Luhn-valid number, but validate() correctly rejects it",
+      (() => {
+        const rule = PII_PATTERNS.find((p) => p.id === "credit_card_number");
+        rule.re.lastIndex = 0;
+        const m = rule.re.exec("random number: 1234567890123456 end");
+        return m && !rule.validate(m[0]);
+      })());
+  }
+
+  // ── pii: full scan.js wiring, --include-pii end to end ─────────────────────
+  {
+    const ssnLine = JSON.stringify({ message: { content: "here is an SSN: 123-45-6789 for the form" } }) + "\n";
+    const ccLine = JSON.stringify({ message: { content: "card on file: 7901000000000005 exp 12/30" } }) + "\n";
+    const ibanLine = JSON.stringify({ message: { content: "wire to IBAN XX14BANK00001234567890 please" } }) + "\n";
+    const combined = ssnLine + ccLine + ibanLine;
+
+    const withPii = await scanOneFile("pii.jsonl", combined, { includePii: true });
+    check("--include-pii finds all three: SSN, Luhn-valid card, checksum-valid IBAN",
+      ["us_ssn", "credit_card_number", "iban"].every((id) => withPii.findings.some((f) => f.ruleId === id)));
+    check("--include-pii findings carry the pii:true marker",
+      withPii.findings.filter((f) => ["us_ssn", "credit_card_number", "iban"].includes(f.ruleId)).every((f) => f.pii === true));
+    check("--include-pii findings are redacted the same as every other finding -- the raw card/IBAN never appears",
+      !JSON.stringify(withPii.findings).includes("7901000000000005") && !JSON.stringify(withPii.findings).includes("BANK00001234567890"));
+
+    const withoutPii = await scanOneFile("pii2.jsonl", combined, { includePii: false });
+    check("without --include-pii, the exact same transcript finds none of the three PII categories (off by default)",
+      !["us_ssn", "credit_card_number", "iban"].some((id) => withoutPii.findings.some((f) => f.ruleId === id)));
+  }
+
   {
     // Feature 1a: a findable AWS-shaped key present ONLY base64-encoded, and
     // wrapped at 76 columns so the key straddles a wrap boundary — the decoder
@@ -2798,8 +2863,9 @@ async function main() {
       loadDismissed, dismissFinding,
     } = require("../src/rotation");
     const { NOISY_PATTERNS } = require("../src/patterns");
+    const { PII_PATTERNS } = require("../src/pii");
 
-    const allIds = PATTERNS.concat(NOISY_PATTERNS).map((p) => p.id);
+    const allIds = PATTERNS.concat(NOISY_PATTERNS).concat(PII_PATTERNS).map((p) => p.id);
     const missing = allIds.filter((id) => !ROTATION_GUIDANCE[id]);
     if (missing.length > 0) console.log("  missing guidance ids: " + missing.join(", "));
     check(`every one of the ${allIds.length} pattern ids has a rotation guidance entry`, missing.length === 0);

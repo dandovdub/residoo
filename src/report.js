@@ -534,15 +534,18 @@ function renderJson(result, integrity = null, rotation = null) {
         rule: f.ruleId, label: f.label, confidence: f.confidence,
         source: f.source, file: f.relFile, line: f.line, preview: f.preview,
         fileMTimeMs: f.fileMTimeMs,
-        // Markers for the decode/reconstruct/OCR passes (absent on ordinary
-        // findings). `encoding` names how the value was wrapped ("base64" /
-        // "base64url"); `spanLines` names the adjacent line pair a split value
-        // was reconstructed across; `ocr` means the value was never plain
-        // text at all -- it was read out of a pasted or tool-returned image
-        // (see ocr.js).
+        // Markers for the decode/reconstruct/OCR/PII passes (absent on
+        // ordinary findings). `encoding` names how the value was wrapped
+        // ("base64" / "base64url"); `spanLines` names the adjacent line
+        // pair a split value was reconstructed across; `ocr` means the
+        // value was never plain text at all -- it was read out of a
+        // pasted or tool-returned image (see ocr.js); `pii` means this is
+        // a --include-pii finding, a different risk category from a
+        // credential, not a rule from the default set (see pii.js).
         ...(f.encoding ? { encoding: f.encoding } : {}),
         ...(f.spanLines ? { spanLines: f.spanLines } : {}),
         ...(f.ocr ? { ocr: true } : {}),
+        ...(f.pii ? { pii: true } : {}),
         fingerprint: fingerprintFinding(f),
         // Only present on an --include-suppressed run: says WHY this finding
         // is low-confidence, so a JSON consumer doesn't have to guess.

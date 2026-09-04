@@ -1146,6 +1146,42 @@ const ROTATION_GUIDANCE = {
     revokeNote: "Revocation is immediate; anything still using the old token starts failing authentication at once.",
   },
 
+  // ── PII (only reachable via --include-pii) ─────────────────────────────
+  // Framed deliberately differently from every entry above: PII has no
+  // issuer to revoke a credential with, no console to rotate it in. The
+  // real action is "should this data exist in this file at all" and, if it
+  // was genuinely exposed to someone who shouldn't have it, who to tell.
+  us_ssn: {
+    label: "US Social Security Number",
+    consolePath: "There is no vendor console for this -- an SSN can't be rotated the way a credential can.",
+    steps: [
+      "Confirm this is a real SSN and not a placeholder/test value (no checksum exists for SSNs, so this rule has no mathematical validator behind it, unlike the two below)",
+      "Remove it from the transcript file if it doesn't need to be there (residoo scan --seal quarantines the whole file without deleting anything, if you want a reversible first step)",
+      "If it was genuinely exposed to someone who shouldn't have it, that's an identity-theft exposure, not an account compromise -- the affected person (you, a customer, an employee) may want to consider a credit freeze or fraud alert with the credit bureaus, not \"rotate a key\"",
+    ],
+    revokeNote: "Unlike every credential rule in this file, there is no revoke/rotate action available at all -- the number itself doesn't change.",
+  },
+  credit_card_number: {
+    label: "Credit card number (Luhn-validated)",
+    consolePath: "The card issuer's own fraud/support line, or your payment processor's dashboard if this is a customer's card, not your own.",
+    steps: [
+      "If it's your own card, most issuers let you freeze or reissue it from their app without waiting for a physical replacement",
+      "If it's a customer's or someone else's card, tell them directly -- they need to contact their own issuer, you can't act on their behalf",
+      "Remove it from the transcript file if it doesn't need to be there",
+    ],
+    revokeNote: "This passed a real Luhn checksum, so it is very unlikely to be a random-looking placeholder -- treat it as a real card number until shown otherwise.",
+  },
+  iban: {
+    label: "IBAN (checksum-validated)",
+    consolePath: "The account holder's own bank.",
+    steps: [
+      "An IBAN alone (without the account holder's separate authentication, e.g. a SEPA mandate) can't usually initiate a transfer by itself, but it's still a real bank account identifier -- treat exposure as a privacy issue even where it isn't immediately a fraud one",
+      "If it's your own account and you're concerned, your bank can advise on IBAN-specific fraud monitoring",
+      "Remove it from the transcript file if it doesn't need to be there",
+    ],
+    revokeNote: "This passed the real ISO 7064 MOD 97-10 checksum every valid IBAN must satisfy, so it is very unlikely to be a random-looking placeholder.",
+  },
+
   // ── NOISY_PATTERNS (only reachable via --include-noisy) ───────────────
   generic_password_assignment: {
     label: "Password assignment (noisy rule)",

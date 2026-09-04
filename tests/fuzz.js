@@ -26,6 +26,7 @@ const { PATTERNS, NOISY_PATTERNS, redact } = require("../src/patterns");
 const { evaluateToolInput, matchSensitivePath, evaluatePromptText } = require("../src/guard");
 const { fingerprintFinding } = require("../src/rotation");
 const { extractImageBlocks } = require("../src/ocr");
+const { luhnValid, ibanValid } = require("../src/pii");
 
 const ALL_RULES = PATTERNS.concat(NOISY_PATTERNS);
 const NUM_RUNS = process.env.FUZZ_RUNS ? Number(process.env.FUZZ_RUNS) : 2000;
@@ -155,6 +156,20 @@ property("extractImageBlocks never throws on any string, real JSON shape or not"
 property("extractImageBlocks never throws on arbitrary JSON-shaped values, and always returns an array",
   fc.jsonValue({ maxDepth: 15 }),
   (value) => Array.isArray(extractImageBlocks(JSON.stringify(value))));
+
+// ── pii.js: both validators run on regex-matched substrings of a
+// transcript line -- attacker-shapeable in the same sense as anything
+// else in this file. Neither is documented to require digit-only input at
+// this layer (the real call site in scan.js pre-filters), but both must
+// survive arbitrary text regardless, the same defense-in-depth standard
+// every other property in this file already holds to.
+property("luhnValid never throws on any string, digit-only or not",
+  fc.string({ maxLength: 200 }),
+  (s) => { luhnValid(s); return true; });
+
+property("ibanValid never throws on any string, any length or content",
+  fc.string({ maxLength: 200 }),
+  (s) => { ibanValid(s); return true; });
 
 console.log(`\n${NUM_RUNS} runs per property, ${failed === 0 ? "0 failed" : `${failed} FAILED`}`);
 process.exitCode = failed ? 1 : 0;
