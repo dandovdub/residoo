@@ -16,12 +16,20 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write # also creates the GitHub Release + uploads provenance assets below
+  contents: read
   id-token: write # required for OIDC trusted publishing
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # contents: write only at job level, not the workflow-level default
+    # above -- least privilege, and it's what Scorecard's Token-Permissions
+    # check itself wants structurally (a workflow-level write grant applies
+    # to every job in the file, including any added later that doesn't
+    # need it), same reasoning as test-sarif.yml's existing job-level scope.
+    permissions:
+      contents: write # creates the GitHub Release + uploads provenance assets below
+      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
