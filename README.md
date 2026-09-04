@@ -65,17 +65,24 @@ covered in [docs/features.md](docs/features.md).
 
 Scored #1 of 8 real competing tools on a reproducible, synthetic-but-
 pattern-true corpus, with live egress monitoring so "no network calls" is
-observed, not just documented:
+observed, not just documented. All 8, not just the closest one:
 
-| | residoo | best of the rest |
-|---|---|---|
-| Distinct credentials found (all claimed classes) | **45/45 (100%)** | agentsweep 33/42 (79%) |
-| Precision (false positives) | **100%** (0 of 55 flags wrong) | gitleaks, whatileaked, trufflehog also 100% |
-| Network egress during the scan | **none-observed** | 3 of 8 tools attempt real outbound calls in their *default* mode |
+| tool | distinct credentials found | precision | egress during the scan |
+|---|---|---|---|
+| **residoo** | **45/45 (100%)** | **100%** | **none-observed** |
+| agentsweep | 33/42 (79%) | 100% | none-observed |
+| gitleaks | 32/45 (71%) | 100% | none-observed |
+| betterleaks | 32/45 (71%) | 100% | none-observed |
+| whatileaked | 28/42 (67%) | 100% | none-observed |
+| kingfisher | 29/45 (64%) | 100% | attempts calls in default mode |
+| trufflehog | 29/45 (64%) | 97% | attempts calls in default mode |
+| detect-secrets | 25/45 (56%) | 2% | attempts calls in default mode |
 
-Published while losing rows, then fixed in public against the classes it
-was losing — full methodology, every dated rerun, and how to reproduce it
-yourself: [docs/benchmark.md](docs/benchmark.md).
+GitGuardian's `ggshield` is documented, not scored: it refuses to run
+without a server account, so there's no local result to measure. Published
+while losing rows, then fixed in public against the classes it was losing
+— full methodology, every dated rerun, and how to reproduce it yourself:
+[docs/benchmark.md](docs/benchmark.md).
 
 ## What it does
 
