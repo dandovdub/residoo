@@ -572,6 +572,71 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "A key grants full account access (voices, generations, billing); deletion is immediate.",
   },
+  // docs.nvidia.com's own key-management pages point at build.nvidia.com
+  // for personal keys; login-walled, hence the path in words.
+  nvidia_api_key: {
+    label: "NVIDIA API key",
+    consolePath: "build.nvidia.com > your profile > API Keys",
+    steps: [
+      "Open API Keys under your NVIDIA Build profile",
+      "Delete the leaked key",
+      "Generate a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; anything still using the old key starts failing authentication at once.",
+  },
+  jina_key: {
+    label: "Jina AI API key",
+    consolePath: "jina.ai > API keys (jina.ai/api-dashboard/key-manager)",
+    steps: [
+      "Open the API key manager",
+      "Delete the leaked key",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; anything still using the old key starts failing authentication at once.",
+  },
+  tavily_key: {
+    label: "Tavily API key",
+    consolePath: "app.tavily.com > API Keys",
+    steps: [
+      "Open API Keys in the Tavily dashboard",
+      "Delete the leaked key",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; anything still using the old key starts failing authentication at once.",
+  },
+  firecrawl_key: {
+    label: "Firecrawl API key",
+    consolePath: "firecrawl.dev dashboard > API Keys",
+    steps: [
+      "Open API Keys in the Firecrawl dashboard",
+      "Delete the leaked key",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; anything still using the old key starts failing authentication at once.",
+  },
+  // Format is not Databricks-primary-sourced (see the comment in
+  // src/patterns.js), but the rotation location itself is confirmed
+  // directly from Databricks' own docs (docs.databricks.com/aws/en/dev-tools/auth/pat).
+  databricks_pat: {
+    label: "Databricks personal access token",
+    consolePath: "Databricks workspace > User Settings > Developer > Access tokens",
+    steps: [
+      "Open Access tokens under Developer settings in the workspace",
+      "Revoke the leaked token",
+      "Create a replacement with the shortest lifetime that works for your use case",
+    ],
+    revokeNote: "Revocation is immediate; anything still using the old token starts failing authentication at once.",
+  },
+  sourcegraph_token: {
+    label: "Sourcegraph access token",
+    rotateUrl: "https://sourcegraph.com/docs/cli/how-tos/creating_an_access_token",
+    steps: [
+      "Sourcegraph instance > user menu > Settings > Access tokens",
+      "Delete the leaked token",
+      "Create a replacement with the narrowest scopes it needs",
+    ],
+    revokeNote: "Deletion is immediate; anything still using the old token starts failing authentication at once.",
+  },
 
   // ── Cloud / infra ─────────────────────────────────────────────────────
   // docs.digitalocean.com/reference/api/create-personal-access-token/
@@ -962,6 +1027,71 @@ const ROTATION_GUIDANCE = {
       "Create a replacement and update whatever used the old one",
     ],
     revokeNote: "Deletion is immediate; the key stops authenticating on the next request.",
+  },
+  // shopify.dev/docs/apps/build/authentication-authorization/access-tokens
+  shopify_admin_token: {
+    label: "Shopify Admin API access token",
+    rotateUrl: "https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens",
+    steps: [
+      "For a custom app: Shopify admin > Settings > Apps and sales channels > the app > uninstall/reinstall to reissue",
+      "For a public/private app: revoke access from the Partner Dashboard and reinstall",
+      "Update whatever used the old token",
+    ],
+    revokeNote: "This token can read/write store data (orders, customers, products) depending on its scopes -- review recent admin activity, not just API logs.",
+  },
+  hubspot_token: {
+    label: "HubSpot private app access token",
+    consolePath: "HubSpot account > Settings > Integrations > Private Apps",
+    steps: [
+      "Open Private Apps under Integrations",
+      "Open the relevant app and rotate or delete its access token",
+      "Update whatever used the old token",
+    ],
+    revokeNote: "Deletion/rotation is immediate; anything still using the old token starts failing authentication at once.",
+  },
+  // grafana.com/docs/grafana/latest/administration/service-accounts/
+  grafana_service_account_token: {
+    label: "Grafana service account token",
+    rotateUrl: "https://grafana.com/docs/grafana/latest/administration/service-accounts/",
+    steps: [
+      "Administration > Users and access > Service accounts",
+      "Open the relevant service account and delete the leaked token",
+      "Add a replacement token and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; anything still using the old token starts failing authentication at once.",
+  },
+  // docs.newrelic.com's own migration notice confirms the NRAK prefix;
+  // key management itself is login-walled.
+  new_relic_api_key: {
+    label: "New Relic API key",
+    consolePath: "one.newrelic.com > API keys (under your user menu)",
+    steps: [
+      "Open API keys",
+      "Delete the leaked key",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; anything still using the old key starts failing authentication at once.",
+  },
+  mailchimp_key: {
+    label: "Mailchimp API key",
+    consolePath: "Mailchimp account > Profile > Extras > API keys",
+    steps: [
+      "Open API keys under Extras in your account profile",
+      "Delete the leaked key",
+      "Create a replacement and update whatever used the old one",
+    ],
+    revokeNote: "Deletion is immediate; anything still using the old key starts failing authentication at once.",
+  },
+  // techdocs.akamai.com/developer/docs/authenticate-with-edgegrid
+  akamai_edgegrid_token: {
+    label: "Akamai EdgeGrid token",
+    rotateUrl: "https://techdocs.akamai.com/developer/docs/authenticate-with-edgegrid",
+    steps: [
+      "Akamai Control Center > Identity & access management > API clients",
+      "Open the relevant API client and deactivate/delete the leaked credential",
+      "Create a replacement client credential and update whatever used the old one",
+    ],
+    revokeNote: "Deactivation is immediate; anything still using the old credential starts failing authentication at once.",
   },
 
   // ── NOISY_PATTERNS (only reachable via --include-noisy) ───────────────

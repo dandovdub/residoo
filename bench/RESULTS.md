@@ -987,6 +987,63 @@ byte-identical to 0.8.6 except the version label. Every other tool's row
 reproduced unchanged. One more batch (AI/ML vendors and other SaaS) from the
 same research pass is still queued for the next release.
 
+## residoo 0.8.8: AI/ML vendors and other SaaS, the last batch from the same research pass (added 2026-09-04)
+
+The third and final batch from 0.8.6's four-agent research pass. Twelve new
+rules, closing out the AI/ML-vendor and other-SaaS candidates that pass
+surfaced:
+
+- **NVIDIA** (`nvapi-`), **Tavily** (`tvly-`), **Jina AI** (`jina_`),
+  **Firecrawl** (`fc-`) -- four AI-agent tool-integration API keys, prefixes
+  confirmed via each vendor's own docs or official SDK repos, exact body
+  lengths not independently pinned for three of the four (stated plainly in
+  each rule's own comment rather than presented as more certain than it is).
+- **Databricks PAT** (`dapi` + 32 hex) -- the one "medium" confidence rule
+  in this batch. Databricks' own docs deliberately show only placeholder
+  tokens; this rests on two independent secondary sources agreeing
+  (Microsoft Purview's own Sensitive-Information-Type definition, and
+  TruffleHog's shipped detector) rather than a Databricks-primary source.
+  The strict lowercase-hex body was checked against a real false-positive
+  noseyparker's own maintainers had already found and fixed: Binance uses
+  the same "dapi" naming convention for its futures API
+  (`dapiDataGetTopLongShortPositionRatio`), which this rule's hex-only body
+  requirement never matches (confirmed by a dedicated smoke test).
+- **Sourcegraph** (`sgp_`) -- prefix vendor-confirmed; noted in the rule's
+  own comment (not shipped, since it's out of scope, just disclosed) that
+  Segment's own "Public API Token" also uses an `sgp_` prefix with a
+  different, non-overlapping body shape -- worth an explicit collision test
+  if Segment is ever added.
+- **Shopify Admin API token** (`shpat_`/`shppa_`), **Grafana service account
+  token** (`glsa_`, exact shape read straight off Grafana's own docs
+  example), **New Relic** (`NRAK-`) -- all vendor-prefix-confirmed.
+- **HubSpot private app token** (`pat-<region>-...`) -- the other "medium"
+  confidence rule: HubSpot's own docs only show a masked example, so the
+  shape is corroborated via real (redacted) examples on HubSpot's own
+  community forum rather than a fully primary-sourced spec.
+- **Mailchimp** (`<32 hex>-us<N>`) -- the one rule in this batch with no
+  distinctive prefix at all; safety comes entirely from the literal `-usN`
+  datacenter suffix, read directly off a live example in Mailchimp's own
+  docs, not from an opaque body alone.
+- **Akamai EdgeGrid token** (`akab-...-...`) -- confirmed via Akamai's own
+  docs (literal examples shown) plus an independent detect-secrets
+  maintainer reproduction.
+
+Pattern count moved 67 to 79. As with 0.8.6 and 0.8.7, this corpus has no
+plant for any of these twelve families yet, so the full reproduce sequence
+confirms no regression rather than exercising the new coverage directly:
+residoo stays 45/45 (100%), 100% precision, none-observed egress,
+byte-identical to 0.8.7 except the version label. Every other tool's row
+reproduced unchanged.
+
+This closes out the four-agent research pass started in 0.8.6: three
+releases (0.8.6, 0.8.7, 0.8.8), two real bugs fixed in already-shipped
+rules, one confirmed live gap closed (Supabase secret key), and 27 total
+new/widened rules from ~40 candidates the four agents originally surfaced
+-- the remainder either declined outright (no primary source, or a
+structurally unsafe bare/unprefixed shape) or already covered by an
+existing rule, each with its reasoning disclosed in the relevant commit
+and in `src/patterns.js`'s own comments.
+
 ## Reproduce
 
 ```

@@ -203,6 +203,45 @@ async function main() {
   check("a JWT is never mistaken for a Discord bot token (JWT segments start with the literal eyJ, not M/N/O)",
     !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("eyJ" + "a".repeat(20) + ".eyJ" + "a".repeat(20) + "." + "a".repeat(20)) && p.id === "discord_bot_token"; }));
 
+  // ── batch 3: AI/ML vendors + other SaaS (2026-09-04) ───────────────────
+  check("NVIDIA API key matched, only by nvidia_api_key",
+    matchesOnly("nvidia_api_key", "nvapi-" + "a".repeat(60)));
+  check("Jina AI API key matched, only by jina_key",
+    matchesOnly("jina_key", "jina_" + "a".repeat(60)));
+  check("Tavily API key matched, only by tavily_key",
+    matchesOnly("tavily_key", "tvly-" + "a".repeat(32)));
+  check("Firecrawl API key matched, only by firecrawl_key",
+    matchesOnly("firecrawl_key", "fc-" + "a".repeat(32)));
+  // Databricks: strict lowercase-hex body deliberately excludes Binance's
+  // own "dapi" method-naming convention (e.g. dapiDataGetTopLongShortPositionRatio),
+  // which is not hex and so never matches.
+  check("Databricks PAT matched, only by databricks_pat",
+    matchesOnly("databricks_pat", "dapi" + "a".repeat(32)));
+  check("Databricks PAT with the optional trailing -<digits> suffix still matched, only by databricks_pat",
+    matchesOnly("databricks_pat", "dapi" + "a".repeat(32) + "-1"));
+  check("Binance's dapi-prefixed API method names are never mistaken for a Databricks PAT",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("dapiDataGetTopLongShortPositionRatio"); }));
+  check("Sourcegraph access token (bare hex form) matched, only by sourcegraph_token",
+    matchesOnly("sourcegraph_token", "sgp_" + "a".repeat(40)));
+  check("Sourcegraph access token (local_ form) matched, only by sourcegraph_token",
+    matchesOnly("sourcegraph_token", "sgp_local_" + "a".repeat(40)));
+  check("Shopify Admin API access token (shpat_) matched, only by shopify_admin_token",
+    matchesOnly("shopify_admin_token", "shpat_" + "a".repeat(32)));
+  check("Shopify delegate access token (shppa_) matched, only by shopify_admin_token",
+    matchesOnly("shopify_admin_token", "shppa_" + "a".repeat(32)));
+  check("HubSpot private app access token matched, only by hubspot_token",
+    matchesOnly("hubspot_token", "pat-na1-" + "a".repeat(34)));
+  check("Grafana service account token matched, only by grafana_service_account_token",
+    matchesOnly("grafana_service_account_token", "glsa_" + "a".repeat(32) + "_" + "1".repeat(8)));
+  check("New Relic API key matched, only by new_relic_api_key",
+    matchesOnly("new_relic_api_key", "NRAK-" + "A".repeat(27)));
+  check("Mailchimp API key matched, only by mailchimp_key",
+    matchesOnly("mailchimp_key", "a".repeat(32) + "-us6"));
+  check("a bare 32-char hex string with no -usN suffix is never mistaken for a Mailchimp key",
+    !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("commit " + "a".repeat(32) + " looks fine"); }));
+  check("Akamai EdgeGrid token matched, only by akamai_edgegrid_token",
+    matchesOnly("akamai_edgegrid_token", "akab-" + "a".repeat(20) + "-" + "b".repeat(20)));
+
   // ── sealcrypto: round-trip, wrong passphrase, tamper ──────────────────────
   const { sealFile, unsealFile, sealBuffer, unsealBuffer } = require("../src/sealcrypto");
   const src = path.join(tmp, "orig.bin");

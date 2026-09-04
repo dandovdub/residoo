@@ -228,6 +228,50 @@ const PATTERNS = [
   // collide with any of them.
   { id: "elevenlabs_key", label: "ElevenLabs API key", confidence: "high",
     re: /\bsk_[a-f0-9]{48}\b/g },
+  // Third batch from the 2026-09-04 competitor research pass. NVIDIA's own
+  // docs (docs.nvidia.com) confirm the nvapi- prefix ("Keys typically start
+  // with nvapi-") without stating an exact length.
+  { id: "nvidia_api_key", label: "NVIDIA API key", confidence: "high",
+    re: /\bnvapi-[A-Za-z0-9_-]{40,200}\b/g },
+  // Jina AI: prefix confirmed via Jina's own GitHub org/SDKs and broad
+  // ecosystem documentation; exact 60-char length taken from noseyparker's
+  // own shipped rule, not independently pinned by a Jina spec page.
+  { id: "jina_key", label: "Jina AI API key", confidence: "high",
+    re: /\bjina_[A-Za-z0-9]{60}\b/g },
+  // Tavily: tvly- prefix confirmed via Tavily's own official SDK repos
+  // (tavily-python, tavily-js); exact 32-char length not independently
+  // pinned by a dedicated format spec page.
+  { id: "tavily_key", label: "Tavily API key", confidence: "high",
+    re: /\btvly-[A-Za-z0-9]{32}\b/g },
+  // Firecrawl: fc- prefix appears in Firecrawl's own docs and SDKs, but
+  // only as illustrative placeholders -- no page independently confirms
+  // the exact 32-lowercase-hex body. Shipped anyway on the combination of
+  // the prefix plus a strict hex-only body requirement right after it.
+  { id: "firecrawl_key", label: "Firecrawl API key", confidence: "high",
+    re: /\bfc-[a-f0-9]{32}\b/g },
+  // Databricks PAT: Databricks' own docs deliberately show only placeholder
+  // tokens, no real format. Corroborated by two independent secondary
+  // sources instead -- Microsoft Purview's own Sensitive-Information-Type
+  // definition for Azure Databricks PATs, and TruffleHog's shipped OSS
+  // detector -- both agreeing on dapi + 32 lowercase hex, optionally a
+  // trailing -<digits>. Not Databricks-primary-sourced, so flagged medium
+  // rather than high like the rest of this file. The strict lowercase-hex
+  // body avoids the one real collision risk found during research: Binance
+  // also uses a "dapi" naming convention for its COIN-margined futures API
+  // (e.g. dapiDataGetTopLongShortPositionRatio), but that never matches
+  // since it isn't hex.
+  { id: "databricks_pat", label: "Databricks personal access token", confidence: "medium",
+    re: /\bdapi[a-f0-9]{32}(?:-[0-9]+)?\b/g },
+  // Sourcegraph: sgp_ prefix confirmed via Sourcegraph's own docs ("Access
+  // tokens now begin with the prefix sgp_"); exact body shape (an optional
+  // 16-hex instance-id infix, or a local_ marker, before the 40-hex body)
+  // taken from noseyparker's worked examples, not independently pinned.
+  // NOTE for future additions: Segment's own "Public API Token" also uses
+  // an sgp_ prefix (sgp_[a-zA-Z0-9]{64}) -- not added here, but if it ever
+  // is, the two rules are already mutually exclusive (hex-only 40 vs.
+  // mixed-case 64), just worth testing explicitly at that point.
+  { id: "sourcegraph_token", label: "Sourcegraph access token", confidence: "high",
+    re: /\bsgp_(?:[a-fA-F0-9]{16}_|local_)?[a-fA-F0-9]{40}\b/g },
 
   // ── Cloud / infra ──────────────────────────────────────────────────────
   { id: "digitalocean_token", label: "DigitalOcean access token", confidence: "high",
@@ -452,6 +496,49 @@ const PATTERNS = [
   // random-looking segment.
   { id: "resend_key", label: "Resend API key", confidence: "high",
     re: /\bre_[A-Za-z0-9]{6,12}_[A-Za-z0-9]{18,32}\b/g },
+  // Shopify Admin API access token: shpat_/shppa_ prefixes confirmed via
+  // Shopify's own current developer docs. Exact body length not stated on
+  // that page (a since-404'd Shopify changelog described it, quoted only
+  // by secondary sources), hence a generous floor/ceiling bound. Legacy
+  // shpca_/shpss_/shpua_ prefixes are real (Shopify community forum) but
+  // not on the current primary page, so left out here.
+  { id: "shopify_admin_token", label: "Shopify Admin API access token", confidence: "high",
+    re: /\bshp(?:at|pa)_[A-Za-z0-9]{32,40}\b/g },
+  // HubSpot private app token: HubSpot's own docs show only a masked
+  // example (pat-**-***...), corroborated by real (redacted) examples on
+  // HubSpot's own community forum showing the pat-<region>-<UUID-shaped
+  // body> structure. Medium confidence: the shape is real but the exact
+  // per-segment lengths are inferred, not vendor-pinned.
+  { id: "hubspot_token", label: "HubSpot private app access token", confidence: "medium",
+    re: /\bpat-[a-z]{2}\d-[a-f0-9-]{30,60}\b/gi },
+  // Grafana service account token: exact shape read directly off Grafana's
+  // own docs example token (grafana.com/docs/grafana/latest/administration/service-accounts/),
+  // not inferred -- two independently-random underscore-delimited segments
+  // behind a distinctive 5-char prefix.
+  { id: "grafana_service_account_token", label: "Grafana service account token", confidence: "high",
+    re: /\bglsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8}\b/g },
+  // New Relic: NRAK- prefix confirmed via New Relic's own migration-notice
+  // doc ("If your API key starts with NRAK, no update is required").
+  // Exact body length/charset not published; generously bounded.
+  { id: "new_relic_api_key", label: "New Relic API key", confidence: "high",
+    re: /\bNRAK-[A-Z0-9]{27,64}\b/g },
+  // Mailchimp: 32 lowercase hex + a literal -us<datacenter digits> suffix,
+  // read directly off a live example in Mailchimp's own docs. The suffix
+  // is what makes this safe as a default rule -- a bare 32-hex string
+  // alone would be indistinguishable from countless unrelated hashes, but
+  // the specific "-usN" tail is Mailchimp-specific.
+  { id: "mailchimp_key", label: "Mailchimp API key", confidence: "high",
+    re: /\b[0-9a-f]{32}-us[0-9]{1,2}\b/g },
+  // Akamai EdgeGrid access_token / client_token: akab- prefix and the
+  // hyphen-separated two-segment shape confirmed via Akamai's own current
+  // docs (literal examples shown), independently corroborated by a
+  // detect-secrets maintainer's own reproduction. Neither source states
+  // hard segment-length bounds, so the ranges here are a reasonable
+  // envelope, not vendor-pinned. Akamai's client_secret was investigated
+  // and NOT added: no distinctive prefix in Akamai's own examples, the
+  // same bare/opaque shape already excluded elsewhere in this file.
+  { id: "akamai_edgegrid_token", label: "Akamai EdgeGrid token", confidence: "high",
+    re: /\bakab-[a-z0-9]{16,32}-[a-z0-9]{6,32}\b/g },
 ];
 
 /**
