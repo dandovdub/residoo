@@ -1,6 +1,11 @@
-# Runs on every push and PR: syntax-check everything, then the smoke tests,
-# across every supported Node line. No secrets, no tokens, nothing to steal —
-# and dependency lifecycle scripts can't run because there are no dependencies.
+# Runs on every push and PR: syntax-check everything, then the smoke tests
+# and the fuzz properties, across every supported Node line. No secrets, no
+# tokens, nothing to steal. Zero RUNTIME dependencies still holds (see
+# package.json's "files" allowlist, which never includes tests/) --
+# fast-check is a devDependency used only by tests/fuzz.js, confirmed to
+# have no install/postinstall/preinstall lifecycle scripts of its own
+# before it was added, and neither does its one transitive dependency
+# (pure-rand).
 name: CI
 
 on:
@@ -25,9 +30,11 @@ jobs:
       - run: npm ci
       - name: Syntax-check every source file
         run: |
-          for f in src/*.js src/sources/*.js bin/residoo.js tests/smoke.js; do
+          for f in src/*.js src/sources/*.js bin/residoo.js tests/smoke.js tests/fuzz.js; do
             node --check "$f"
           done
       - run: npm test
+      - name: Fuzz properties (fast-check)
+        run: npm run fuzz
       - name: CLI help renders
         run: node bin/residoo.js --help

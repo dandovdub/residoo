@@ -20,7 +20,8 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node tests/smoke.js"
+    "test": "node tests/smoke.js",
+    "fuzz": "node tests/fuzz.js"
   },
   "files": [
     "bin",
@@ -41,5 +42,8 @@
     "privacy",
     "cli",
     "encryption"
-  ]
+  ],
+  "devDependencies": {
+    "fast-check": "4.9.0"
+  }
 }

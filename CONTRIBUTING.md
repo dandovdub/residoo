@@ -8,7 +8,12 @@ changes is "keeps it auditable," not "adds more."
 
 1. **Zero runtime dependencies.** No exceptions. A secret scanner asking users
    to trust a dependency tree defeats its own purpose. If a feature needs a
-   package, the feature changes until it doesn't.
+   package, the feature changes until it doesn't. `devDependencies` are the
+   one narrow exception, and only for the dev/test toolchain itself: nothing
+   under `tests/` ships (see `package.json`'s `files` allowlist), so
+   `fast-check` (property-based fuzz testing, `tests/fuzz.js`) never reaches
+   anyone who installs residoo. The rule is about what ships, not what this
+   repo's own CI runs.
 2. **No network calls in the scan path, ever.** The single permitted network
    feature is the explicit `--upload-cloudroam` flag, which transmits
    ciphertext only. Anything that phones home, checks for updates, or collects
