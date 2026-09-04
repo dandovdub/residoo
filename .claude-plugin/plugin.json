@@ -1,0 +1,13 @@
+{
+  "name": "residoo",
+  "description": "Find secrets leaking through AI coding agent session history. Query findings, check for new leaks, and get rotation guidance without leaving Claude Code.",
+  "version": "0.9.0",
+  "author": {
+    "name": "CloudRoam",
+    "url": "https://cloudroam.io"
+  },
+  "homepage": "https://github.com/dandovdub/residoo",
+  "repository": "https://github.com/dandovdub/residoo",
+  "license": "MIT",
+  "keywords": ["security", "secrets", "credentials", "mcp", "scanning"]
+}

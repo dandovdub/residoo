@@ -69,6 +69,16 @@ or add it directly to `.mcp.json`:
 }
 ```
 
+residoo's own repo ships both `.mcp.json` (above) and a
+`.claude-plugin/plugin.json` at its root, so `claude mcp list` run from
+inside a clone of this repo already finds and connects to it with no
+setup at all -- verified directly (`claude plugin validate .` passes,
+`claude mcp list` reports `residoo: residoo mcp - ✓ Connected`). Once
+listed in Claude Code's community plugin marketplace, installation
+becomes `/plugin install residoo@claude-community` from any project,
+no `.mcp.json` of your own needed; until then, the two methods above
+work from anywhere `residoo` is already on PATH (npm or Homebrew).
+
 Five read-only tools, mirroring the CLI exactly: `residoo_scan` (a fresh
 scan, merged with rotation status), `residoo_check` (only what's new
 since the last check in this conversation, backed by the same engine as

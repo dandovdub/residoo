@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "residoo": {
+      "command": "residoo",
+      "args": ["mcp"]
+    }
+  }
+}
