@@ -153,13 +153,14 @@ const GUARDED_TOOL_NAMES = new Set(["Bash", "Read"]);
  */
 function evaluateToolInput(toolName, toolInput) {
   if (!GUARDED_TOOL_NAMES.has(toolName) || !toolInput || typeof toolInput !== "object") {
-    return { block: false, reason: null };
+    return { block: false, label: null, reason: null };
   }
   const candidate = toolName === "Bash" ? toolInput.command : toolInput.file_path;
   const label = matchSensitivePath(candidate);
-  if (!label) return { block: false, reason: null };
+  if (!label) return { block: false, label: null, reason: null };
   return {
     block: true,
+    label,
     reason: `residoo guard: this looks like a read of ${label}. Blocked before it could be written to the session transcript. ` +
       `If this is intentional and safe, ask the human to read it themselves, or disable this hook in .claude/settings.json.`,
   };
@@ -183,20 +184,44 @@ const PROMPT_GUARD_RULES = PATTERNS.filter((r) => r.confidence === "high");
  * evaluateToolInput above, not just a copy of the same bar.
  */
 function evaluatePromptText(promptText) {
-  if (typeof promptText !== "string" || !promptText) return { block: false, reason: null };
+  if (typeof promptText !== "string" || !promptText) return { block: false, label: null, preview: null, reason: null };
   for (const rule of PROMPT_GUARD_RULES) {
     rule.re.lastIndex = 0;
     const m = rule.re.exec(promptText);
     if (!m) continue;
     const value = m[0];
     if (VENDOR_EXAMPLE_VALUES.has(value) || zeroEntropyTail(value)) continue;
+    const preview = redact(value);
     return {
       block: true,
-      reason: `residoo guard: this prompt looks like it contains ${rule.label} (${redact(value)}). ` +
+      label: rule.label,
+      preview,
+      reason: `residoo guard: this prompt looks like it contains ${rule.label} (${preview}). ` +
         `Blocked before it could be sent. If this is a false positive, rephrase or remove it, or disable this hook in .claude/settings.json.`,
     };
   }
-  return { block: false, reason: null };
+  return { block: false, label: null, preview: null, reason: null };
+}
+
+/**
+ * Writes one structured audit line to stderr for a block decision --
+ * CONTRIBUTING.md's own hard rule (rule 3) names `~/.residoo/rotations.json`
+ * as "the only file residoo ever writes outside an explicit --seal...
+ * nothing else may claim this carve-out," so this is NOT a new file, the
+ * same choice `cred`'s own audit trail already made for the same reason
+ * (see src/credRun.js). Durability is the operator's choice: redirect the
+ * hook's own stderr at launch if you want it kept, same as `cred`.
+ * Never the raw matched value -- `preview` is already redact()'d by the
+ * caller (rule 4: no raw value in any log line, ever), and PreToolUse
+ * decisions carry no value at all, only a path-pattern label.
+ */
+function logAuditLine(errOutput, { event, label, preview, sessionId, cwd }) {
+  try {
+    errOutput.write(JSON.stringify({
+      ts: new Date().toISOString(), tool: "residoo guard", event, decision: "block",
+      label, ...(preview ? { preview } : {}), sessionId: sessionId || null, cwd: cwd || null,
+    }) + "\n");
+  } catch { /* stderr write failing is never a reason to fail the hook decision itself */ }
 }
 
 /**
@@ -207,9 +232,11 @@ function evaluatePromptText(promptText) {
  * response protocol to `output` (default stdout) -- exit code is the
  * caller's job (bin/residoo.js), this returns the intended process exit
  * code instead of calling process.exit itself, matching every other run*
- * function in cli.js.
+ * function in cli.js. Every BLOCK decision also gets one structured line
+ * on `errOutput` (default stderr) -- see logAuditLine's own docstring for
+ * why stderr, never a file.
  */
-async function runGuard({ input = process.stdin, output = process.stdout } = {}) {
+async function runGuard({ input = process.stdin, output = process.stdout, errOutput = process.stderr } = {}) {
   const chunks = [];
   for await (const chunk of input) chunks.push(chunk);
   const raw = Buffer.concat(chunks.map((c) => (Buffer.isBuffer(c) ? c : Buffer.from(c)))).toString("utf-8");
@@ -231,6 +258,10 @@ async function runGuard({ input = process.stdin, output = process.stdout } = {})
   if (payload.hook_event_name === "UserPromptSubmit") {
     const decision = evaluatePromptText(payload.prompt);
     if (!decision.block) return 0;
+    logAuditLine(errOutput, {
+      event: "UserPromptSubmit", label: decision.label, preview: decision.preview,
+      sessionId: payload.session_id, cwd: payload.cwd,
+    });
     output.write(JSON.stringify({ decision: "block", reason: decision.reason }) + "\n");
     return 0;
   }
@@ -238,6 +269,10 @@ async function runGuard({ input = process.stdin, output = process.stdout } = {})
   const decision = evaluateToolInput(payload.tool_name, payload.tool_input);
   if (!decision.block) return 0;
 
+  logAuditLine(errOutput, {
+    event: "PreToolUse", label: decision.label,
+    sessionId: payload.session_id, cwd: payload.cwd,
+  });
   output.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",

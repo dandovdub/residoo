@@ -1245,6 +1245,43 @@ the version label. No corpus plant exists yet for any of these five
 families, so this confirms no regression rather than exercising the new
 coverage directly.
 
+## residoo 0.13.0: a structured audit trail for guard's block decisions (added 2026-09-05)
+
+The competitive DLP research (0.11.0's own background pass, completed
+after that release shipped) named a local structured audit log as one of
+a small number of concrete, buildable things residoo could adopt from
+funded competitors without becoming a hosted service. Implemented as
+stderr, not a new file: `CONTRIBUTING.md`'s own rule 3 names
+`~/.residoo/rotations.json` as "the only file residoo ever writes outside
+an explicit --seal... nothing else may claim this carve-out," so this
+makes the exact same choice `residoo cred`'s own audit trail already made
+for the identical reason, rather than proposing to amend that rule for a
+second feature.
+
+One structured JSON line per BLOCK decision, either hook: `label` (which
+rule/path-pattern matched), `preview` (UserPromptSubmit only -- the same
+`redact()`'d value every other output format already uses, never raw;
+PreToolUse carries no preview at all, since a file path isn't a secret to
+redact), `sessionId`/`cwd` from the hook's own payload, a timestamp.
+Nothing written for an allowed event -- this is a record of what got
+blocked, not a log of every prompt or every tool call, keeping it
+bounded regardless of how many prompts a session sends. Durability is the
+operator's own choice: redirect the hook's stderr at launch if you want
+it kept, exactly as `cred`'s docs already state for the same design.
+
+Required a small, additive shape change to both `evaluateToolInput` and
+`evaluatePromptText`'s return values (`label` added to both, `preview`
+added to the latter) so the audit-line writer has structured fields to
+read rather than parsing them back out of the human-readable `reason`
+string -- covered by existing tests' continued passing (both functions'
+`block`/`reason` fields are unchanged) plus new tests for the two new
+fields specifically.
+
+Touches only `src/guard.js`, which the benchmark doesn't score (same
+precedent as 0.11.0's own guard work). Verified directly: a blocked
+decision produces exactly one stderr line with the redacted preview and
+never the raw value; an allowed decision produces zero stderr bytes.
+
 ## Reproduce
 
 ```

@@ -3684,6 +3684,32 @@ async function main() {
     const upsMissingPromptRun = runGuardCli(JSON.stringify({ hook_event_name: "UserPromptSubmit" }));
     check("guard CLI: UserPromptSubmit with no prompt field at all fails open, never crashes",
       upsMissingPromptRun.status === 0 && upsMissingPromptRun.stdout === "");
+
+    // ── audit trail: one structured stderr line per BLOCK decision only ─────
+    // CONTRIBUTING.md's own rule names rotations.json as the only file
+    // residoo writes outside --seal, so this is stderr, never a new file
+    // (same choice cred's own audit trail already made) -- verified via the
+    // same real spawned subprocess as the tests above, reading .stderr.
+    check("guard CLI: a blocked UserPromptSubmit writes exactly one structured JSON audit line to stderr, with a redacted preview, never the raw value",
+      (() => {
+        const lines = upsBlockRun.stderr.trim().split("\n").filter(Boolean);
+        if (lines.length !== 1) return false;
+        const entry = JSON.parse(lines[0]);
+        return entry.tool === "residoo guard" && entry.event === "UserPromptSubmit" && entry.decision === "block" &&
+          entry.label === "Stripe API key (live mode)" && typeof entry.preview === "string" &&
+          !upsBlockRun.stderr.includes("4eK9pQ2xN7tR5wL8" + "mB3vC6yH") && typeof entry.ts === "string";
+      })());
+    check("guard CLI: a blocked PreToolUse writes exactly one structured JSON audit line to stderr, with a label but no preview field (path patterns aren't secret values)",
+      (() => {
+        const lines = blockRun.stderr.trim().split("\n").filter(Boolean);
+        if (lines.length !== 1) return false;
+        const entry = JSON.parse(lines[0]);
+        return entry.event === "PreToolUse" && entry.decision === "block" && entry.label === "a .env file" && !("preview" in entry);
+      })());
+    check("guard CLI: an ALLOWED UserPromptSubmit writes zero stderr bytes -- the audit trail is block-only, not a log of every prompt",
+      upsAllowRun.stderr === "");
+    check("guard CLI: an ALLOWED PreToolUse also writes zero stderr bytes",
+      allowRun.stderr === "");
   }
 
   // ── mcp: hand-rolled MCP server over stdio (src/mcp.js + src/mcpTools.js) ───

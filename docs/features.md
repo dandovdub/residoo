@@ -251,6 +251,27 @@ reads one hook payload from stdin and writes a decision to stdout only
 when something matches; anything it doesn't recognize falls through
 untouched, with zero output, exit 0.
 
+### Audit trail
+
+Every BLOCK decision (either hook) also writes one structured JSON line to
+**stderr** — never a file. `CONTRIBUTING.md`'s own rule names
+`~/.residoo/rotations.json` as the only file residoo ever writes outside
+an explicit `--seal`; a new persistent log file would need to break that
+rule, so this makes the same choice `residoo cred`'s own audit trail
+already made for the identical reason. Durability is the operator's
+choice: redirect the hook's own stderr at launch if you want it kept.
+
+```json
+{"ts":"2026-09-04T23:06:07.828Z","tool":"residoo guard","event":"UserPromptSubmit","decision":"block","label":"Stripe API key (live mode)","preview":"sk_l…C6yH  (32 chars)","sessionId":"...","cwd":"..."}
+```
+
+`preview` is the same `redact()`'d, first/last-4-characters value every
+other output format already uses — never the raw match. A `PreToolUse`
+block carries a `label` (which path pattern matched) but no `preview`
+field at all: a file path isn't a secret value, so there's nothing to
+redact. Allowed events write nothing — this is a log of what got blocked,
+not a record of every prompt or every tool call.
+
 ### Measured, not claimed
 
 The numbers below are for `PreToolUse`'s path-pattern list specifically.
