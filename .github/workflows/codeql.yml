@@ -16,6 +16,13 @@ on:
     # Weekly on Sundays, offset from Scorecard's own Saturday run.
     - cron: '30 1 * * 0'
 
+# Top-level default, restrictive on its own (defense in depth, not just the
+# job-level grant below): if a future job gets added to this file without
+# its own explicit block, it inherits read-only rather than an implicit
+# broader default.
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze (javascript-typescript)

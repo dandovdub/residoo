@@ -2020,8 +2020,9 @@ async function main() {
     const { render, renderJson, makeProgressReporter, printIntro } = require("../src/report");
     const emptyResultShape = { findings: [], filesScanned: 0, sourcesScanned: [], bytesScanned: 0, suppressedCount: 0, distinctCounts: {}, unreadableFiles: [] };
     const bannerLine = render(emptyResultShape, { noColor: true }).split("\n")[0];
+    const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     check("banner: plain report's first line names the exact running version",
-      new RegExp(`^residoo v${pkgVersion.replace(/\./g, "\\.")} · scanned \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$`).test(bannerLine));
+      new RegExp(`^residoo v${escapeRe(pkgVersion)} · scanned \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$`).test(bannerLine));
     check("banner: the timestamp is 'YYYY-MM-DD HH:MM' and within the last minute (real wall clock, not a placeholder)",
       (() => {
         const m = bannerLine.match(/scanned (\d{4}-\d{2}-\d{2} \d{2}:\d{2})$/);
