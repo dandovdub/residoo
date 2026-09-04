@@ -50,8 +50,9 @@ run a command with it injected as an environment variable, never typed
 into the conversation at all — which also means a long session compacting
 away the exact value you pasted days ago can't force you to paste it
 again, since there's nothing to lose. `residoo guard` blocks an obviously
-sensitive file read before it happens. All four are covered in
-[docs/features.md](docs/features.md).
+sensitive file read before it happens (100% recall, 0% false positives on
+its own [scored 81-case corpus](bench/guard/RESULTS.md)). All four are
+covered in [docs/features.md](docs/features.md).
 
 > [!NOTE]
 > gitleaks and trufflehog scan **commits**. residoo scans the **conversation

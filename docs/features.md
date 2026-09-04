@@ -216,3 +216,22 @@ directly into a prompt, or one arriving in the output of an otherwise
 unremarkable command (`curl`, a build log). `residoo scan` / `watch` /
 `mcp` remain the actual safety net; this is a best-effort tripwire on top
 of them, not a replacement.
+
+### Measured, not claimed
+
+Within that scope — does the pattern list itself catch what it should,
+without wrongly blocking ordinary work — this is measured the same way
+`scan()` is, on its own scored corpus:
+
+| metric | result |
+|---|---|
+| Recall (sensitive reads correctly blocked) | **35/35 (100%)** |
+| False-positive rate (safe commands wrongly blocked) | **0/46 (0%)** |
+
+That number is not a cherry-picked best case: building this corpus found
+five real bugs on the first two runs (blocking `.env.example`, blocking a
+public SSH key, blocking a filename that says "public.pem", missing a
+hyphen-prefixed service-account filename, and one corpus miscategorization
+found and fixed along the way) — all disclosed, with the exact before/after,
+in [`bench/guard/RESULTS.md`](../bench/guard/RESULTS.md). Reproduce it
+yourself: `node bench/guard/run.js`.

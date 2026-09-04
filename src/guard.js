@@ -39,18 +39,45 @@ const BOUNDARY = "(?:$|[\\s'\"`;|&)<>])";
 // Left boundary: start of string, a path separator (mid-path, e.g.
 // "/foo/.env"), OR whitespace/a shell metacharacter (the path is one
 // argument in a longer command, e.g. "cat .env && echo done" -- ".env" is
-// preceded by a space, not a separator).
+// preceded by a space, not a separator). Deliberately NOT a hyphen: an
+// earlier version added one (to catch "gcp-service-account-prod.json",
+// see the dedicated pattern below instead) and it broke the public.pem/
+// public.key exclusions below -- a negative lookahead only guards its own
+// anchor position, and a hyphen boundary let the regex engine start
+// matching again from a LATER position inside the same filename (e.g.
+// right after "public-" in "public-key.pem"), silently walking around the
+// exclusion. Kept narrow and per-pattern instead of widening this shared
+// primitive for one case.
 const SEP = "(?:^|[\\s'\"`;|&(<>\\\\/])";
 const pat = (body) => new RegExp(SEP + body + BOUNDARY, "i");
 
+// Suffixes that make a .env-shaped path a committed, secret-free template
+// rather than the real thing: never planted with live credentials by
+// convention, and reading one is completely routine (checking which vars
+// a project needs). Found by testing this guard against realistic dev
+// commands, not assumed: cat .env.example was blocked before this existed.
+const ENV_SAFE_SUFFIX = "example|sample|template|dist|default|schema";
+
 const SENSITIVE_PATH_PATTERNS = [
-  // dotenv files, including staged/numbered variants (.env.local, .env.1)
-  { re: pat("\\.env(?:\\.[\\w.-]+)?"), label: "a .env file" },
-  // SSH private keys: the conventional default names, and any *.pem/*.key
-  { re: pat("id_(?:rsa|dsa|ecdsa|ed25519)(?:\\.pub)?"), label: "an SSH private key" },
-  { re: new RegExp(SEP + "\\.ssh[\\\\/]", "i"), label: "the SSH directory" },
-  { re: pat("[\\w.-]+\\.pem"), label: "a .pem key file" },
-  { re: pat("[\\w.-]+\\.key"), label: "a .key file" },
+  // dotenv files, including staged/numbered variants (.env.local, .env.1),
+  // but not a known-safe template suffix (see ENV_SAFE_SUFFIX above).
+  { re: pat(`\\.env(?:\\.(?!(?:${ENV_SAFE_SUFFIX})(?:$|[\\s'"\`;|&)<>.]))[\\w.-]+)?`), label: "a .env file" },
+  // SSH private keys: the conventional default names. Deliberately NOT
+  // *.pub -- a public key is, by definition, meant to be shared (it's
+  // what you paste into GitHub's own SSH keys page); blocking its read
+  // protects nothing and was a real false positive found the same way.
+  { re: pat("id_(?:rsa|dsa|ecdsa|ed25519)"), label: "an SSH private key" },
+  // The whole .ssh directory, EXCEPT its own *.pub files and known_hosts
+  // (host key fingerprints, not credentials -- reading it can't expose
+  // anything) -- same public-key/not-actually-sensitive principle as the
+  // id_/*.pem/*.key exclusions above, applied to a directory match.
+  { re: new RegExp(SEP + "\\.ssh[\\\\/](?!(?:[\\w.-]+\\.pub|known_hosts(?:\\.old)?)(?:$|[\\s'\"`;|&)<>]))", "i"), label: "the SSH directory" },
+  // *.pem/*.key, except a filename that itself says "public": a real
+  // private key is never conventionally named that way, and "public.pem"/
+  // "public-key.pem" naming a non-sensitive cert is common enough that
+  // blocking it is pure noise, not protection.
+  { re: pat("(?!public[-_.])[\\w.-]+\\.pem"), label: "a .pem key file" },
+  { re: pat("(?!public[-_.])[\\w.-]+\\.key"), label: "a .key file" },
   // cloud / vendor credential files with a fixed, well-known name
   { re: pat("\\.aws[\\\\/](?:credentials|config)"), label: "the AWS credentials file" },
   { re: pat("\\.netrc"), label: "the .netrc file" },
@@ -60,7 +87,14 @@ const SENSITIVE_PATH_PATTERNS = [
   { re: pat("\\.kube[\\\\/]config"), label: "the kubeconfig file" },
   { re: pat("application_default_credentials\\.json"), label: "gcloud application-default credentials" },
   { re: pat("credentials\\.json"), label: "a credentials.json file" },
-  { re: pat("service[_-]?account[\\w.-]*\\.json"), label: "a GCP service-account key file" },
+  // No SEP prefix here, on purpose: a real, common naming convention
+  // prefixes this with a project/company name and a hyphen (e.g.
+  // "gcp-service-account-prod.json"), which the standard SEP boundary
+  // (start/whitespace/separator, deliberately not a hyphen -- see SEP's
+  // own comment) would miss entirely. "service[_-]?account" is specific
+  // enough as a token that not requiring a left boundary here is a safe,
+  // narrow exception rather than a reason to widen SEP itself.
+  { re: new RegExp("service[_-]?account[\\w.-]*\\.json" + BOUNDARY, "i"), label: "a GCP service-account key file" },
   { re: pat("secrets?\\.(?:json|ya?ml)"), label: "a secrets file" },
 ];
 
