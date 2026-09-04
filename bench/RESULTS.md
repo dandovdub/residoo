@@ -618,6 +618,52 @@ not a new win: residoo stays 45/45 (100%), 100% precision, none-observed
 egress, byte-identical to 0.8.2 except the version label. Every other
 tool's row reproduced unchanged.
 
+## residoo 0.8.4: one new source, one more vendor, plus reading TruffleHog's and Snyk's own trackers (added 2026-09-04)
+
+Continued the competitor cross-check, this time against TruffleHog's and
+Snyk's own public issue trackers rather than agentsweep's. Findings:
+
+- **Stripe webhook signing secret** (`whsec_`) -- TruffleHog has two open,
+  unaddressed issues for this (#4711, #4609); gitleaks doesn't have it
+  either (checked `gitleaks.toml` directly). A real, disclosed, industry-
+  wide gap, not unique to residoo. No exact-length spec exists anywhere
+  found, shipped anyway on the strength of the `whsec_` prefix alone,
+  which carries negligible false-positive risk regardless of the exact
+  bound chosen -- unlike a short/generic prefix, where that same
+  generosity would matter.
+- **Weights & Biases** was investigated and NOT added: its classic key
+  format is a bare, unprefixed 40-character string (confirmed via a real
+  W&B GitHub issue), exactly the generic, unsafe-as-a-default-rule shape
+  this project's own header comment already says to leave out (same
+  reasoning as the existing Together AI/DeepSeek exclusions). The newer
+  `wandb_v1_`-prefixed format cited in TruffleHog's own open feature
+  request isn't independently confirmed by any primary source, so it
+  wasn't guessed at either.
+- **Atlassian Rovo Dev CLI** added as a new source
+  (`src/sources/atlassian-rovo-dev.js`), moving the total from 43 to 44.
+  Grounded in Atlassian's own support docs (session storage path and the
+  two per-session filenames), with the per-session-subdirectory layout
+  stated plainly as an inference from those docs, not a confirmed
+  structure -- no real install exists to check it against.
+- **Sourcegraph Amp investigated and NOT added**: its own docs describe
+  threads syncing to ampcode.com "across devices," with no documented
+  local cache -- the same cloud-only reasoning as the existing Augment
+  Code/CodeGPT exclusions.
+- Snyk's own trackers (`snyk/cli`'s issues are disabled entirely;
+  `snyk-code-extension-secrets` has exactly one open issue) had nothing
+  actionable. Snyk's real, current AI-agent-security product
+  (`snyk/agent-scan`) scans agent skill files and MCP configs, not
+  session transcripts -- confirms residoo's niche remains unclaimed by
+  either competitor checked tonight.
+
+Pattern rule count moved 52 to 53 (`stripe_webhook_secret`, `cfk_`
+extended an existing rule rather than adding one). Full reproduce
+sequence run (this corpus has no Stripe-webhook-secret-family plant, and
+Atlassian Rovo Dev CLI is a source addition a synthetic transcript corpus
+can't exercise the same way a pattern rule can): residoo stays 45/45
+(100%), 100% precision, none-observed egress, byte-identical to 0.8.3
+except the version label. Every other tool's row reproduced unchanged.
+
 Monitored per scan, spawn to exit, by two dynamic layers: a refuse-and-log proxy trap
 (all proxy env pinned to it) and lsof polling of the scanner's own process tree at
 ~150ms. Cadence honesty: ~150ms is the sleep between poll ticks, and each tick shells

@@ -22,7 +22,7 @@ Site recall per class (sites found / planted sites). Full per-tool detail, value
 
 ## AgentSweep (agentsweep 0.1.9)
 
-- wall time: 605ms
+- wall time: 658ms
 - egress (scan-time only): **none-observed** no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window
 
 | class | kind | sites found | site recall | distinct values | value recall | false positives |
@@ -57,7 +57,7 @@ Per-family site recall (claimed secret classes):
 
 ## Betterleaks (1.8.1)
 
-- wall time: 493ms
+- wall time: 535ms
 - egress (scan-time only): **none-observed** no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window
 
 | class | kind | sites found | site recall | distinct values | value recall | false positives |
@@ -92,7 +92,7 @@ Per-family site recall (claimed secret classes):
 
 ## detect-secrets (Yelp) (1.5.0)
 
-- wall time: 2572ms (offline mode)
+- wall time: 3093ms (offline mode)
 - egress (scan-time only), offline mode (scored for recall): **none-observed** (0 proxy CONNECT attempt(s), 0 non-proxy socket(s))
 - egress (scan-time only), default mode (network verification enabled): **attempted** (24 proxy CONNECT attempt(s), 0 non-proxy socket(s); CONNECT targets: slack.com:443, sts.amazonaws.com:443)
   - citation: detect-secrets' own CLI help documents scan-time verification and its off-switch: "-n, --no-verify  Disables additional verification of secrets via network call." and "--only-verified  Only flags secrets that can be verified." In the installed 1.5.0 package, detect_secrets/filters/common.py enables the verification filter (is_ignored_due_to_verification_policies, which calls each plugin's verify()) unless -n is passed.
@@ -130,14 +130,14 @@ Per-family site recall (claimed secret classes):
 
 ## ggshield (GitGuardian) (ggshield, version 1.54.0)
 
-- wall time: 260ms
+- wall time: 298ms
 - egress (scan-time only): **by-design-requires-server** Observed unauthenticated on this harness: the scan command refuses to run without a GitGuardian API key (exit 3, 'A GitGuardian API key is needed to use ggshield'), which is the server dependency demonstrated live. Observed during the scan window: proxy CONNECT attempt "CONNECT api.github.com:443 HTTP/1.1".
 - recall: **not scored (requires server account)**
 - citation: ggshield README (GitGuardian), describing the invoked `secret scan` command: "ggshield uses our public API through py-gitguardian to scan and detect potential vulnerabilities in files and other text content." For the AI-agent surface specifically, the ggshield v1.53.0 changelog on `ai discover --activity`: it collects raw agent activity and "ships it to GitGuardian, which scans the content and strips secrets server-side". Nuance: ggshield supports self-hosted instances via --instance, so the required server need not be GitGuardian's cloud.
 
 ## gitleaks (8.30.1)
 
-- wall time: 578ms
+- wall time: 572ms
 - egress (scan-time only): **none-observed** no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window
 
 | class | kind | sites found | site recall | distinct values | value recall | false positives |
@@ -172,7 +172,7 @@ Per-family site recall (claimed secret classes):
 
 ## Kingfisher (kingfisher 2.1.0)
 
-- wall time: 3584ms (offline mode)
+- wall time: 3737ms (offline mode)
 - egress (scan-time only), offline mode (scored for recall): **none-observed** (0 proxy CONNECT attempt(s), 0 non-proxy socket(s))
 - egress (scan-time only), default mode (validation enabled): **attempted** (49 proxy CONNECT attempt(s), 0 non-proxy socket(s); CONNECT targets: api.github.com:443, api.anthropic.com:443, gitlab.com:443, registry.npmjs.org:443, sts.us-east-1.amazonaws.com:443)
   - citation: Kingfisher README: 'Validate discovered credentials against provider APIs to reduce false positives'; its top-level help: 'Detect and validate secrets across files and full Git history'. Offline flag per its --help: --no-validate, 'Disable secret validation'.
@@ -208,9 +208,9 @@ Per-family site recall (claimed secret classes):
 | private-key | 2/2 |
 | jwt | 2/2 |
 
-## residoo (residoo 0.8.3)
+## residoo (residoo 0.8.4)
 
-- wall time: 440ms
+- wall time: 446ms
 - egress (scan-time only): **none-observed** no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window
 
 | class | kind | sites found | site recall | distinct values | value recall | false positives |
@@ -245,7 +245,7 @@ Per-family site recall (claimed secret classes):
 
 ## TruffleHog (trufflehog 3.97.2)
 
-- wall time: 1054ms (offline mode)
+- wall time: 1132ms (offline mode)
 - egress (scan-time only), offline mode (scored for recall): **none-observed** (0 proxy CONNECT attempt(s), 0 non-proxy socket(s))
 - egress (scan-time only), default mode (verification enabled): **attempted** (64 proxy CONNECT attempt(s), 4 non-proxy socket(s); CONNECT targets: oss.trufflehog.org:443, sts.us-east-1.amazonaws.com:443, slack.com:443, gitlab.com:443, registry.npmjs.org:443, api.anthropic.com:443, api.github.com:443, keychecker.trufflesecurity.com:443)
   - citation: TruffleHog README (shipped in the release tarball): 'For every potential credential that is detected, we've painstakingly implemented programmatic verification against the API that we think it belongs to.' Offline flag per its --help: --no-verification, 'Don't verify the results.'
@@ -283,7 +283,7 @@ Per-family site recall (claimed secret classes):
 
 ## whatileaked (whatileaked 0.3.0)
 
-- wall time: 392ms
+- wall time: 427ms
 - egress (scan-time only): **none-observed** no connection attempts through the proxy trap and no non-loopback-trap sockets in lsof polling during the scan window
 
 | class | kind | sites found | site recall | distinct values | value recall | false positives |

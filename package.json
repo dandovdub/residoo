@@ -1,6 +1,6 @@
 {
   "name": "residoo",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "Find secrets leaking through your AI coding agent's session history. Zero network calls in the scan path, zero dependencies.",
   "license": "MIT",
   "author": "CloudRoam (https://cloudroam.io)",

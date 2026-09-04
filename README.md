@@ -97,7 +97,7 @@ while losing rows, then fixed in public against the classes it was losing
 
 ## What it does
 
-- Scans your local AI-agent session transcripts for 50 high-confidence
+- Scans your local AI-agent session transcripts for 53 high-confidence
   secret patterns: cloud provider keys, private key blocks, OAuth/API
   tokens, database connection strings, and more. See
   [`src/patterns.js`](src/patterns.js).
@@ -219,7 +219,7 @@ prompt. There is no recovery if you lose it, so pick one you keep.
 
 ## Sources supported today
 
-43 sources, real-install-verified for Claude Code and its config family,
+44 sources, real-install-verified for Claude Code and its config family,
 multi-source-corroborated for the rest (Cursor, Codex CLI, Cline, Windsurf,
 Gemini CLI, Copilot, and 30+ more). Full list, what "corroborated" means,
 and how to add one: [docs/sources.md](docs/sources.md).

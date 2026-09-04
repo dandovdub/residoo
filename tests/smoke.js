@@ -110,6 +110,10 @@ async function main() {
     matchesOnly("resend_key", "re_" + "SM0KE" + "TEST" + "_" + "a".repeat(24)));
   check("re_-prefixed code identifiers are never mistaken for a Resend key",
     !PATTERNS.some((p) => { p.re.lastIndex = 0; return p.re.test("re_try_again_later()") || (p.re.lastIndex = 0, p.re.test("function re_send(email) {}"));  }));
+  // Stripe webhook secret: also found via TruffleHog's own open-issue
+  // tracker (#4711, #4609, both open/unaddressed there too).
+  check("Stripe webhook secret matched, only by stripe_webhook_secret (never stripe_key/stripe_test_key)",
+    matchesOnly("stripe_webhook_secret", "whsec_" + "aB3xY9qZ1mN4pQ7rS2tU5vW8"));
 
   // ── sealcrypto: round-trip, wrong passphrase, tamper ──────────────────────
   const { sealFile, unsealFile, sealBuffer, unsealBuffer } = require("../src/sealcrypto");

@@ -2,7 +2,7 @@
 
 ## Sources supported today
 
-43 sources: 42 transcript stores plus the agent-config source, in two
+44 sources: 43 transcript stores plus the agent-config source, in two
 honestly-distinct tiers. `--project` adds one more, opt-in source that
 scans a checkout instead of the machine.
 
@@ -21,7 +21,8 @@ PearAI, Trae, Void, Gemini CLI, Qwen Code, Continue, Open Interpreter,
 Goose, GitHub Copilot Chat/CLI, `llm`, Codebuff, Mentat, Hermes, OpenClaw,
 Warp, Crush, Grok Build, Kiro CLI/IDE, Zed, JetBrains Junie/AI Assistant,
 Sourcegraph Cody, Amazon Q Developer, Qodo Gen, OpenHands, Factory Droid
-CLI, Devin CLI, Pi, Google Antigravity, Kimi Code, and `fx`.
+CLI, Devin CLI, Pi, Google Antigravity, Kimi Code, Atlassian Rovo Dev CLI,
+and `fx`.
 
 A few are SQLite-backed (Cursor, Crush, Cody, Devin CLI, Hermes, Kiro CLI,
 `llm`, Trae, Void, Warp, Zed) and need Node.js 22.5+ for the built-in
@@ -30,9 +31,11 @@ scanned rather than silently dropping.
 
 **Investigated and deliberately not included:** Plandex (client-server,
 nothing local to scan), CodeGPT and Augment Code (account/cloud-based, no
-local transcript file), Replit Agent (cloud-only). Tabby, Tabnine,
-Zencoder, Tongyi Lingma, and Berd didn't clear the 2-independent-source bar
-in the time available. A verified adapter for any of these is a welcome PR.
+local transcript file), Replit Agent (cloud-only), Sourcegraph Amp (its own
+docs describe threads syncing to ampcode.com "across devices," with no
+documented local cache). Tabby, Tabnine, Zencoder, Tongyi Lingma, and Berd
+didn't clear the 2-independent-source bar in the time available. A
+verified adapter for any of these is a welcome PR.
 
 See [`src/sources/index.js`](../src/sources/index.js) for the full list, and
 each source file's own header for exactly what was and wasn't checked.

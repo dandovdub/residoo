@@ -46,6 +46,18 @@ const PATTERNS = [
   // paste sk_live at go-live.
   { id: "stripe_test_key", label: "Stripe API key (test mode)", confidence: "high",
     re: /\b(sk|rk)_test_[A-Za-z0-9]{20,250}\b/g },
+  // Stripe webhook signing secret. Found missing by reading TruffleHog's
+  // own open-issue tracker (trufflesecurity/trufflehog#4711 and #4609,
+  // both open, both unaddressed) -- a real, disclosed gap, not unique to
+  // residoo: neither TruffleHog nor gitleaks (checked gitleaks.toml
+  // directly) has this rule either, and no exact-length spec is published
+  // anywhere found (Stripe's own docs name the whsec_ prefix but not a
+  // length). Shipped anyway on the strength of the prefix alone: "whsec_"
+  // is distinctive enough on its own that a generous length bound carries
+  // negligible false-positive risk even without a confirmed exact count,
+  // unlike a short/generic prefix where that same generosity would matter.
+  { id: "stripe_webhook_secret", label: "Stripe webhook signing secret", confidence: "high",
+    re: /\bwhsec_[A-Za-z0-9]{24,64}\b/g },
   // The negative lookahead keeps this rule mutually exclusive with anthropic_key
   // and openrouter_key below — without it, "sk-ant-..." or "sk-or-v1-..." match
   // BOTH this pattern and the more specific one, and get reported twice under

@@ -203,6 +203,19 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "Test mode is not harmless: the key grants full API access to the sandbox account, and its leak marks a workflow that will handle live keys the same way.",
   },
+  // Fetched docs.stripe.com/webhooks (2026-09-04), "Roll endpoint signing
+  // secrets periodically" section: the exact steps below are quoted from
+  // that section, not inferred.
+  stripe_webhook_secret: {
+    label: "Stripe webhook signing secret",
+    consolePath: "dashboard.stripe.com/webhooks > select the endpoint",
+    steps: [
+      "Open the endpoint in the Webhooks tab of Workbench",
+      "Overflow menu (...) > Roll secret",
+      "Choose immediate expiration for a compromised secret, or up to 24h delay to migrate your verification code first (both secrets stay valid during that window)",
+    ],
+    revokeNote: "A leaked webhook secret alone can't drain funds or read data -- it only lets an attacker forge fake Stripe-Signature headers to a webhook endpoint that trusts them, so this is a spoofing/logic-bypass risk, not an account-access one. Still worth rolling promptly: it's what stands between a webhook handler and forged events.",
+  },
   // help.openai.com articles 5112595 and 8304786 exist (surfaced by search)
   // but the help center serves HTTP 403 to this project's fetcher, so no URL
   // is shipped: unverifiable end to end fails the bar above.

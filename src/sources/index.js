@@ -134,6 +134,12 @@ const antigravityCli = require("./antigravity-cli");
 const kimiCode = require("./kimi-code");
 const fx = require("./fx");
 
+const atlassianRovoDev = require("./atlassian-rovo-dev");
+// Sourcegraph Amp investigated and deliberately not included: its own docs
+// describe threads as syncing to ampcode.com "across devices," and no local
+// cache/offline copy of thread content is documented anywhere found — the
+// same cloud-only reasoning as Augment Code/CodeGPT above, not missed.
+
 const ALL_SOURCES = [
   claudeCode,
   agentConfigs,
@@ -178,6 +184,7 @@ const ALL_SOURCES = [
   antigravityCli,
   kimiCode,
   fx,
+  atlassianRovoDev,
 ];
 
 function availableSources() {

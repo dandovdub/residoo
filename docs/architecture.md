@@ -36,14 +36,14 @@ counted clean.
                     YOUR MACHINE · no network calls
   ┌───────────────────────────────────────────────────────────────┐
   │                                                               │
-  │   42 transcript sources           agent config files          │
+  │   44 transcript sources           agent config files          │
   │   ~/.claude, Cursor, Codex…       settings · MCP · memory     │
   │   (--project <dir>: a repo checkout instead of the machine)   │
   │            │                              │                   │
   │            ├──────────────┬───────────────┤                   │
   │            ▼              │               ▼                   │
   │   stream + match          │        integrity checks           │
-  │   50 verified rules       │        hooks · droppers ·         │
+  │   53 verified rules       │        hooks · droppers ·         │
   │            │              │        zero-width unicode         │
   │            ▼              ▼               │                   │
   │        redacted report (first/last 4 chars only) ◀────────────┤
@@ -139,7 +139,7 @@ Detection without rotation is theater: 64% of secrets leaked publicly in
 authenticated, and the median time to remediate a GitHub-leaked secret is
 94 days. Every finding in a residoo report comes with the way out:
 
-- **A rotation hint per finding**, from a guidance map covering all 50
+- **A rotation hint per finding**, from a guidance map covering all 53
   detection rules. Where shown, a rotation URL was fetched and confirmed to
   document revoking that exact credential type.
 - **`residoo explain <rule-id>`** prints the full runbook: where to revoke,
