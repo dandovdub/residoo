@@ -36,9 +36,11 @@ assumed; see [comparison.md](comparison.md) for how the one adjacent thing,
 GitGuardian's `ggshield` AI hook, works differently.
 
 A genuinely new finding also fires an OS desktop notification by default --
-`osascript` on macOS, `notify-send` on Linux if installed (no built-in,
-dependency-free mechanism exists on Windows, so it's a disclosed no-op
-there, not a silent gap). The terminal line above is still written either
+`osascript` on macOS, `notify-send` on Linux if installed, and on Windows,
+`System.Windows.Forms.NotifyIcon`'s balloon-tip API (chosen over WinRT
+toast interop after research found toasts need a registered
+AppUserModelID as a hard prerequisite for any desktop app; NotifyIcon has
+no such requirement). The terminal line above is still written either
 way; the notification is decoration on top of it, for the realistic case
 that nobody is staring at the terminal a background watch process runs in.
 A re-exposure of a secret already alerted on never notifies again --

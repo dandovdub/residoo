@@ -1703,6 +1703,70 @@ end on this machine's actual keychain (an isolated throwaway keychain
 file, never the real login one) to confirm the refactor is a byte-for-byte
 no-op there.
 
+## residoo 0.20.0: the third Windows gap closed (native notifications), and two adjacent questions researched and deliberately left unbuilt (added 2026-09-05)
+
+Direct follow-up to 0.19.0's "still open" list, closing the last of the
+three places the codebase disclosed Windows as second-class. `watch.js`'s
+desktop notification already had macOS (`osascript`) and Linux
+(`notify-send`) branches; Windows had none.
+
+**`System.Windows.Forms.NotifyIcon`'s balloon-tip API, not WinRT toast.**
+The obvious-looking modern mechanism was checked first and disqualified:
+Microsoft's own docs make a Start-menu shortcut carrying a registered
+AppUserModelID a hard prerequisite for ANY desktop app's toast to display
+at all, explicitly including unpackaged/scripted apps -- there is no
+"just call the API" path for a bare Node CLI. `NotifyIcon` has no such
+prerequisite (confirmed non-deprecated, current through the
+windowsdesktop-10.0/11.0 API monikers, and multiple independently
+converging technique write-ups, one stating outright it "requires no
+Start-menu shortcuts, AUMID registration, or external PowerShell
+modules"). Two caveats disclosed rather than smoothed over: Windows
+ignores the millisecond duration passed to `ShowBalloonTip` (actual
+on-screen time is governed by the user's own accessibility settings), and
+the tray icon does not self-remove -- every reference implementation
+found disposes it from an interactive double-click handler, which doesn't
+exist for a non-interactive script. `notifyWindows()` handles this with
+an in-script `Start-Sleep` before `.Dispose()`, inside the same detached,
+`unref()`'d spawned process the macOS/Linux branches already use, so
+`notifyDesktop()` itself still never blocks its caller.
+
+Tested with the same `process.platform` + mocked `child_process.spawn`
+technique the rest of this project's Windows-path tests already
+established: 6 new checks cover the exact PowerShell invocation shape,
+the Start-Sleep-then-Dispose pattern, hidden/non-interactive window
+style, unref'd/ignored stdio, quote escaping, and that a spawn failure
+never throws. Not live-tested against a real Windows install -- the same
+disclosed limitation the 0.19.0 ACL and DPAPI work already carry.
+
+**winget/Chocolatey distribution: researched, deliberately not built
+yet.** Both community package repositories were confirmed to impose no
+code-signing requirement, no minimum-popularity gate, and no identity/KYC
+check that would block a first-time submitter -- both require genuine
+human review, and Chocolatey publishes a more predictable turnaround
+(days to weeks) than winget-pkgs' undocumented one. What this pass could
+NOT verify precisely enough to act on is winget's exact multi-file YAML
+manifest schema, so no manifest was hand-authored on a guess. Recorded in
+`docs/platform-scope.md` as a real, viable opportunity with a named next
+step (either a dedicated schema-verification pass, or running Microsoft's
+own `wingetcreate` tool directly, the same way `brew create` originally
+bootstrapped this project's own Homebrew formula) -- and a reminder to
+self that actually SUBMITTING a package to either repository is a
+publish-to-a-third-party-platform action, not something to do on this
+project's own authority.
+
+**Consumer tray-icon UX: researched for context, not acted on.**
+Malwarebytes' Windows tray icon uses colored-dot badges as a real status
+signal (unbadged = protected/no alerts, red = active alert); 1Password's
+is primarily a click-to-open gateway, not a status light. Recorded as a
+precedent for if a status indicator is ever built, explicitly not a
+decision to build one now -- a tray icon or GUI wrapper would be a
+materially larger scope change than anything else in this project, and
+residoo's CLI-first identity isn't something to drift away from on one
+research pass.
+
+No scan.js/decode.js/patterns.js change; no benchmark reproduce needed.
+`npm test` (754 checks) and `npm run fuzz` both green.
+
 ## Reproduce
 
 ```

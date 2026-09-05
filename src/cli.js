@@ -186,8 +186,8 @@ Watch:
                           same meaning as scan
   --no-notify             skip the OS desktop notification watch fires for
                           each genuinely new finding (macOS via osascript,
-                          Linux via notify-send if installed; no built-in
-                          mechanism on Windows -- disclosed, not attempted).
+                          Linux via notify-send if installed, Windows via
+                          System.Windows.Forms.NotifyIcon's balloon-tip API).
                           On by default in human-readable mode: watch's own
                           purpose is alerting you, and a background process
                           nobody is watching a terminal for needs more than

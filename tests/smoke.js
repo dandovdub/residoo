@@ -3709,6 +3709,51 @@ async function main() {
       (() => { try { notifyDesktop(null, undefined); notifyDesktop(123, {}); return true; } catch { return false; } })());
   }
 
+  // ── notify: Windows (NotifyIcon balloon-tip) via mocked platform ─────────
+  // Same process.platform + child_process.spawn mocking technique as the
+  // Windows-only tests for integrity.js and keychain.js elsewhere in this
+  // file, for the same reason: the real Windows branch is unreachable on
+  // this (non-Windows) dev/CI machine any other way.
+  {
+    const cp = require("child_process");
+    const { notifyDesktop } = require("../src/notify");
+    const origPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    const origSpawn = cp.spawn;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      let captured = null;
+      cp.spawn = (cmd, cmdArgs, opts) => { captured = { cmd, cmdArgs, opts }; return { on: () => {}, unref: () => {} }; };
+      notifyDesktop("residoo: new secret found", "GitHub PAT in x.jsonl:3 (ghp_…abcd)");
+      check("notifyDesktop (Windows): spawns powershell.exe with a NotifyIcon balloon-tip script",
+        !!captured && captured.cmd === "powershell.exe" &&
+        captured.cmdArgs.some((a) => typeof a === "string" &&
+          a.includes("System.Windows.Forms") && a.includes("ShowBalloonTip") &&
+          a.includes("residoo: new secret found") && a.includes("GitHub PAT in x.jsonl:3")));
+      check("notifyDesktop (Windows): explicitly Dispose()s the icon in the same script (no self-removing default)",
+        !!captured && captured.cmdArgs.some((a) => typeof a === "string" && a.includes("Start-Sleep") && a.includes(".Dispose()")));
+      check("notifyDesktop (Windows): runs hidden and non-interactively, never popping a visible console window",
+        !!captured && captured.cmdArgs.includes("-WindowStyle") && captured.cmdArgs.includes("Hidden") &&
+        captured.cmdArgs.includes("-NonInteractive"));
+      check("notifyDesktop (Windows): stdio ignored, unref'd -- never blocks or keeps the caller's process alive",
+        !!captured && captured.opts.stdio === "ignore");
+
+      let captured2 = null;
+      cp.spawn = (cmd, cmdArgs) => { captured2 = { cmd, cmdArgs }; return { on: () => {}, unref: () => {} }; };
+      notifyDesktop("title with 'quote'", "message with 'another quote'");
+      check("notifyDesktop (Windows): single quotes in title/message are escaped, not left to break the script",
+        !!captured2 && captured2.cmdArgs.some((a) => typeof a === "string" && a.includes("''quote''") && a.includes("''another quote''")));
+
+      cp.spawn = () => { throw new Error("simulated: powershell.exe missing"); };
+      let threw = false;
+      try { notifyDesktop("t", "m"); } catch { threw = true; }
+      check("notifyDesktop (Windows): a spawn failure (e.g. powershell.exe missing) never throws", !threw);
+    } finally {
+      Object.defineProperty(process, "platform", origPlatform);
+      cp.spawn = origSpawn;
+    }
+  }
+
   // ── watch: continuous scanning (src/watch.js) ───────────────────────────────
   // In-process only, real timers at a tiny pollMs, real temp files — never a
   // spawned child (no precedent for that anywhere else in this suite, and a

@@ -117,3 +117,60 @@ look if either happens:
    third-party apps.** Nothing in this research suggests that's planned,
    but it's the one platform change that would reopen the native-app
    question directly.
+
+## Windows package manager distribution: viable, not yet built
+
+A separate research pass, part of closing real Windows gaps (see
+`bench/RESULTS.md`'s v0.19.0/v0.20.0 entries for the technical fixes that
+came out of the same pass), checked whether submitting residoo to
+Windows Package Manager's community repository (`winget-pkgs`) or
+Chocolatey's community repository is realistic for a project with
+essentially zero existing reputation.
+
+**Confirmed, both viable:** neither imposes a code-signing requirement on
+the installer, a minimum-star or download-count threshold, or an
+identity/KYC gate that would block a first-time submitter. Every
+submission to either goes through genuine human review (not an automated
+merge) regardless of publisher reputation. Chocolatey is the more
+predictable target of the two: it publishes its own realistic turnaround
+estimate (days to weeks) for a first-time new-package submission;
+winget-pkgs' turnaround is undocumented, with only anecdotal community
+reports (hours to about a day, human-availability-dependent).
+
+**Not yet built, and why:** this research confirmed the gating/process
+questions but not the exact manifest file schema -- winget specifically
+requires a multi-file YAML manifest set (version, installer, and locale
+manifests, each with its own naming convention and schema version) that
+this pass didn't verify precisely enough to hand-author correctly. Rather
+than guess at a format and risk submitting something malformed, the
+safer next step is either a dedicated schema-verification research pass,
+or -- more reliably -- running Microsoft's own `wingetcreate` tool
+directly (it generates a correct manifest interactively from a package
+URL, the same way `brew create` was used as the starting point for
+residoo's own Homebrew formula). Submission itself -- opening a PR
+against `microsoft/winget-pkgs`, or creating a Chocolatey account and
+publishing a package -- is a distinct, separate action from writing the
+manifest, and one this project treats as the maintainer's own call, not
+something to do autonomously on their behalf.
+
+## Consumer UX: what "protected" looks like without a terminal
+
+Also checked in the same pass, for context rather than as a build
+decision: how real consumer security products signal passive protection
+without the user opening a terminal. Malwarebytes' Windows tray icon,
+per its own help-center documentation, uses colored-dot badges as a
+genuine status signal -- unbadged is the default "protected, no alerts"
+state, a red badge signals an active alert (such as real-time protection
+being off), and green/gray reflect VPN connection state. 1Password's
+menu-bar/tray icon, per its own docs, works differently: it's primarily a
+click-to-open gateway into its Quick Access panel, not a color-coded
+status light. Bitwarden's and Windows Security's own tray-icon behavior
+were not resolved by this research pass.
+
+This is recorded for a future decision, not acted on: a tray icon or GUI
+wrapper would be a materially larger scope change than anything else in
+this document, and residoo's CLI-first identity isn't something to drift
+away from on the strength of one research pass. If a lightweight status
+indicator is ever built, Malwarebytes' badge-on-a-default-icon pattern is
+the more relevant precedent than 1Password's click-through one, since it
+signals status without requiring a click at all.
