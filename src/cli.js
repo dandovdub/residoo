@@ -2,6 +2,7 @@
 
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const crypto = require("crypto");
 const { availableSources, ALL_SOURCES } = require("./sources");
 const { scan, emptyResult } = require("./scan");
@@ -13,7 +14,7 @@ const {
 const { startWatch, isTailable } = require("./watch");
 const { startMcpServer } = require("./mcp");
 const { buildTools } = require("./mcpTools");
-const { runGuard: runGuardEngine } = require("./guard");
+const { runGuard: runGuardEngine, buildHookConfig } = require("./guard");
 
 /**
  * A source is unavailable for the ordinary reason (not installed — nothing
@@ -183,6 +184,15 @@ Watch:
                           never to one already seen
   --include-noisy, --include-suppressed, --include-pii, --no-color
                           same meaning as scan
+  --no-notify             skip the OS desktop notification watch fires for
+                          each genuinely new finding (macOS via osascript,
+                          Linux via notify-send if installed; no built-in
+                          mechanism on Windows -- disclosed, not attempted).
+                          On by default in human-readable mode: watch's own
+                          purpose is alerting you, and a background process
+                          nobody is watching a terminal for needs more than
+                          a printed line. Never fires for a re-exposure of
+                          something already seen, and never in --json mode.
   Ctrl+C stops cleanly and prints a session summary (skipped with --json,
   where the same information is one final NDJSON event).
 
@@ -291,6 +301,19 @@ Guard:
                               "PostToolUse":[{"matcher":"Bash",
                                 "hooks":[{"type":"command",
                                 "command":"residoo guard"}]}]}}
+
+  residoo guard --print-config
+                          print that same merged JSON to stdout instead of
+                          hand-writing it -- reads your existing
+                          ~/.claude/settings.json if present, adds
+                          whatever residoo guard hooks are missing (never
+                          duplicates one already there), and prints the
+                          result. Writes NOTHING to disk: residoo never
+                          writes any file but its own rotation ledger and
+                          an explicit --seal vault, so save it yourself:
+                            residoo guard --print-config > ~/.claude/settings.json
+                          --project targets ./.claude/settings.json (the
+                          repo-local config) instead of the home-level one.
 
 Rotation:
   residoo explain <rule-id>     full rotation runbook for one detection rule
@@ -688,6 +711,7 @@ async function runWatch(args) {
   const verify = args.includes("--verify");
   const noColor = args.includes("--no-color");
   const includePii = args.includes("--include-pii");
+  const noNotify = args.includes("--no-notify");
 
   let intervalSeconds = 5;
   const intervalArg = argValue(args, "--interval");
@@ -713,7 +737,7 @@ async function runWatch(args) {
 
   const { promise, stop } = startWatch({
     sources,
-    options: { includeNoisy, includeSuppressed, verify, noColor, includePii, json: wantsJson, pollMs: intervalSeconds * 1000 },
+    options: { includeNoisy, includeSuppressed, verify, noColor, includePii, noNotify, json: wantsJson, pollMs: intervalSeconds * 1000 },
   });
 
   const printFinalSummary = (stats) => {
@@ -740,6 +764,57 @@ async function runWatch(args) {
   // possible from outside this function today, but the contract allows
   // it) -- print the summary exactly once regardless of which path got here.
   if (!signalled) printFinalSummary(stats);
+  return 0;
+}
+
+/**
+ * `residoo guard --print-config`: print the merged .claude/settings.json
+ * a user would need to register all three guard hooks, without ever
+ * writing it -- see guard.js's own buildHookConfig docstring for why this
+ * is print-only rather than an auto-installer. Reads the existing file
+ * (home-level by default, `--project` for the repo-local one) if present,
+ * merges in whatever hook groups are missing, and writes the result to
+ * STDOUT ONLY -- every instructional line goes to stderr, so
+ * `residoo guard --print-config > ~/.claude/settings.json` redirects
+ * exactly the JSON and nothing else.
+ */
+function runGuardPrintConfig(args) {
+  const wantsProject = args.includes("--project");
+  const targetPath = wantsProject
+    ? path.join(process.cwd(), ".claude", "settings.json")
+    : path.join(os.homedir(), ".claude", "settings.json");
+
+  let existing = {};
+  let existedAlready = false;
+  try {
+    const raw = fs.readFileSync(targetPath, "utf-8");
+    existedAlready = true;
+    try { existing = JSON.parse(raw); }
+    catch {
+      process.stderr.write(
+        `residoo guard --print-config: ${targetPath} exists but is not valid JSON. ` +
+        `Fix it first -- printing a merge against unparseable JSON would risk losing whatever is already there.\n`
+      );
+      return 1;
+    }
+  } catch (err) {
+    if (!(err && err.code === "ENOENT")) {
+      process.stderr.write(`residoo guard --print-config: could not read ${targetPath}: ${err.message}\n`);
+      return 1;
+    }
+  }
+
+  const merged = buildHookConfig(existing);
+  process.stderr.write(
+    (existedAlready
+      ? `residoo guard --print-config: merged residoo's three hooks into your existing ${targetPath} below.\n`
+      : `residoo guard --print-config: ${targetPath} doesn't exist yet -- here's a new one with residoo's three hooks.\n`) +
+    `Nothing was written to disk -- residoo never writes any file but its own rotation ledger and an explicit ` +
+    `--seal vault. Save this yourself, e.g.:\n` +
+    `  residoo guard --print-config${wantsProject ? " --project" : ""} > ${targetPath}\n` +
+    (wantsProject ? "" : "(add --project to target ./.claude/settings.json instead of the home-level one)\n")
+  );
+  process.stdout.write(JSON.stringify(merged, null, 2) + "\n");
   return 0;
 }
 
@@ -925,7 +1000,10 @@ async function main(argv) {
   if (cmd === "watch") return runWatch(args);
   if (cmd === "mcp") return runMcp(args);
   if (cmd === "cred") return runCred(args);
-  if (cmd === "guard") return runGuardEngine();
+  if (cmd === "guard") {
+    if (args.includes("--print-config")) return runGuardPrintConfig(args.slice(1));
+    return runGuardEngine();
+  }
   if (cmd !== "scan") {
     process.stderr.write(`Unknown command "${cmd}". Try "residoo --help".\n`);
     return 2;

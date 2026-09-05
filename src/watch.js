@@ -6,6 +6,7 @@ const crypto = require("crypto");
 const { scan } = require("./scan");
 const { guidanceFor, fingerprintFinding, loadAcks, loadDismissed, statePath } = require("./rotation");
 const { c, makePaint } = require("./color");
+const { notifyDesktop } = require("./notify");
 
 /**
  * `residoo watch`: continuous, near-real-time scanning of the same
@@ -563,7 +564,7 @@ function reloadLedgerIfChanged(prev) {
  * backstop and nothing riding on top of it. `options.fsWatch` is accepted
  * and ignored, reserved for when a future version adds real hints.
  */
-function startWatch({ sources, options = {}, out = process.stdout, errOut = process.stderr } = {}) {
+function startWatch({ sources, options = {}, out = process.stdout, errOut = process.stderr, notify = notifyDesktop } = {}) {
   const paint = makePaint(options.noColor, out);
   const tracked = new Map();
   const seen = new Map();
@@ -582,6 +583,17 @@ function startWatch({ sources, options = {}, out = process.stdout, errOut = proc
     }
     const line = renderHumanLine(event, paint);
     if (line !== null) out.write(line + "\n");
+    // Desktop notification is decoration on top of the line just written
+    // above, never a substitute for it -- JSON mode is for programmatic
+    // consumption (a pipe, a log shipper), not a human sitting in front of
+    // the terminal, so it's excluded the same way `options.noColor` only
+    // applies to the human-line path. Only a genuinely NEW finding notifies
+    // -- a `reexposure` (the same secret seen again) or a `watch-error`
+    // would otherwise turn a quiet, healthy watch into a notification
+    // spamming machine.
+    if (event.type === "finding" && !options.json && !options.noNotify) {
+      notify("residoo: new secret found", `${event.label} in ${event.relFile}:${event.line} (${event.preview})`);
+    }
   }
 
   async function tick() {

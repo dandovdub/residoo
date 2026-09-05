@@ -1533,6 +1533,57 @@ just asserted: a residoo-only rerun against the regenerated corpus still
 scores 45/45 (100%) distinct credentials, byte-identical to the last full
 reproduce. `npm test` (710 checks) and `npm run fuzz` both green.
 
+## residoo 0.18.0: two consumer-friction fixes -- desktop notifications and a config helper that never writes (added 2026-09-05)
+
+Not a new detection capability -- a "what's stopping an individual
+developer from actually turning this on" pass, following directly from
+the benchmark standing (already tied-or-ahead of every tracked competitor
+on every measured row) making clear that the open gap isn't detection
+quality, it's friction and distribution.
+
+**`residoo watch` fires an OS desktop notification for a genuinely new
+finding, on by default.** `osascript` on macOS, `notify-send` on Linux if
+installed (best-effort -- watch also runs on headless/server machines
+with no notification daemon at all), no built-in dependency-free mechanism
+found for Windows (a disclosed no-op there, not a silently assumed one).
+The terminal line watch already wrote is unchanged; the notification is
+decoration on top of it, for the realistic case that a background watch
+process has nobody staring at its terminal. Deliberately narrow: only a
+`finding` event notifies, never a `reexposure` (the same secret alerted on
+again would turn a healthy watch into a notification-spamming one) or a
+`watch-error`, and never in `--json` mode (that output is for a pipe or a
+log shipper, not a human at a desktop). `--no-notify` opts out entirely.
+`startWatch()` gained an injectable `notify` parameter, the same
+dependency-injection shape `out`/`errOut` already have, so this is fully
+testable without ever touching a real OS notification API.
+
+**`residoo guard --print-config` removes the "hand-write this JSON"
+barrier to turning guard on at all -- without writing anything.** This
+was checked against CONTRIBUTING.md's own hard rule (rule 3) before being
+built at all: "`~/.residoo/rotations.json` ... is the only file residoo
+ever writes outside an explicit `--seal` ... nothing else may claim this
+carve-out." An auto-installing `guard --install` that edited
+`.claude/settings.json` directly would have violated that rule outright,
+so this prints the merged config to stdout instead and writes nothing --
+`residoo guard --print-config > ~/.claude/settings.json` is the user's own
+explicit, visible act, not something residoo did on their behalf. Reads
+the existing file if present, adds whichever of the three guard hooks are
+missing (never duplicating one already registered -- idempotent against
+its own prior output), and leaves every unrelated key and every other
+tool's own hook group untouched. `--project` targets the repo-local
+`./.claude/settings.json` instead of the home-level one.
+
+One real bug caught before shipping: the first draft's "save this
+yourself" example command didn't include `--project` even when `--project`
+was the flag that produced the printed config -- copy-pasting it verbatim
+would have silently targeted the wrong (home-level) file next time. Found
+by testing the `--project` path directly, not by a review catching it
+after the fact.
+
+Touches watch.js and guard.js/cli.js only -- no scan.js/decode.js/
+patterns.js change, no benchmark reproduce needed. `npm test` (731 checks)
+and `npm run fuzz` both green.
+
 ## Reproduce
 
 ```

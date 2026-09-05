@@ -1,7 +1,7 @@
 {
   "name": "residoo",
   "description": "Find secrets leaking through AI coding agent session history. Query findings, check for new leaks, and get rotation guidance without leaving Claude Code.",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "author": {
     "name": "CloudRoam",
     "url": "https://cloudroam.io"

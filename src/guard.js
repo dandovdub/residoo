@@ -70,6 +70,56 @@
 const { PATTERNS, redact } = require("./patterns");
 const { VENDOR_EXAMPLE_VALUES, zeroEntropyTail } = require("./scan");
 
+const GUARD_COMMAND = "residoo guard";
+
+// matcher: null means Claude Code's own hook-config schema omits the field
+// entirely for an event with no matcher support (UserPromptSubmit) --
+// distinct from an empty string, which would mean "match everything" for
+// an event that DOES support matchers.
+const HOOK_EVENT_SPECS = [
+  { event: "PreToolUse", matcher: "Bash|Read" },
+  { event: "UserPromptSubmit", matcher: null },
+  { event: "PostToolUse", matcher: "Bash" },
+];
+
+/**
+ * Pure function: given a parsed Claude Code settings.json object (or `{}`
+ * for a fresh one), returns a NEW object with a "residoo guard" hook group
+ * appended to each of PreToolUse/UserPromptSubmit/PostToolUse's hook
+ * arrays -- unless a "residoo guard" command already exists ANYWHERE in
+ * that event's groups, in which case that event is left untouched
+ * (idempotent: running this against its own prior output changes
+ * nothing). Never mutates `existing`; every other key, every other tool's
+ * hook, every unrelated setting is carried through byte-for-byte.
+ *
+ * This function only COMPUTES a value -- it never touches a file, on
+ * purpose. CONTRIBUTING.md's own hard rule (rule 3) names
+ * `~/.residoo/rotations.json` as "the only file residoo ever writes
+ * outside an explicit --seal ... nothing else may claim this carve-out."
+ * An auto-installing `guard --install` that edited `.claude/settings.json`
+ * directly would violate that rule outright, so the CLI wraps this in
+ * `--print-config` instead (see cli.js's runGuardPrintConfig): print the
+ * merged JSON to stdout, let the human decide whether and where to save it.
+ */
+function buildHookConfig(existing) {
+  const settings = existing && typeof existing === "object" && !Array.isArray(existing)
+    ? JSON.parse(JSON.stringify(existing)) : {};
+  if (!settings.hooks || typeof settings.hooks !== "object" || Array.isArray(settings.hooks)) settings.hooks = {};
+
+  for (const { event, matcher } of HOOK_EVENT_SPECS) {
+    const groups = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
+    const alreadyPresent = groups.some((g) =>
+      g && typeof g === "object" && Array.isArray(g.hooks) &&
+      g.hooks.some((h) => h && typeof h === "object" && h.type === "command" && h.command === GUARD_COMMAND));
+    if (alreadyPresent) { settings.hooks[event] = groups; continue; }
+    const newGroup = matcher
+      ? { matcher, hooks: [{ type: "command", command: GUARD_COMMAND }] }
+      : { hooks: [{ type: "command", command: GUARD_COMMAND }] };
+    settings.hooks[event] = [...groups, newGroup];
+  }
+  return settings;
+}
+
 // A matched path fragment must be preceded by a path separator or the start
 // of the string, and followed by either the end of the string (the common
 // case for Read's file_path) or a shell metacharacter/whitespace (the case
@@ -402,5 +452,5 @@ async function runGuard({ input = process.stdin, output = process.stdout, errOut
 
 module.exports = {
   evaluateToolInput, matchSensitivePath, evaluatePromptText, evaluatePostToolUse,
-  runGuard, SENSITIVE_PATH_PATTERNS,
+  runGuard, buildHookConfig, SENSITIVE_PATH_PATTERNS,
 };

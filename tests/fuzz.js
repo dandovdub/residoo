@@ -23,10 +23,11 @@
 const fc = require("fast-check");
 const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("../src/decode");
 const { PATTERNS, NOISY_PATTERNS, redact } = require("../src/patterns");
-const { evaluateToolInput, matchSensitivePath, evaluatePromptText, evaluatePostToolUse } = require("../src/guard");
+const { evaluateToolInput, matchSensitivePath, evaluatePromptText, evaluatePostToolUse, buildHookConfig } = require("../src/guard");
 const { fingerprintFinding } = require("../src/rotation");
 const { extractImageBlocks } = require("../src/ocr");
 const { luhnValid, ibanValid, bip39ChecksumValid, findBip39Phrase } = require("../src/pii");
+const { notifyDesktop } = require("../src/notify");
 
 const ALL_RULES = PATTERNS.concat(NOISY_PATTERNS);
 const NUM_RUNS = process.env.FUZZ_RUNS ? Number(process.env.FUZZ_RUNS) : 2000;
@@ -156,6 +157,20 @@ property("evaluatePostToolUse never throws on any tool name and any tool_respons
     return typeof r === "object" && typeof r.act === "boolean";
   });
 
+// buildHookConfig runs on a user's own .claude/settings.json, read
+// straight off disk and JSON.parse'd -- arbitrary in shape by definition,
+// not just adversarial. Must never throw regardless of what's in there,
+// and must never mutate its input (the "print, never write" contract
+// depends on the caller's own read-then-print sequence never seeing a
+// value change out from under it).
+property("buildHookConfig never throws on any object/array/primitive shape, and never mutates its input",
+  fc.anything({ maxDepth: 3 }),
+  (existing) => {
+    const before = JSON.stringify(existing);
+    buildHookConfig(existing);
+    return JSON.stringify(existing) === before;
+  });
+
 // ── rotation.js: fingerprintFinding is called on every scan result before
 // anything reaches the ledger or an MCP response. Must never throw, and
 // must always produce the documented rf1-<32 hex> shape for any
@@ -208,6 +223,20 @@ property("bip39ChecksumValid never throws on a non-array input",
 property("findBip39Phrase never throws on any string, any length or content",
   fc.string({ maxLength: 500 }),
   (s) => { findBip39Phrase(s); return true; });
+
+// notifyDesktop shells out to a real OS binary (osascript/notify-send) --
+// child_process.spawn is monkey-patched to a no-op for the run so this
+// property doesn't fire 2000 real desktop notifications, the same
+// module-object-patching technique tests/smoke.js's own notify.js tests use.
+{
+  const cp = require("child_process");
+  const origSpawn = cp.spawn;
+  cp.spawn = () => ({ on: () => {}, unref: () => {} });
+  property("notifyDesktop never throws on any title/message input, any type",
+    fc.tuple(fc.anything(), fc.anything()),
+    ([title, message]) => { notifyDesktop(title, message); return true; });
+  cp.spawn = origSpawn;
+}
 
 console.log(`\n${NUM_RUNS} runs per property, ${failed === 0 ? "0 failed" : `${failed} FAILED`}`);
 process.exitCode = failed ? 1 : 0;

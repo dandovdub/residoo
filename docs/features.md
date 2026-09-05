@@ -35,6 +35,18 @@ verified directly against each one's own `--help` output rather than
 assumed; see [comparison.md](comparison.md) for how the one adjacent thing,
 GitGuardian's `ggshield` AI hook, works differently.
 
+A genuinely new finding also fires an OS desktop notification by default --
+`osascript` on macOS, `notify-send` on Linux if installed (no built-in,
+dependency-free mechanism exists on Windows, so it's a disclosed no-op
+there, not a silent gap). The terminal line above is still written either
+way; the notification is decoration on top of it, for the realistic case
+that nobody is staring at the terminal a background watch process runs in.
+A re-exposure of a secret already alerted on never notifies again --
+otherwise a single leaked value re-appearing on every future scan would
+turn a quiet, healthy watch into a notification-spamming one -- and neither
+does `--json` mode, since that output is for a pipe or a log shipper, not a
+human at a desktop.
+
 ```
 residoo watch [options]
 
@@ -42,7 +54,8 @@ residoo watch [options]
   --json                  NDJSON events on stdout, one line per finding/re-exposure
   --verify                same opt-in vendor check as scan --verify, applied to
                           each newly found credential once
-  --include-noisy, --include-suppressed, --no-color   same meaning as scan
+  --no-notify             skip the desktop notification, keep the terminal line
+  --include-noisy, --include-suppressed, --include-pii, --no-color   same meaning as scan
 ```
 
 ## MCP: query findings from inside Claude Code
@@ -273,6 +286,22 @@ Code doesn't support one there). Same binary, same behavior either way: it
 reads one hook payload from stdin and writes a decision to stdout only
 when something matches; anything it doesn't recognize falls through
 untouched, with zero output, exit 0.
+
+Don't want to hand-write that JSON? `residoo guard --print-config` computes
+and prints the exact same merged config — reading your existing
+`~/.claude/settings.json` if you have one, adding whatever of the three
+hooks is missing (never duplicating one already there), and printing the
+result. It never writes the file itself: residoo never writes any file but
+its own rotation ledger and an explicit `--seal` vault (`CONTRIBUTING.md`'s
+own hard rule), so saving it is a deliberate, visible step you take
+yourself:
+
+```bash
+residoo guard --print-config > ~/.claude/settings.json
+```
+
+`--project` targets `./.claude/settings.json` (the repo-local config)
+instead.
 
 ### Audit trail
 

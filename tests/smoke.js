@@ -3470,6 +3470,60 @@ async function main() {
       runProj(["scan", "--project", path.join(tmp, "no-such-dir")]).status === 2);
   }
 
+  // ── notify: OS desktop notifications for watch (src/notify.js) ─────────────
+  // child_process.spawn is monkey-patched on the shared module object (Node
+  // caches modules, so this reaches notify.js's own `cp.spawn` call without
+  // notify.js needing an injectable-dependency parameter of its own) --
+  // restored immediately after each check so nothing else in this file that
+  // spawns a real process is affected.
+  {
+    const cp = require("child_process");
+    const origSpawn = cp.spawn;
+    const { notifyDesktop } = require("../src/notify");
+
+    if (process.platform === "darwin") {
+      let captured = null;
+      cp.spawn = (cmd, cmdArgs, opts) => {
+        captured = { cmd, cmdArgs, opts };
+        return { on: () => {}, unref: () => {} };
+      };
+      notifyDesktop("residoo: new secret found", "GitHub PAT in x.jsonl:3 (ghp_…abcd)");
+      cp.spawn = origSpawn;
+      check("notifyDesktop (macOS): spawns osascript with -e and a display-notification script",
+        !!captured && captured.cmd === "osascript" && captured.cmdArgs[0] === "-e" &&
+        captured.cmdArgs[1].includes("display notification") &&
+        captured.cmdArgs[1].includes("GitHub PAT in x.jsonl:3"));
+      check("notifyDesktop (macOS): stdio is ignored and the child is unref'd (never keeps the process alive)",
+        !!captured && captured.opts.stdio === "ignore");
+
+      let captured2 = null;
+      cp.spawn = (cmd, cmdArgs) => { captured2 = { cmd, cmdArgs }; return { on: () => {}, unref: () => {} }; };
+      notifyDesktop('title with "quote"', 'message with \\backslash and "quote"');
+      cp.spawn = origSpawn;
+      check("notifyDesktop (macOS): quotes/backslashes in title or message are escaped, not left to break the script",
+        !!captured2 && /display notification ".*" with title ".*"/.test(captured2.cmdArgs[1]) &&
+        captured2.cmdArgs[1].includes('\\"quote\\"') && captured2.cmdArgs[1].includes("\\\\backslash"));
+
+      cp.spawn = () => { throw new Error("spawn ENOENT"); };
+      let threw = false;
+      try { notifyDesktop("t", "m"); } catch { threw = true; }
+      cp.spawn = origSpawn;
+      check("notifyDesktop (macOS): a spawn failure (e.g. osascript missing) never throws", !threw);
+    } else if (process.platform === "linux") {
+      let captured = null;
+      cp.spawn = (cmd, cmdArgs, opts) => { captured = { cmd, cmdArgs, opts }; return { on: () => {}, unref: () => {} }; };
+      notifyDesktop("residoo: new secret found", "GitHub PAT in x.jsonl:3 (ghp_…abcd)");
+      cp.spawn = origSpawn;
+      check("notifyDesktop (Linux): spawns notify-send with title and message as separate args",
+        !!captured && captured.cmd === "notify-send" &&
+        captured.cmdArgs[0] === "residoo: new secret found" &&
+        captured.cmdArgs[1] === "GitHub PAT in x.jsonl:3 (ghp_…abcd)");
+    }
+
+    check("notifyDesktop: never throws on non-string input",
+      (() => { try { notifyDesktop(null, undefined); notifyDesktop(123, {}); return true; } catch { return false; } })());
+  }
+
   // ── watch: continuous scanning (src/watch.js) ───────────────────────────────
   // In-process only, real timers at a tiny pollMs, real temp files — never a
   // spawned child (no precedent for that anywhere else in this suite, and a
@@ -3741,6 +3795,77 @@ async function main() {
       check("watch: several findings-free sweeps write zero bytes to stdout and stderr",
         out.chunks.length === 0 && errOut.chunks.length === 0 && stats.sweeps >= 3);
     }
+
+    // 16: desktop notification wiring (src/notify.js's own decision logic
+    // lives inside startWatch's emit(), not sweepOnce -- these tests need
+    // the real startWatch, not the sweepOnce-only fixture above). A fake
+    // `notify` function is injected (startWatch's own dependency-injection
+    // parameter, the same shape `out`/`errOut` already use) so this never
+    // touches a real osascript/notify-send process.
+    {
+      const file = path.join(wDir, "t16.jsonl");
+      fs.writeFileSync(file, "");
+      const out = new FakeStream(), errOut = new FakeStream();
+      const calls = [];
+      const fakeNotify = (title, message) => calls.push({ title, message });
+      const { promise, stop } = startWatch({
+        sources: [watchSource(file)], options: { ...wOpts, json: false, pollMs: 15 }, out, errOut, notify: fakeNotify,
+      });
+      await new Promise((r) => setTimeout(r, 30)); // let the baseline sweep run
+      fs.appendFileSync(file, JSON.stringify({ message: { content: "key: " + plantedAwsKey } }) + "\n");
+      await new Promise((r) => setTimeout(r, 60)); // let a sweep pick up the new line
+      fs.appendFileSync(file, JSON.stringify({ message: { content: "same key again: " + plantedAwsKey } }) + "\n");
+      await new Promise((r) => setTimeout(r, 60)); // a re-exposure of the SAME key
+      stop();
+      await promise;
+      check("watch: a genuinely new finding calls the injected notify function exactly once",
+        calls.length === 1);
+      check("watch: the notification names the rule label, file, and redacted preview -- never the raw secret",
+        calls.length === 1 && calls[0].title.includes("residoo") &&
+        calls[0].message.includes("AWS") && calls[0].message.includes("t16.jsonl") &&
+        !calls[0].message.includes(plantedAwsKey));
+      check("watch: a re-exposure of the same secret does NOT fire a second notification",
+        calls.length === 1); // still 1 after the second (duplicate) append above
+    }
+
+    // 17: --no-notify suppresses it entirely, even for a genuinely new finding
+    {
+      const file = path.join(wDir, "t17.jsonl");
+      fs.writeFileSync(file, "");
+      const out = new FakeStream(), errOut = new FakeStream();
+      const calls = [];
+      const { promise, stop } = startWatch({
+        sources: [watchSource(file)], options: { ...wOpts, json: false, noNotify: true, pollMs: 15 }, out, errOut,
+        notify: (t, m) => calls.push({ t, m }),
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      fs.appendFileSync(file, JSON.stringify({ message: { content: "key: " + plantedAwsKey } }) + "\n");
+      await new Promise((r) => setTimeout(r, 60));
+      stop();
+      await promise;
+      check("watch --no-notify: a new finding is still printed to stdout but never notified",
+        out.chunks.length > 0 && calls.length === 0);
+    }
+
+    // 18: JSON mode never notifies either -- notifications are for a human
+    // watching a desktop, not a consumer parsing NDJSON programmatically.
+    {
+      const file = path.join(wDir, "t18.jsonl");
+      fs.writeFileSync(file, "");
+      const out = new FakeStream(), errOut = new FakeStream();
+      const calls = [];
+      const { promise, stop } = startWatch({
+        sources: [watchSource(file)], options: { ...wOpts, json: true, pollMs: 15 }, out, errOut,
+        notify: (t, m) => calls.push({ t, m }),
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      fs.appendFileSync(file, JSON.stringify({ message: { content: "key: " + plantedAwsKey } }) + "\n");
+      await new Promise((r) => setTimeout(r, 60));
+      stop();
+      await promise;
+      check("watch --json: a new finding is emitted as NDJSON but never notified",
+        out.chunks.length > 0 && calls.length === 0);
+    }
   }
 
   // ── guard: a PreToolUse hook that blocks obviously-sensitive file reads ────
@@ -3963,6 +4088,94 @@ async function main() {
     }));
     check("guard CLI: a PostToolUse payload with a sensitive-path-shaped tool_input is never misrouted into a PreToolUse deny",
       potuMisrouteRun.stdout === "" && potuMisrouteRun.stderr === "" && potuMisrouteRun.status === 0);
+
+    // ── guard --print-config: buildHookConfig (pure) + CLI, never writes ──────
+    const { buildHookConfig } = require("../src/guard");
+
+    check("buildHookConfig: starting from {} adds all three hook groups with the documented matchers",
+      (() => {
+        const r = buildHookConfig({});
+        return r.hooks.PreToolUse[0].matcher === "Bash|Read" &&
+          r.hooks.PreToolUse[0].hooks[0].command === "residoo guard" &&
+          r.hooks.UserPromptSubmit[0].matcher === undefined &&
+          r.hooks.UserPromptSubmit[0].hooks[0].command === "residoo guard" &&
+          r.hooks.PostToolUse[0].matcher === "Bash" &&
+          r.hooks.PostToolUse[0].hooks[0].command === "residoo guard";
+      })());
+    check("buildHookConfig: preserves unrelated settings and an unrelated existing hook group untouched",
+      (() => {
+        const existing = { permissions: { allow: ["Bash(npm test:*)"] },
+          hooks: { PreToolUse: [{ matcher: "Write", hooks: [{ type: "command", command: "my-other-hook" }] }] } };
+        const r = buildHookConfig(existing);
+        return r.permissions.allow[0] === "Bash(npm test:*)" &&
+          r.hooks.PreToolUse.length === 2 &&
+          r.hooks.PreToolUse[0].command === undefined && r.hooks.PreToolUse[0].matcher === "Write" &&
+          r.hooks.PreToolUse[0].hooks[0].command === "my-other-hook" &&
+          r.hooks.PreToolUse[1].hooks[0].command === "residoo guard";
+      })());
+    check("buildHookConfig: never mutates its input object",
+      (() => {
+        const existing = { hooks: { PreToolUse: [] } };
+        const snapshot = JSON.stringify(existing);
+        buildHookConfig(existing);
+        return JSON.stringify(existing) === snapshot;
+      })());
+    check("buildHookConfig: idempotent -- running it again on its own output adds nothing new",
+      (() => {
+        const once = buildHookConfig({});
+        const twice = buildHookConfig(once);
+        return twice.hooks.PreToolUse.length === 1 && twice.hooks.UserPromptSubmit.length === 1 &&
+          twice.hooks.PostToolUse.length === 1;
+      })());
+    check("buildHookConfig: never throws on garbage input (array, string, null, undefined)",
+      (() => {
+        try {
+          buildHookConfig([1, 2, 3]); buildHookConfig("not an object");
+          buildHookConfig(null); buildHookConfig(undefined);
+          return true;
+        } catch { return false; }
+      })());
+
+    {
+      const pcHome = path.join(tmp, "print-config-home");
+      fs.mkdirSync(pcHome, { recursive: true });
+      const runPrintConfig = (extraArgs, env) => spawnSync(process.execPath,
+        [residooBin, "guard", "--print-config", ...extraArgs],
+        { encoding: "utf-8", env: { ...process.env, HOME: pcHome, ...env } });
+
+      const fresh = runPrintConfig([]);
+      let freshParsed = null;
+      try { freshParsed = JSON.parse(fresh.stdout); } catch { /* checked below */ }
+      check("guard --print-config CLI: prints valid JSON with all three hooks when no settings.json exists yet",
+        fresh.status === 0 && !!freshParsed && freshParsed.hooks.PreToolUse[0].hooks[0].command === "residoo guard");
+      check("guard --print-config CLI: never writes the settings.json file itself",
+        !fs.existsSync(path.join(pcHome, ".claude", "settings.json")));
+      check("guard --print-config CLI: instructional text goes to stderr, never stdout (so redirecting stdout saves exactly the JSON)",
+        fresh.stderr.includes("Nothing was written to disk") && !fresh.stdout.includes("Nothing was written"));
+
+      fs.mkdirSync(path.join(pcHome, ".claude"), { recursive: true });
+      fs.writeFileSync(path.join(pcHome, ".claude", "settings.json"), "{ not valid json");
+      const badJson = runPrintConfig([]);
+      check("guard --print-config CLI: an existing-but-unparseable settings.json fails loudly instead of guessing",
+        badJson.status === 1 && badJson.stdout === "" && badJson.stderr.includes("not valid JSON"));
+
+      fs.writeFileSync(path.join(pcHome, ".claude", "settings.json"),
+        JSON.stringify({ env: { MY_VAR: "1" } }));
+      const merged = runPrintConfig([]);
+      let mergedParsed = null;
+      try { mergedParsed = JSON.parse(merged.stdout); } catch { /* checked below */ }
+      check("guard --print-config CLI: merges into a real existing settings.json, preserving unrelated keys",
+        merged.status === 0 && !!mergedParsed && mergedParsed.env.MY_VAR === "1" &&
+        mergedParsed.hooks.PostToolUse[0].hooks[0].command === "residoo guard");
+
+      const projDir = path.join(tmp, "print-config-project");
+      fs.mkdirSync(projDir, { recursive: true });
+      const projectRun = spawnSync(process.execPath, [residooBin, "guard", "--print-config", "--project"],
+        { encoding: "utf-8", cwd: projDir, env: { ...process.env, HOME: pcHome } });
+      check("guard --print-config --project CLI: targets ./.claude/settings.json, not the home-level one, and suggests --project in the save command",
+        projectRun.status === 0 && projectRun.stderr.includes(path.join(projDir, ".claude", "settings.json")) &&
+        projectRun.stderr.includes("--print-config --project >"));
+    }
   }
 
   // ── mcp: hand-rolled MCP server over stdio (src/mcp.js + src/mcpTools.js) ───
