@@ -72,13 +72,23 @@ observed, not just documented. All 8, not just the closest one:
 | tool | distinct credentials found | precision | egress during the scan |
 |---|---|---|---|
 | **residoo** | **45/45 (100%)** | **100%** | **none-observed** |
-| agentsweep | 33/42 (79%) | 100% | none-observed |
+| agentsweep | 33/42 (79%) | 89% | none-observed |
 | gitleaks | 32/45 (71%) | 100% | none-observed |
-| betterleaks | 32/45 (71%) | 100% | none-observed |
+| betterleaks | 32/45 (71%) | 95% | none-observed |
 | whatileaked | 28/42 (67%) | 100% | none-observed |
-| kingfisher | 29/45 (64%) | 100% | attempts calls in default mode |
+| kingfisher | 29/45 (64%) | 97% | attempts calls in default mode |
 | trufflehog | 29/45 (64%) | 97% | attempts calls in default mode |
 | detect-secrets | 25/45 (56%) | 2% | attempts calls in default mode |
+
+Precision here counts a flagged vendor-documented example key (a real,
+deliberate suppress-placeholder in the corpus) as a false positive, the
+stricter of the two measures `bench/RESULTS.md` reports throughout —
+several tools above score better on the looser "excluding suppress flags"
+measure (e.g. agentsweep and betterleaks both reach 100% there), but this
+is the one that matches what a user actually experiences: a tool that
+flags AWS's own published example key on every run trains people to
+ignore its output. residoo and gitleaks are the only two tools that hit
+100% either way.
 
 "none-observed" is a measured result, not a default assumption: every run
 sits under a live proxy trap and process-tree polling, and a deliberate

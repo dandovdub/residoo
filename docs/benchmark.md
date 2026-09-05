@@ -9,13 +9,23 @@ most recently v0.17.0:
 | tool | distinct credentials found | precision | egress during the scan |
 |---|---|---|---|
 | **residoo** | **45/45 (100%)** | **100%** | **none-observed** |
-| agentsweep | 33/42 (79%) | 100% | none-observed |
+| agentsweep | 33/42 (79%) | 89% | none-observed |
 | gitleaks | 32/45 (71%) | 100% | none-observed |
-| betterleaks | 32/45 (71%) | 100% | none-observed |
+| betterleaks | 32/45 (71%) | 95% | none-observed |
 | whatileaked | 28/42 (67%) | 100% | none-observed |
-| kingfisher | 29/45 (64%) | 100% | attempts calls in default mode (49 connection attempts) |
+| kingfisher | 29/45 (64%) | 97% | attempts calls in default mode (49 connection attempts) |
 | trufflehog | 29/45 (64%) | 97% | attempts calls in default mode (64 connection attempts) |
 | detect-secrets | 25/45 (56%) | 2% | attempts calls in default mode (24 connection attempts) |
+
+Precision here counts flagging a documented vendor-example key (a
+deliberate suppress-placeholder planted in the corpus) as a false
+positive -- the stricter of the two measures `bench/RESULTS.md` reports
+per tool throughout. Several rows score better on the looser "excluding
+suppress flags" measure (agentsweep and betterleaks both reach 100%
+there); this is the one that matches what a user actually experiences,
+since a tool that flags AWS's own published example key on every run
+trains people to ignore its output. residoo and gitleaks are the only two
+tools that hit 100% either way.
 
 No single blended score, on purpose: a blend would hide exactly the class-
 level differences (base64-wrapped, split-across-lines, JSON-nested) the
