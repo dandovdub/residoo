@@ -175,6 +175,13 @@ gap, none catches every case, and all are re-includable with
 certainty — true of every tool in this category, including the well-
 established ones.
 
+- **No mobile app.** Researched, not assumed: residoo's file-scanning
+  approach cannot port to stock iOS under Apple's own sandboxing model,
+  and every alternative mechanism checked (a keyboard extension, a local
+  VPN content filter) has a specific, disqualifying problem. See
+  [docs/platform-scope.md](docs/platform-scope.md) for the full technical
+  verdict and what would change it.
+
 ## Install
 
 ```bash
