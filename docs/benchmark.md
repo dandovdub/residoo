@@ -4,7 +4,7 @@ A reproducible benchmark against 8 real competing tools, on a synthetic-but-
 pattern-true corpus (72 Claude Code sessions, 45 planted credentials, zero
 real secrets), with live egress monitoring so "no network calls" is
 observed, not just documented. Re-run against every meaningful release,
-most recently v0.15.0:
+most recently v0.16.0:
 
 | tool | distinct credentials found | precision | egress during the scan |
 |---|---|---|---|

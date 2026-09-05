@@ -677,6 +677,79 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd(), projectMode 
     }
   }
 
+  // ---- 5. credential-vault file permissions (HOME only, POSIX only) ------
+  // GitGuardian's "State of Secrets Sprawl 2026" (blog.gitguardian.com,
+  // published 2026-03-17) found 24,008 unique secrets in MCP-related config
+  // files on public GitHub, 8.8% of them still live -- these files
+  // routinely hold real, working credentials. This does not scan their
+  // CONTENT: the files below are the exact "credential VAULTS ... deliberately
+  // NOT read" set from agent-configs.js's own header comment, files whose
+  // whole documented job is holding the user's own keys/tokens -- reporting
+  // their content re-reports what the user put there on purpose. What's
+  // checked instead is narrower and complementary: whether the file's own OS
+  // permission bits leak that live credential to every other account on the
+  // machine. Anthropic's own docs (code.claude.com/docs/en/authentication,
+  // "Credential management", fetched 2026-09-04) state Claude Code writes
+  // .credentials.json with file mode 0600 on Linux and as the macOS
+  // Keychain-write-failure fallback, and that Windows inherits its user
+  // profile directory's own access controls. Kiro's own security guidance
+  // separately recommends "chmod 600" on its global mcp.json -- the
+  // vendor's own admission it holds secrets (already cited in
+  // agent-configs.js). Nothing here disputes that these tools do the right
+  // thing by default; the point is drift AFTER that -- a WSL DrvFs mount, a
+  // naive backup restore, or a shared-volume container mount can each
+  // silently widen a file's mode without the tool that wrote it ever
+  // knowing, the same way SSH itself checks id_rsa's permissions rather
+  // than trusting whoever created it. Windows is skipped entirely, not
+  // approximated: Node's fs.Stats.mode on Windows does not reflect NTFS
+  // ACLs, so a POSIX-style bit check there would be meaningless rather than
+  // merely imprecise. Project mode is skipped too -- none of these are ever
+  // project-scoped files by any vendor's own design, so there is no
+  // project-relative equivalent to check.
+  if (!projectMode && process.platform !== "win32") {
+    const geminiDir = process.env.GEMINI_CLI_HOME
+      ? path.join(process.env.GEMINI_CLI_HOME, ".gemini")
+      : path.join(home, ".gemini");
+    const credentialVaultFiles = [
+      {
+        file: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(home, ".claude"), ".credentials.json"),
+        note: "Claude Code's OAuth login (code.claude.com/docs/en/authentication documents file mode 0600)",
+      },
+      {
+        file: path.join(process.env.CODEX_HOME || path.join(home, ".codex"), "auth.json"),
+        note: "Codex CLI's own auth store",
+      },
+      { file: path.join(geminiDir, "oauth_creds.json"), note: "Gemini CLI's own OAuth store" },
+      { file: path.join(geminiDir, ".env"), note: "Gemini CLI's own credential env file" },
+      {
+        file: path.join(home, ".kiro", "settings", "mcp.json"),
+        note: "Kiro's own security guidance recommends chmod 600 on this file",
+      },
+    ];
+    for (const { file, note } of credentialVaultFiles) {
+      const r = path.resolve(file);
+      if (seen.has(r)) continue;
+      seen.add(r);
+      let stat;
+      try { stat = fs.statSync(file); }
+      catch (err) {
+        mark(file, err && err.code === "ENOENT" ? "absent" : "unreadable");
+        if (!(err && err.code === "ENOENT")) {
+          add("warn", "unreadable-config", file, "credential file exists but its permissions could not be checked (stat failed): unverified, not clean");
+        }
+        continue;
+      }
+      mark(file, "checked");
+      const openBits = stat.mode & 0o077;
+      if (openBits !== 0) {
+        const octal = (stat.mode & 0o777).toString(8).padStart(3, "0");
+        const shown = display(file);
+        add("warn", "insecure-credential-permissions", file,
+          `${note}; current mode ${octal} grants group and/or other accounts on this machine access to a live credential. Fix: chmod 600 "${shown}"`);
+      }
+    }
+  }
+
   return {
     findings,
     filesChecked,

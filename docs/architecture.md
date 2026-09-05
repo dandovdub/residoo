@@ -25,6 +25,13 @@ and zero-width-Unicode prompt injection. Every scan now also runs
 - `CLAUDE.md`, `.cursorrules`, and `.cursor/rules/*` are checked for
   zero-width Unicode.
 - `.vscode/tasks.json` is parsed for folder-open auto-run tasks.
+- The credential-vault files those same tools deliberately keep out of
+  content-scanning (`.credentials.json`, `auth.json`, `oauth_creds.json`,
+  Kiro's global `mcp.json`) are checked for insecure OS permissions instead
+  -- world- or group-readable is flagged, on POSIX only, home-level only.
+  Content is never read; a live credential leaking via a widened file mode
+  (a WSL mount, a naive backup restore) is the thing being caught, not the
+  token itself.
 
 Read-only like everything else. `--no-integrity` skips it entirely. A
 config that can't be read is reported as unverified, never silently

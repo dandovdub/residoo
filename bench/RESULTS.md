@@ -1368,6 +1368,65 @@ Touches no scan.js matching logic at all -- pure plumbing -- so the full
 benchmark reproduce sequence wasn't re-run; `npm test` (680 checks) and
 `npm run fuzz` both green instead.
 
+## residoo 0.16.0: checking whether a credential vault leaked itself, via its own permission bits (added 2026-09-05)
+
+A second deep-research pass, this time specifically over TheHackerNews,
+BleepingComputer, Unit 42, and GitGuardian's own primary research from the
+last 12 months, turned up the same "State of Secrets Sprawl 2026" report
+already cited in `docs/architecture.md` for its MCP-config-file finding
+(24,008 secrets, 2,117 still valid) -- confirming that number, not adding
+a new one. What was new: chasing a secondary-source claim ("Claude Code
+stores its OAuth token in plaintext JSON, world-readable on WSL") through
+to Anthropic's own docs (`code.claude.com/docs/en/authentication`, fetched
+directly, not summarized) showed the WSL-0777 specific claim doesn't hold
+up -- Anthropic's docs state file mode 0600 on Linux and as the macOS
+Keychain-fallback, with Windows inheriting its profile directory's ACLs.
+The research pipeline's own adversarial verifiers reached the same
+conclusion independently (0-3 votes to refute the WSL detail, sourced to
+an uncited vendor blog with no CVE/advisory behind it) -- confirmed rather
+than assumed correct just because it arrived pre-labeled "refuted."
+
+The underlying risk class survives even though that one claim didn't:
+Claude Code (and Codex CLI, and Gemini CLI, and -- by the vendor's own
+admission -- Kiro's global `mcp.json`) write a live, working credential to
+a plaintext file, correctly restricted at write time. Nothing re-checks
+that restriction afterward. A WSL DrvFs mount, a naive backup restore, or
+a shared-volume container mount can each silently widen a file's mode
+without the tool that wrote it ever finding out -- the same reasoning
+OpenSSH itself applies to `id_rsa`, just not yet applied to this decade's
+equivalent files.
+
+`integrity.js` gained a fifth check, alongside the existing planted-hook,
+dropper-filename, zero-width-Unicode, and folder-open-task checks: for a
+short, named list of credential-vault files -- exactly the "credential
+VAULTS ... deliberately NOT read" set `agent-configs.js`'s own header
+comment already names, so this reuses an existing, already-justified
+category rather than inventing a new one -- check the file's own OS
+permission bits, never its content. World- or group-readable (or
+-writable) escalates to a warning naming the exact `chmod 600` fix.
+Content-scanning and permission-checking are complementary, not
+redundant: Kiro's `mcp.json` is scanned for accidentally-typed secrets
+AND permission-checked, since the vendor's own security page treats it as
+both at once.
+
+POSIX only, by design rather than by gap: Node's `fs.Stats.mode` on
+Windows doesn't reflect NTFS ACLs, so a bit check there would be
+meaningless, not merely imprecise -- silently skipped, same as
+`keychain.js`'s existing Windows refusal. Home-level only: none of these
+files are ever project-scoped by any vendor's own design, so the whole
+check is skipped entirely in `--project` mode rather than re-anchored at
+a checkout path where it would mean nothing.
+
+Rides the existing `checkIntegrity()`/`--no-integrity` plumbing for free
+-- no new CLI flag, no new MCP schema field, no new watch.js wiring. Five
+new tests: a world-readable fixture warns with the right octal mode and
+fix command, a correctly-permissioned one doesn't, an absent file reports
+"absent" rather than a finding, no absolute path (username) ever leaks
+into a finding, and project mode skips the whole check rather than
+misapplying it. Touches no scan.js matching logic -- pure integrity-check
+addition -- so the full benchmark reproduce sequence wasn't re-run;
+`npm test` (685 checks) and `npm run fuzz` both green instead.
+
 ## Reproduce
 
 ```

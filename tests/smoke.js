@@ -2240,6 +2240,47 @@ async function main() {
       findingsJson.includes("\\\\u{200B}"));
   }
 
+  // -- integrity: credential-vault file PERMISSIONS, not content -----------
+  // GitGuardian's "State of Secrets Sprawl 2026" found MCP config files are
+  // a real, sizable live-credential leak surface; this checks whether a
+  // known credential-vault file's own OS permission bits leak it to other
+  // accounts on the machine, independent of and complementary to the
+  // content-scanning these same files are deliberately excluded from
+  // (agent-configs.js's "credential VAULTS" list). POSIX-only by design --
+  // see integrity.js's own section-5 comment for why Windows is skipped
+  // entirely rather than approximated.
+  if (process.platform !== "win32") {
+    const pHome = path.join(tmp, "integrity-perm-home");
+    fs.mkdirSync(path.join(pHome, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(pHome, ".codex"), { recursive: true });
+    const worldReadableCred = path.join(pHome, ".claude", ".credentials.json");
+    const properCred = path.join(pHome, ".codex", "auth.json");
+    fs.writeFileSync(worldReadableCred, JSON.stringify({ token: "fake" }));
+    fs.chmodSync(worldReadableCred, 0o644);
+    fs.writeFileSync(properCred, JSON.stringify({ token: "fake" }));
+    fs.chmodSync(properCred, 0o600);
+
+    const { checkIntegrity: checkIntegrityPerm } = require("../src/integrity");
+    const permInteg = checkIntegrityPerm({ home: pHome, cwd: pHome, projectMode: false });
+    const permWarns = permInteg.findings.filter((f) => f.kind === "insecure-credential-permissions");
+
+    check("integrity warns on a world-readable Claude Code credentials.json (mode 644)",
+      permWarns.some((f) => f.file.includes(".credentials.json") && f.detail.includes("644") &&
+        f.detail.includes("chmod 600")));
+    check("integrity does not warn on a correctly-permissioned auth.json (mode 600)",
+      !permInteg.findings.some((f) => f.file.includes("auth.json")));
+    check("integrity marks an absent credential-vault file 'absent', not a finding",
+      permInteg.filesChecked.some((f) => f.file.includes("oauth_creds.json") && f.status === "absent") &&
+      !permInteg.findings.some((f) => f.file.includes("oauth_creds.json")));
+    check("integrity permission findings carry no absolute path (no leaked username)",
+      permWarns.every((f) => !f.detail.includes(os.homedir()) && (f.file.startsWith("~") || f.file.startsWith("."))));
+
+    const permIntegProject = checkIntegrityPerm({ home: pHome, cwd: pHome, projectMode: true });
+    check("integrity skips credential-permission checks entirely in project mode",
+      !permIntegProject.findings.some((f) => f.kind === "insecure-credential-permissions") &&
+      !permIntegProject.filesChecked.some((f) => f.file.includes("credentials.json") || f.file.includes("auth.json")));
+  }
+
   // ── CLI end to end: agent-configs + integrity wired, --no-integrity skips ─
   // Spawned as a child process with HOME pointed at a synthetic directory so
   // every source's require-time path construction resolves inside the
