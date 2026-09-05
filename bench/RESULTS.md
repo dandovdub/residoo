@@ -1584,6 +1584,125 @@ Touches watch.js and guard.js/cli.js only -- no scan.js/decode.js/
 patterns.js change, no benchmark reproduce needed. `npm test` (731 checks)
 and `npm run fuzz` both green.
 
+## residoo 0.19.0: two real Windows gaps closed, verified against Microsoft's own docs, not guessed (added 2026-09-05)
+
+A "best in class on laptops, Windows included" pass started with a direct
+audit of the codebase rather than assumption: three places (`notify.js`,
+`integrity.js`, `keychain.js`) already explicitly disclosed Windows as
+unsupported or skipped. Two of those three close cleanly this release; the
+third (native desktop notifications) is still pending a specific follow-up
+question -- see below.
+
+**NTFS ACL auditing for the credential-vault permission check
+(`integrity.js`).** v0.16.0 shipped POSIX-only, disclosing that Node's
+`fs.Stats.mode` on Windows doesn't reflect NTFS ACLs at all. Research into
+the two candidate built-in mechanisms found a real asymmetry: `icacls.exe`
+looked promising but two of its most useful-sounding capabilities didn't
+survive verification -- it has no `/findsid` switch, and its text output
+isn't reliably parseable, contradicting an initial framing of it as
+scriptable. `Get-Acl` (Microsoft.PowerShell.Security, ships in every
+stock Windows 10/11 install) is the real mechanism: it returns typed
+`FileSystemAccessRule` objects, not text, with `IdentityReference`/
+`FileSystemRights`/`AccessControlType` as first-class properties. Shells
+out to `powershell.exe`, projects every field through an explicit
+`PSCustomObject` before `ConvertTo-Json` (forcing plain strings regardless
+of how the underlying .NET types would otherwise serialize) and wraps the
+result via `-InputObject` rather than piping it, specifically to dodge a
+well-known `ConvertTo-Json` gotcha: a single-item collection piped in
+collapses to a bare JSON object instead of a one-element array. English-
+locale principal names only (Everyone, BUILTIN\Users, NT AUTHORITY\
+Authenticated Users) is a disclosed, not silent, gap -- a non-English
+Windows install localizes these names and won't match, the same shape of
+limit `ibanValid`'s per-country-length gap and the OCR module's English-
+only wordlist already carry elsewhere in this project.
+
+**Windows keychain support for `--seal --keychain`, via DPAPI -- but
+deliberately NOT for `residoo cred`.** This one needed a real
+architectural gate before writing any code, not just a technical
+feasibility check: CONTRIBUTING.md's hard rule (rule 3) says residoo may
+never write a file outside `~/.residoo/rotations.json` and an explicit
+`--seal`. On macOS/Linux, `--keychain` never touches that rule because
+`security`/`secret-tool` are external, OS-managed stores -- residoo
+invokes them but never itself writes the underlying credential file.
+`cmdkey.exe` (Windows Credential Manager's own CLI) looked like the
+natural equivalent, but Microsoft's own documentation states plainly
+"Passwords are not displayed after they're stored," and `/list` only ever
+shows target names and usernames -- confirmed write/list-only, a dead end
+for a store-then-retrieve flow. DPAPI (`System.Security.Cryptography.
+ProtectedData`) is the real built-in mechanism, confirmed reachable from
+stock PowerShell 5.1 via `Add-Type -AssemblyName System.Security` with
+zero extra installs -- but it's a stateless encrypt/decrypt PRIMITIVE, not
+a named registry, so something still has to decide where the encrypted
+bytes live.
+
+That's why `keychain.js` gained a genuinely separate function pair
+(`wrapVaultKeyWindows`/`unwrapVaultKeyWindows`), not a Windows branch
+inside `store()`/`retrieve()`: they only wrap a secret and hand the blob
+straight back, never deciding where it's persisted. `--seal --keychain`
+is the one caller with a rule-compliant place to put it -- the vault
+directory itself, already within `--seal`'s own carve-out -- so the
+wrapped key is written there as a new `.keychain-key-win` marker,
+alongside the existing `.keychain-id` marker macOS/Linux use.
+`resolveUnsealSecret` picks the right unwrap path by which marker file is
+actually present in the vault directory, not by the current machine's
+platform, and refuses clearly (naming Windows and DPAPI explicitly) if a
+Windows-sealed vault is presented on a non-Windows machine, rather than
+silently mis-routing it.
+
+`residoo cred` remains genuinely unsupported on Windows, not worked
+around: it stores a long-lived credential with no vault directory of its
+own, so there is no rule-compliant place to write a DPAPI blob for it.
+`isSupported()`/`unsupportedReason()` (cred's own gate) are unchanged; a
+new, separate `isVaultKeySupported()` gates the vault-relative pair
+instead, so the two genuinely different Windows stories -- one real, one
+still absent -- don't get collapsed into one flag.
+
+Disclosed rather than glossed over: on macOS/Linux the vault key lives in
+a fully separate OS-managed store, absent from the vault directory
+entirely -- copying just the vault gets an attacker nothing. On Windows
+the wrapped blob travels WITH the vault (inside it), so copying the whole
+vault also copies the blob; DPAPI's CurrentUser-scope encryption still
+means it's only decryptable by the same Windows user account on the same
+installation, the same "not portable" guarantee `--keychain` already
+documents, but a threat model where an attacker can read the vault's
+files without running code as that same user gets less protection here
+than macOS/Linux's physically-separate store provides. Named explicitly in
+the CLI help text and docs/architecture.md, not left implicit.
+
+Both mechanisms are verified against Microsoft's own primary
+documentation (learn.microsoft.com) through this session's usual
+adversarial research pass, not live-tested against a real Windows
+install -- disclosed the same way copilot-cli.js's own header already
+discloses "corroborated but unverified against a real install" for a
+source built without one available. Tested via the same
+`process.platform` + `child_process.execFileSync` mocking technique on
+this (non-Windows) dev machine: 17 new tests cover the ACL parsing logic
+(broad-principal matching, Allow-vs-Deny, the single-ACE JSON gotcha,
+Get-Acl failure handling) and the full DPAPI wrap/unwrap/marker-file round
+trip, including the cross-platform "wrong marker for this machine" safety
+checks. `keychain.js` and `integrity.js` were both changed from a
+destructured `const { execFileSync } = require("child_process")` to a
+non-destructured `const cp = require("child_process")` specifically so
+these mocks can reach them -- a destructured import copies the reference
+at load time and would never see a later patch, the same reasoning
+`notify.js`'s own tests already established.
+
+Still open from this same research pass: native desktop notifications on
+Windows (WinRT toast interop needs a registered AppUserModelID as a hard
+prerequisite, disqualifying a naive "just call the API" approach --
+`System.Windows.Forms.NotifyIcon`'s balloon-tip API is a promising,
+unresearched alternative, checked in a follow-up pass), and winget/
+Chocolatey distribution feasibility, and named consumer security-tool UX
+patterns (both entirely unanswered by this round's evidence and awaiting
+their own dedicated research).
+
+No scan.js/decode.js/patterns.js change; no benchmark reproduce needed.
+`npm test` (748 checks) and `npm run fuzz` both green. The real macOS
+`--seal --keychain`/`unseal --keychain` flow was re-verified live end to
+end on this machine's actual keychain (an isolated throwaway keychain
+file, never the real login one) to confirm the refactor is a byte-for-byte
+no-op there.
+
 ## Reproduce
 
 ```

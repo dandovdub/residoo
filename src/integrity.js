@@ -3,6 +3,12 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+// Not destructured: kept as `cp.execFileSync(...)` at every call site so a
+// test can monkey-patch `require("child_process").execFileSync` (the same
+// shared module object) the way tests/smoke.js's notify.js tests already
+// do -- a destructured `const { execFileSync } = ...` would copy the
+// reference at import time and never see a later patch.
+const cp = require("child_process");
 const { PATTERNS, redact } = require("./patterns");
 
 /**
@@ -677,7 +683,59 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd(), projectMode 
     }
   }
 
-  // ---- 5. credential-vault file permissions (HOME only, POSIX only) ------
+  // Windows NTFS ACL check for one credential-vault file, the win32
+  // counterpart to the POSIX `stat.mode` check below -- Node's fs.Stats.mode
+  // on Windows does not reflect NTFS ACLs at all, so this shells out to
+  // PowerShell's Get-Acl instead, the same "invoke the OS's own tool"
+  // pattern keychain.js already uses for macOS's `security` and Linux's
+  // `secret-tool`. Verified against Microsoft's own Get-Acl documentation
+  // (learn.microsoft.com/powershell/module/microsoft.powershell.security/get-acl)
+  // and cross-checked against independent write-ups, not live-tested
+  // against a real Windows install -- disclosed the same way copilot-cli.js's
+  // own header discloses "corroborated but unverified against a real
+  // install" for a source built without one available. icacls was
+  // considered and rejected: research found it has no `/findsid` switch
+  // and its text output is not reliably parseable, unlike Get-Acl's typed
+  // object model.
+  //
+  // Every field is projected through an explicit PSCustomObject (never the
+  // raw IdentityReference/FileSystemRights/AccessControlType objects) so
+  // JSON serialization is forced to plain strings regardless of how those
+  // .NET types would otherwise serialize -- and the result is wrapped in an
+  // array via `-InputObject` (not piped) specifically because ConvertTo-Json
+  // collapses a single-item collection into a bare object rather than a
+  // one-element array when piped, a well-known PowerShell gotcha that would
+  // otherwise break parsing on the (common) case of a file with exactly one
+  // relevant ACE.
+  //
+  // English-locale principal names only (Everyone, BUILTIN\Users, NT
+  // AUTHORITY\Authenticated Users) -- a disclosed, not silent, gap: a
+  // non-English Windows install localizes these names (e.g. "Jeder" for
+  // Everyone in German) and would not match here, the same kind of named
+  // scope limit ibanValid's per-country-length gap and the OCR module's
+  // English-only wordlist already carry elsewhere in this project.
+  function checkWindowsCredentialAcl(file) {
+    const escaped = file.replace(/'/g, "''");
+    const script =
+      "$ErrorActionPreference='Stop'; " +
+      `$acl = Get-Acl -LiteralPath '${escaped}'; ` +
+      "$rules = @($acl.Access | ForEach-Object { [PSCustomObject]@{ " +
+      "Identity = $_.IdentityReference.Value; Rights = $_.FileSystemRights.ToString(); Type = $_.AccessControlType.ToString() } }); " +
+      "ConvertTo-Json -InputObject $rules -Compress";
+    const out = cp.execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf-8" });
+    let rules;
+    try { rules = JSON.parse(out); } catch { return null; }
+    if (!Array.isArray(rules)) rules = [rules];
+    const BROAD_PRINCIPAL = /^(everyone|builtin\\users|nt authority\\authenticated users|users)$/i;
+    const READ_CAPABLE_RIGHTS = /fullcontrol|modify|read/i;
+    const hits = rules.filter((r) =>
+      r && typeof r.Identity === "string" && typeof r.Type === "string" && typeof r.Rights === "string" &&
+      r.Type === "Allow" && BROAD_PRINCIPAL.test(r.Identity.trim()) && READ_CAPABLE_RIGHTS.test(r.Rights));
+    if (hits.length === 0) return { tooOpen: false };
+    return { tooOpen: true, detail: hits.map((h) => `${h.Identity} (${h.Rights})`).join(", ") };
+  }
+
+  // ---- 5. credential-vault file permissions (HOME only, POSIX and win32) -
   // GitGuardian's "State of Secrets Sprawl 2026" (blog.gitguardian.com,
   // published 2026-03-17) found 24,008 unique secrets in MCP-related config
   // files on public GitHub, 8.8% of them still live -- these files
@@ -700,13 +758,14 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd(), projectMode 
   // naive backup restore, or a shared-volume container mount can each
   // silently widen a file's mode without the tool that wrote it ever
   // knowing, the same way SSH itself checks id_rsa's permissions rather
-  // than trusting whoever created it. Windows is skipped entirely, not
-  // approximated: Node's fs.Stats.mode on Windows does not reflect NTFS
-  // ACLs, so a POSIX-style bit check there would be meaningless rather than
-  // merely imprecise. Project mode is skipped too -- none of these are ever
+  // than trusting whoever created it. Windows gets its own NTFS-ACL-based
+  // check (checkWindowsCredentialAcl above), not a POSIX-bit approximation
+  // -- Node's fs.Stats.mode on Windows does not reflect NTFS ACLs at all,
+  // so pretending otherwise would be meaningless, not merely imprecise.
+  // Project mode is skipped on every platform -- none of these are ever
   // project-scoped files by any vendor's own design, so there is no
   // project-relative equivalent to check.
-  if (!projectMode && process.platform !== "win32") {
+  if (!projectMode) {
     const geminiDir = process.env.GEMINI_CLI_HOME
       ? path.join(process.env.GEMINI_CLI_HOME, ".gemini")
       : path.join(home, ".gemini");
@@ -739,6 +798,24 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd(), projectMode 
         }
         continue;
       }
+
+      if (process.platform === "win32") {
+        let acl = null;
+        try { acl = checkWindowsCredentialAcl(file); } catch { acl = null; }
+        if (!acl) {
+          mark(file, "unreadable");
+          add("warn", "unreadable-config", file, "credential file exists but its NTFS permissions could not be checked (Get-Acl failed): unverified, not clean");
+          continue;
+        }
+        mark(file, "checked");
+        if (acl.tooOpen) {
+          const shown = display(file);
+          add("warn", "insecure-credential-permissions", file,
+            `${note}; NTFS permissions grant ${acl.detail} access to a live credential on this machine. Fix: right-click "${shown}" > Properties > Security > Advanced, and remove any group other than your own account and the system/administrators.`);
+        }
+        continue;
+      }
+
       mark(file, "checked");
       const openBits = stat.mode & 0o077;
       if (openBits !== 0) {

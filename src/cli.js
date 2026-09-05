@@ -217,7 +217,15 @@ MCP:
 Cred:
   residoo cred set <name> --env <ENV_VAR_NAME> [--env <ENV_VAR_NAME_2> ...]
                           store a live credential in the OS keychain
-                          (macOS/Linux only), one or more env-var names
+                          (macOS/Linux only -- genuinely unsupported on
+                          Windows, not just undone yet: this needs a NAMED
+                          store you can write once and read back later,
+                          and Windows has none reachable without an extra
+                          dependency. Different from --seal --keychain
+                          below, which Windows DOES support via DPAPI --
+                          that one only ever needs to wrap/unwrap a key
+                          living inside its own vault directory, never a
+                          named lookup), one or more env-var names
                           mapped to hidden-typed values. Interactive TTY
                           only, no scripted entry: a live credential is
                           more sensitive than a vault passphrase and
@@ -338,10 +346,19 @@ Seal options (used with scan):
                           in the OS keychain instead of a typed passphrase.
                           Nothing to remember, and the key's strength no longer
                           depends on passphrase choice. macOS today; Linux when
-                          secret-tool (libsecret) is installed. TRADEOFF: a
-                          keychain-backed vault lives on THIS machine/account
+                          secret-tool (libsecret) is installed; Windows via
+                          DPAPI (a different mechanism, not a Windows Credential
+                          Manager entry -- cmdkey.exe is confirmed write-only,
+                          it can never read a stored password back out). TRADEOFF:
+                          a keychain-backed vault lives on THIS machine/account
                           only, unlike a passphrase, it is not portable to
-                          another machine.
+                          another machine. On Windows specifically, the DPAPI-
+                          wrapped key travels INSIDE the vault directory itself
+                          (there's no separate OS-level store to put it in,
+                          unlike macOS/Linux) -- still undecryptable without
+                          being logged in as the same Windows user on the same
+                          machine, but a real, disclosed difference from macOS/
+                          Linux's fully separate keychain entry.
   --vault-dir <dir>       where to create the vault (default: ./residoo-vault-<stamp>)
   --upload-cloudroam      ALSO upload the sealed vault to CloudRoam. One of two
                           opt-in features that touch the network (--verify
@@ -402,31 +419,70 @@ async function getPassphrase({ confirmNew }) {
  * sealFindings/deriveKey path a typed passphrase would use — scrypt on a
  * full 256-bit-entropy input is harmless extra defense, and reusing that
  * already-tested path means no change to sealcrypto.js/sealvault.js at all.
+ *
+ * `winKeyBlob` is Windows' equivalent of `vaultId`: there is no OS-level
+ * named credential store on Windows (see keychain.js's own
+ * wrapVaultKeyWindows docstring for exactly why, and why this is a
+ * DIFFERENT mechanism from `vaultId`'s macOS/Linux keychain.store(), not a
+ * Windows branch inside it), so instead of a lookup id, the caller gets
+ * back the actual DPAPI-wrapped key blob to persist itself once the vault
+ * directory exists — the one place on Windows with a rule-compliant
+ * reason to write it.
  */
 async function resolveSealSecret(args) {
   if (!args.includes("--keychain")) {
-    return { passphrase: await getPassphrase({ confirmNew: true }), vaultId: null };
+    return { passphrase: await getPassphrase({ confirmNew: true }), vaultId: null, winKeyBlob: null };
   }
+  const passphrase = crypto.randomBytes(32).toString("base64");
   const keychain = require("./keychain");
+  if (process.platform === "win32") {
+    if (!keychain.isVaultKeySupported()) throw new Error("--keychain: DPAPI is not available on this system.");
+    return { passphrase, vaultId: null, winKeyBlob: keychain.wrapVaultKeyWindows(passphrase) };
+  }
   if (!keychain.isSupported()) throw new Error(`--keychain: ${keychain.unsupportedReason()}`);
   const vaultId = crypto.randomUUID();
-  const passphrase = crypto.randomBytes(32).toString("base64");
   keychain.store(vaultId, passphrase);
-  return { passphrase, vaultId };
+  return { passphrase, vaultId, winKeyBlob: null };
 }
 
-/** The unsealing secret for `unseal`: a keychain-retrieved key, or a typed passphrase. */
+/**
+ * The unsealing secret for `unseal`: a keychain-retrieved key, or a typed
+ * passphrase. Checked by which MARKER FILE is actually present in the
+ * vault directory, not by the current machine's platform — a vault sealed
+ * on Windows carries `.keychain-key-win`, one sealed on macOS/Linux
+ * carries `.keychain-id`, and trying to unseal one on the wrong kind of
+ * machine should say so clearly rather than silently mis-routing.
+ */
 async function resolveUnsealSecret(args, vaultDir) {
   if (!args.includes("--keychain")) return getPassphrase({ confirmNew: false });
   const keychain = require("./keychain");
-  if (!keychain.isSupported()) throw new Error(`--keychain: ${keychain.unsupportedReason()}`);
+  const winKeyPath = path.join(vaultDir, ".keychain-key-win");
   const idPath = path.join(vaultDir, ".keychain-id");
+
+  if (fs.existsSync(winKeyPath)) {
+    if (!keychain.isVaultKeySupported()) {
+      throw new Error(
+        `This vault was sealed with --keychain on Windows (DPAPI-backed). DPAPI keys are tied to that ` +
+        `Windows user account and cannot be unwrapped on ${process.platform} — unseal it on that same Windows machine.`
+      );
+    }
+    try {
+      return keychain.unwrapVaultKeyWindows(fs.readFileSync(winKeyPath, "utf-8").trim());
+    } catch {
+      throw new Error(
+        "Could not decrypt this vault's key via Windows DPAPI. It may have been sealed under a different " +
+        "Windows user account or moved to a different machine — a keychain-backed vault is not portable."
+      );
+    }
+  }
+
   if (!fs.existsSync(idPath)) {
     throw new Error(
-      `No .keychain-id marker in ${vaultDir}: this vault was not sealed with --keychain, ` +
+      `No .keychain-id or .keychain-key-win marker in ${vaultDir}: this vault was not sealed with --keychain, ` +
       `or the marker file was moved separately from the vault. Try unsealing without --keychain.`
     );
   }
+  if (!keychain.isSupported()) throw new Error(`--keychain: ${keychain.unsupportedReason()}`);
   const vaultId = fs.readFileSync(idPath, "utf-8").trim();
   try {
     return keychain.retrieve(vaultId);
@@ -467,7 +523,7 @@ async function runSeal(result, args) {
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const vaultDir = argValue(args, "--vault-dir") || path.resolve(`residoo-vault-${stamp}`);
-  const { passphrase, vaultId } = await resolveSealSecret(args);
+  const { passphrase, vaultId, winKeyBlob } = await resolveSealSecret(args);
 
   process.stdout.write(`\nSealing ${filesWithFindings.length} file(s) with findings into ${vaultDir}\n`);
   const { entries } = await sealFindings({
@@ -479,6 +535,13 @@ async function runSeal(result, args) {
   // keychain lookup, never the key itself and never anything about what the
   // vault contains.
   if (vaultId) fs.writeFileSync(path.join(vaultDir, ".keychain-id"), vaultId, { mode: 0o600 });
+  // Windows' equivalent marker -- unlike .keychain-id, this DOES hold
+  // sensitive material (the DPAPI-wrapped key itself, not a lookup id),
+  // which is exactly the disclosed security-property trade-off
+  // keychain.js's wrapVaultKeyWindows docstring names: on Windows the
+  // wrapped key travels with the vault, decryptable only by the same
+  // Windows user account, rather than living in a fully separate store.
+  if (winKeyBlob) fs.writeFileSync(path.join(vaultDir, ".keychain-key-win"), winKeyBlob, { mode: 0o600 });
   const totalPlain = entries.reduce((s, e) => s + e.plainBytes, 0);
   const totalSealed = entries.reduce((s, e) => s + e.sealedBytes, 0);
   process.stdout.write(
@@ -1188,4 +1251,10 @@ async function main(argv) {
   return failOnFind && (secretGate || integrityWarnCount(integrity) > 0) ? 1 : 0;
 }
 
-module.exports = { main };
+// resolveSealSecret/resolveUnsealSecret are exported alongside `main`
+// specifically so tests/smoke.js can exercise their Windows (DPAPI) branch
+// directly: a spawned subprocess (this file's usual CLI-testing precedent)
+// always runs on the REAL host platform, so it can never exercise
+// win32-only logic on a non-Windows build machine -- calling these two
+// in-process, with process.platform mocked, is the only way to.
+module.exports = { main, resolveSealSecret, resolveUnsealSecret };

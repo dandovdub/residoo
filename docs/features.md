@@ -200,9 +200,17 @@ risk allow-listing alone doesn't remove, so narrow the tools you allow-list
 accordingly, and prefer credentials scoped as tightly as the vendor
 allows.
 
-Storage is macOS (`security`) or Linux (`secret-tool`) only, matching
-`--seal --keychain`'s own existing platform support; Windows is refused
-with a clear message rather than half-built. There is no `residoo cred
+Storage is macOS (`security`) or Linux (`secret-tool`) only -- genuinely
+unsupported on Windows, not just undone yet: `cmdkey.exe` (Windows
+Credential Manager's own CLI) is confirmed write/list-only by Microsoft's
+own documentation, never returning a stored password back out, so there
+is no named store-then-retrieve mechanism to use without adding a
+dependency. Refused with a clear message rather than half-built. This is
+now DIFFERENT from `--seal --keychain`'s own platform support (see
+[Sealing what it finds](architecture.md#sealing-what-it-finds)), which
+Windows does support via DPAPI -- that feature only ever needs to wrap and
+unwrap a key living inside its own vault directory, never a named lookup
+by credential name the way `residoo cred` needs. There is no `residoo cred
 list` in v1: you need to already know the name you set.
 
 ## Guard: block a sensitive read, a sensitive prompt, or a sensitive output

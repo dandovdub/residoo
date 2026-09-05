@@ -2316,9 +2316,10 @@ async function main() {
   // known credential-vault file's own OS permission bits leak it to other
   // accounts on the machine, independent of and complementary to the
   // content-scanning these same files are deliberately excluded from
-  // (agent-configs.js's "credential VAULTS" list). POSIX-only by design --
-  // see integrity.js's own section-5 comment for why Windows is skipped
-  // entirely rather than approximated.
+  // (agent-configs.js's "credential VAULTS" list). This block covers the
+  // POSIX (stat.mode) path; the Windows (NTFS ACL / Get-Acl) path has its
+  // own dedicated test block right after it, since it needs to run on any
+  // platform via a mocked process.platform and a mocked execFileSync.
   if (process.platform !== "win32") {
     const pHome = path.join(tmp, "integrity-perm-home");
     fs.mkdirSync(path.join(pHome, ".claude"), { recursive: true });
@@ -2349,6 +2350,91 @@ async function main() {
     check("integrity skips credential-permission checks entirely in project mode",
       !permIntegProject.findings.some((f) => f.kind === "insecure-credential-permissions") &&
       !permIntegProject.filesChecked.some((f) => f.file.includes("credentials.json") || f.file.includes("auth.json")));
+  }
+
+  // -- integrity: credential-vault file permissions, Windows NTFS-ACL path -
+  // Runs on every platform (not gated by the real process.platform) by
+  // faking Windows: process.platform is overridden via Object.defineProperty
+  // (it's normally read-only, but this is the standard, safe way to
+  // override it for a test) and child_process.execFileSync is monkey-
+  // patched on the shared module object -- integrity.js's own `cp` import
+  // (kept non-destructured specifically for this) sees the patch. Both are
+  // restored in a finally block so a thrown check never leaves either one
+  // faked for every test that runs after it.
+  {
+    const cp = require("child_process");
+    const origPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    const origExecFileSync = cp.execFileSync;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      const winHome = path.join(tmp, "integrity-perm-win");
+      fs.mkdirSync(path.join(winHome, ".claude"), { recursive: true });
+      const credFile = path.join(winHome, ".claude", ".credentials.json");
+      fs.writeFileSync(credFile, JSON.stringify({ token: "fake" }));
+
+      const { checkIntegrity: checkIntegrityWin } = require("../src/integrity");
+
+      // Case 1: Everyone: Allow, FullControl -- too open, must warn.
+      let capturedCmd = null;
+      cp.execFileSync = (cmd, args) => {
+        capturedCmd = { cmd, args };
+        return JSON.stringify([
+          { Identity: "BUILTIN\\Administrators", Rights: "FullControl", Type: "Allow" },
+          { Identity: "Everyone", Rights: "FullControl", Type: "Allow" },
+        ]);
+      };
+      const tooOpen = checkIntegrityWin({ home: winHome, cwd: winHome, projectMode: false });
+      const winWarns = tooOpen.findings.filter((f) => f.kind === "insecure-credential-permissions");
+      check("integrity (Windows): spawns powershell.exe with Get-Acl against the exact credential file",
+        !!capturedCmd && capturedCmd.cmd === "powershell.exe" &&
+        capturedCmd.args.some((a) => typeof a === "string" && a.includes("Get-Acl") && a.includes(credFile)));
+      check("integrity (Windows): warns when Everyone has an Allow+FullControl ACE, naming the principal",
+        winWarns.some((f) => f.file.includes(".credentials.json") && f.detail.includes("Everyone") && f.detail.includes("FullControl")));
+      check("integrity (Windows): never includes the raw absolute path in the finding, same as POSIX",
+        winWarns.every((f) => !f.detail.includes(winHome) && (f.file.startsWith("~") || f.file.startsWith("."))));
+
+      // Case 2: only Administrators/SYSTEM/the owner -- correctly restricted, no warning.
+      cp.execFileSync = () => JSON.stringify([
+        { Identity: "BUILTIN\\Administrators", Rights: "FullControl", Type: "Allow" },
+        { Identity: "NT AUTHORITY\\SYSTEM", Rights: "FullControl", Type: "Allow" },
+        { Identity: "CONTOSO\\dan", Rights: "FullControl", Type: "Allow" },
+      ]);
+      const restricted = checkIntegrityWin({ home: winHome, cwd: winHome, projectMode: false });
+      check("integrity (Windows): does not warn when only Administrators/SYSTEM/the owner have access",
+        !restricted.findings.some((f) => f.kind === "insecure-credential-permissions"));
+
+      // Case 3: a Deny ACE for Everyone must never itself count as a grant.
+      cp.execFileSync = () => JSON.stringify([{ Identity: "Everyone", Rights: "FullControl", Type: "Deny" }]);
+      const denied = checkIntegrityWin({ home: winHome, cwd: winHome, projectMode: false });
+      check("integrity (Windows): an Everyone DENY ace is never mistaken for a grant",
+        !denied.findings.some((f) => f.kind === "insecure-credential-permissions"));
+
+      // Case 4: a single ACE (the ConvertTo-Json single-object-not-array
+      // gotcha this code defends against) must still parse correctly.
+      cp.execFileSync = () => JSON.stringify({ Identity: "Everyone", Rights: "Read", Type: "Allow" });
+      const singleAce = checkIntegrityWin({ home: winHome, cwd: winHome, projectMode: false });
+      check("integrity (Windows): a single-ACE result (bare JSON object, not an array) still parses and warns",
+        singleAce.findings.some((f) => f.kind === "insecure-credential-permissions" && f.detail.includes("Everyone")));
+
+      // Case 5: Get-Acl itself fails (e.g. powershell.exe missing, access
+      // denied) -- must report unreadable/unverified, never silently clean.
+      cp.execFileSync = () => { throw new Error("simulated Get-Acl failure"); };
+      const failed = checkIntegrityWin({ home: winHome, cwd: winHome, projectMode: false });
+      check("integrity (Windows): a Get-Acl failure is reported as unreadable/unverified, not silently clean",
+        failed.filesChecked.some((f) => f.file.includes(".credentials.json") && f.status === "unreadable") &&
+        failed.findings.some((f) => f.kind === "unreadable-config" && f.file.includes(".credentials.json")));
+
+      // Case 6: project mode still skips this check entirely on Windows too.
+      cp.execFileSync = () => JSON.stringify([{ Identity: "Everyone", Rights: "FullControl", Type: "Allow" }]);
+      const winProject = checkIntegrityWin({ home: winHome, cwd: winHome, projectMode: true });
+      check("integrity (Windows): project mode skips the credential-permission check entirely, same as POSIX",
+        !winProject.findings.some((f) => f.kind === "insecure-credential-permissions") &&
+        !winProject.filesChecked.some((f) => f.file.includes("credentials.json")));
+    } finally {
+      Object.defineProperty(process, "platform", origPlatform);
+      cp.execFileSync = origExecFileSync;
+    }
   }
 
   // ── CLI end to end: agent-configs + integrity wired, --no-integrity skips ─
@@ -2734,6 +2820,105 @@ async function main() {
         // keychain in the first place.
         if (kcCreated) { try { execFileSync("security", ["delete-keychain", testKcFile], { stdio: "ignore" }); } catch { /* best-effort */ } }
       }
+    }
+  }
+
+  // ── keychain: Windows DPAPI vault-key wrap/unwrap (mocked platform) ──────
+  // Runs on every platform via the same process.platform + execFileSync
+  // mocking technique integrity.js's Windows ACL tests already use. The
+  // mock execFileSync does NOT exercise real DPAPI (impossible without a
+  // real Windows machine, disclosed in keychain.js's own docstring) -- it
+  // inspects which script it was asked to run (Protect vs Unprotect) and
+  // applies a simple, deterministic, reversible transform, so what's
+  // actually being verified is the wrapper plumbing (escaping, extraction,
+  // round-trip data integrity, the resolveSealSecret/resolveUnsealSecret
+  // marker-file wiring) -- not the cryptography itself.
+  {
+    const cp = require("child_process");
+    const origPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    const origExecFileSync = cp.execFileSync;
+    const { resolveSealSecret, resolveUnsealSecret } = require("../src/cli");
+    delete require.cache[require.resolve("../src/keychain")];
+    const keychainWin = require("../src/keychain");
+
+    const fakeDpapiExec = (cmd, args) => {
+      const script = args[args.length - 1];
+      const m = script.match(/GetBytes\('((?:[^']|'')*)'\)/);
+      if (m) return Buffer.from(m[1].replace(/''/g, "'"), "utf-8").toString("base64") + "\n";
+      const m2 = script.match(/FromBase64String\('((?:[^']|'')*)'\)/);
+      if (m2) return Buffer.from(m2[1].replace(/''/g, "'"), "base64").toString("utf-8") + "\n";
+      throw new Error("fakeDpapiExec: script matched neither Protect nor Unprotect shape");
+    };
+
+    check("isVaultKeySupported: false on the real (non-Windows) platform" ,
+      process.platform === "win32" || keychainWin.isVaultKeySupported() === false);
+    check("wrapVaultKeyWindows/unwrapVaultKeyWindows: refuse to run on a non-Windows platform",
+      process.platform === "win32" ||
+      (() => {
+        let wrapThrew = false, unwrapThrew = false;
+        try { keychainWin.wrapVaultKeyWindows("x"); } catch { wrapThrew = true; }
+        try { keychainWin.unwrapVaultKeyWindows("x"); } catch { unwrapThrew = true; }
+        return wrapThrew && unwrapThrew;
+      })());
+
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      cp.execFileSync = fakeDpapiExec;
+      check("isVaultKeySupported: true once platform is win32", keychainWin.isVaultKeySupported() === true);
+
+      const secret = "a base64-ish secret with a ' quote and a \\ backslash";
+      const blob = keychainWin.wrapVaultKeyWindows(secret);
+      check("wrapVaultKeyWindows: produces a blob different from the raw secret", blob !== secret);
+      const roundTripped = keychainWin.unwrapVaultKeyWindows(blob);
+      check("wrapVaultKeyWindows -> unwrapVaultKeyWindows: round-trips a secret containing a quote and a backslash exactly",
+        roundTripped === secret);
+
+      // Full resolveSealSecret/resolveUnsealSecret + marker-file round trip,
+      // exactly the path `scan --seal --keychain` / `unseal --keychain`
+      // exercise on a real Windows machine, in-process with platform mocked.
+      const winVaultDir = path.join(tmp, "keychain-vault-win-mock");
+      fs.mkdirSync(winVaultDir, { recursive: true });
+      const sealed = await resolveSealSecret(["--keychain"]);
+      check("resolveSealSecret (Windows): returns a winKeyBlob, no vaultId (that's the macOS/Linux path)",
+        sealed.vaultId === null && typeof sealed.winKeyBlob === "string" && sealed.winKeyBlob.length > 0);
+      fs.writeFileSync(path.join(winVaultDir, ".keychain-key-win"), sealed.winKeyBlob, { mode: 0o600 });
+
+      const unsealed = await resolveUnsealSecret(["--keychain"], winVaultDir);
+      check("resolveSealSecret -> write .keychain-key-win -> resolveUnsealSecret: recovers the exact same passphrase",
+        unsealed === sealed.passphrase);
+
+      // Cross-platform marker check: a vault sealed with the OTHER
+      // mechanism's marker (.keychain-id) must not be silently mis-routed
+      // through the Windows path just because the current platform is win32.
+      const posixVaultDir = path.join(tmp, "keychain-vault-posix-marker");
+      fs.mkdirSync(posixVaultDir, { recursive: true });
+      fs.writeFileSync(path.join(posixVaultDir, ".keychain-id"), "some-macos-keychain-account-id");
+      let posixMarkerErr = null;
+      try { await resolveUnsealSecret(["--keychain"], posixVaultDir); }
+      catch (e) { posixMarkerErr = e; }
+      // isSupported() is false here too (win32, no real keychain), so this
+      // should fail via the ordinary "unsupported" path, not the DPAPI one
+      // -- proving .keychain-id vaults are never routed into DPAPI unwrap.
+      check("resolveUnsealSecret (Windows): a .keychain-id-marked vault is never routed through DPAPI unwrap",
+        posixMarkerErr !== null && !/DPAPI/.test(posixMarkerErr.message));
+    } finally {
+      Object.defineProperty(process, "platform", origPlatform);
+      cp.execFileSync = origExecFileSync;
+      delete require.cache[require.resolve("../src/keychain")];
+    }
+
+    // Back on the real (non-Windows, in this dev/CI environment) platform:
+    // a Windows-sealed vault must refuse to unseal here with a clear,
+    // specific error, never a silent wrong answer.
+    if (process.platform !== "win32") {
+      const wrongPlatformVaultDir = path.join(tmp, "keychain-vault-win-marker-on-posix");
+      fs.mkdirSync(wrongPlatformVaultDir, { recursive: true });
+      fs.writeFileSync(path.join(wrongPlatformVaultDir, ".keychain-key-win"), "irrelevant-fake-blob");
+      let err = null;
+      try { await resolveUnsealSecret(["--keychain"], wrongPlatformVaultDir); }
+      catch (e) { err = e; }
+      check("resolveUnsealSecret: a Windows-sealed (.keychain-key-win) vault refuses to unseal here with a clear, specific error",
+        err !== null && /Windows/.test(err.message) && /DPAPI/.test(err.message));
     }
   }
 

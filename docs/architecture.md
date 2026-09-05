@@ -28,10 +28,11 @@ and zero-width-Unicode prompt injection. Every scan now also runs
 - The credential-vault files those same tools deliberately keep out of
   content-scanning (`.credentials.json`, `auth.json`, `oauth_creds.json`,
   Kiro's global `mcp.json`) are checked for insecure OS permissions instead
-  -- world- or group-readable is flagged, on POSIX only, home-level only.
-  Content is never read; a live credential leaking via a widened file mode
-  (a WSL mount, a naive backup restore) is the thing being caught, not the
-  token itself.
+  -- world- or group-readable is flagged (POSIX `stat.mode` bits on macOS/
+  Linux, an NTFS ACL check via `Get-Acl` for a broader-than-owner Allow
+  grant on Windows), home-level only. Content is never read; a live
+  credential leaking via a widened file mode or ACL (a WSL mount, a naive
+  backup restore) is the thing being caught, not the token itself.
 
 Read-only like everything else. `--no-integrity` skips it entirely. A
 config that can't be read is reported as unverified, never silently
@@ -102,6 +103,25 @@ durable, cross-cloud storage.
 
 The vault passphrase comes from `RESIDOO_PASSPHRASE` or a hidden interactive
 prompt. There is no recovery if you lose it, so pick one you keep.
+
+`--seal --keychain` skips the passphrase entirely: a truly random key is
+generated and handed to the OS's own secure store instead of typed or
+remembered. macOS (`security`) and Linux (`secret-tool`, if installed)
+store it in a genuinely separate keychain entry, absent from the vault
+directory entirely. Windows has no equivalent named store reachable
+without an extra dependency (`cmdkey.exe`, Windows Credential Manager's
+own CLI, is confirmed write/list-only by Microsoft's own docs -- it can
+store a credential but never read the password back out), so Windows uses
+DPAPI instead: the key is wrapped and the encrypted blob is written
+*inside* the vault directory itself, as `.keychain-key-win`, decryptable
+only by the same Windows user account on the same machine. A real,
+disclosed difference from macOS/Linux, not glossed over: copying just the
+vault directory on macOS/Linux gets an attacker nothing, since the key
+lives elsewhere entirely; on Windows the wrapped blob travels with the
+vault, and DPAPI's account-tied encryption is what keeps it useless
+outside that same Windows login. Neither is portable across machines or
+accounts, by design -- use a passphrase instead for a vault that needs to
+travel.
 
 ## Verifying credentials are still live
 

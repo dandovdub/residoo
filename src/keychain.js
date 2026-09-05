@@ -1,6 +1,11 @@
 "use strict";
 
-const { execFileSync } = require("child_process");
+// Not destructured: kept as `cp.execFileSync(...)` at every call site so a
+// test can monkey-patch `require("child_process").execFileSync` (the same
+// shared module object) the way tests/smoke.js's Windows-path tests do for
+// both this file and integrity.js -- a destructured `const { execFileSync
+// } = ...` would copy the reference at import time and never see a patch.
+const cp = require("child_process");
 
 /**
  * OS-native secure credential storage for `scan --seal --keychain` and
@@ -64,7 +69,7 @@ function isSupported() {
   if (process.platform === "darwin") return true;
   if (process.platform === "linux") {
     try {
-      execFileSync("which", ["secret-tool"], { stdio: "ignore" });
+      cp.execFileSync("which", ["secret-tool"], { stdio: "ignore" });
       return true;
     } catch {
       return false;
@@ -78,7 +83,106 @@ function unsupportedReason() {
   if (process.platform === "linux") {
     return "secret-tool (libsecret) is not installed. Install it (e.g. \"apt install libsecret-tools\" or \"dnf install libsecret\") or omit --keychain to use a passphrase instead.";
   }
+  if (process.platform === "win32") {
+    // Specifically about THIS by-name store/retrieve/remove API (residoo
+    // cred's only use of it) -- `--seal --keychain` works on Windows via a
+    // different, vault-relative mechanism (wrapVaultKeyWindows/
+    // unwrapVaultKeyWindows below), so this message must not read as "no
+    // --keychain support at all on Windows," which would be wrong.
+    return "residoo cred needs a named credential store, and Windows has none reachable without an extra dependency " +
+      "(cmdkey.exe can store a credential but never reads its password back -- confirmed against Microsoft's own docs). " +
+      "--seal --keychain works on Windows through a different mechanism; this specific store is what's unavailable.";
+  }
   return `--keychain is not supported on ${process.platform} yet. Omit --keychain to use a passphrase instead.`;
+}
+
+/**
+ * True when wrapVaultKeyWindows/unwrapVaultKeyWindows (below) can run --
+ * Windows only, since DPAPI is a Windows-specific API. Deliberately
+ * SEPARATE from isSupported() above: that function is about the by-name
+ * store()/retrieve()/remove() API (false on Windows -- no OS-level named
+ * credential store is reachable there without an extra dependency, since
+ * cmdkey.exe is confirmed write/list-only, never returning a stored
+ * password). This one is about the vault-relative wrap/unwrap pair, which
+ * exists only because `--seal --keychain` has a legitimate place (the
+ * vault directory itself) to put a DPAPI-wrapped blob -- `residoo cred`
+ * has no such place and does not use this.
+ */
+function isVaultKeySupported() {
+  return process.platform === "win32";
+}
+
+/**
+ * Windows-only DPAPI (Data Protection API) wrap/unwrap for `--seal
+ * --keychain`'s vault key, via a PowerShell shell-out -- the same
+ * "invoke the OS's own tool" pattern as macOS's `security` and Linux's
+ * `secret-tool` above, but a materially different SHAPE, and why these
+ * two functions exist separately from store()/retrieve() rather than as a
+ * Windows branch inside them.
+ *
+ * Windows has no OS-level "store this under a name, fetch it back by that
+ * name later" service the way macOS Keychain/secret-tool do. Verified
+ * directly, not assumed: `cmdkey.exe` (Windows Credential Manager's own
+ * CLI) can WRITE a generic credential but Microsoft's own documentation
+ * states plainly "Passwords are not displayed after they're stored," and
+ * `/list` only ever surfaces target names and usernames -- cmdkey is
+ * write/list-only, and cannot serve a store-then-retrieve flow at all.
+ * DPAPI (`System.Security.Cryptography.ProtectedData`, confirmed reachable
+ * from stock PowerShell 5.1 via `Add-Type -AssemblyName System.Security`
+ * with zero extra installs -- learn.microsoft.com/dotnet/standard/security/
+ * how-to-use-data-protection) is the real built-in alternative, but it is
+ * a stateless encrypt/decrypt PRIMITIVE, not a named registry: something
+ * still has to decide where the encrypted bytes are persisted.
+ *
+ * That is why wrapVaultKeyWindows only WRAPS a secret and hands the
+ * encrypted blob straight back to its caller -- this module never decides
+ * where it lives. `--seal --keychain` (cli.js's resolveSealSecret/
+ * resolveUnsealSecret) is the one caller with a rule-compliant place to
+ * put it: the vault directory itself, already within `--seal`'s own
+ * carve-out under CONTRIBUTING.md's hard rule (residoo writes nothing
+ * outside `~/.residoo/rotations.json` and an explicit `--seal`). `residoo
+ * cred` stores a long-lived credential with no vault of its own, so there
+ * is no rule-compliant place to write a DPAPI blob for it -- it remains
+ * genuinely unsupported on Windows (isSupported() above, unchanged), not
+ * worked around by squeezing it through this pair too.
+ *
+ * Disclosed security-property difference, not glossed over: on macOS/
+ * Linux, the key lives in a genuinely separate OS-managed store, entirely
+ * absent from the vault directory -- copying just the vault gets an
+ * attacker nothing at all. On Windows, the wrapped blob travels WITH the
+ * vault directory (inside it), so copying the whole vault also copies the
+ * blob. DPAPI's CurrentUser-scope encryption still means that blob is
+ * only decryptable by the same Windows user account on the same Windows
+ * installation -- not portable, the same end-user guarantee --keychain
+ * already documents -- but a threat model where an attacker can read the
+ * vault directory's files without being able to run code as that same
+ * user gets less protection here than macOS/Linux's physically-separate
+ * store provides. Verified against Microsoft's own DPAPI documentation;
+ * not live-tested against a real Windows install.
+ */
+function wrapVaultKeyWindows(secret) {
+  if (process.platform !== "win32") throw new Error("wrapVaultKeyWindows is Windows-only.");
+  const escaped = String(secret).replace(/'/g, "''");
+  const script =
+    "$ErrorActionPreference='Stop'; " +
+    "Add-Type -AssemblyName System.Security; " +
+    `$bytes = [System.Text.Encoding]::UTF8.GetBytes('${escaped}'); ` +
+    "$enc = [Security.Cryptography.ProtectedData]::Protect($bytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser); " +
+    "[Convert]::ToBase64String($enc)";
+  return cp.execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf-8" }).trim();
+}
+
+/** The other half of wrapVaultKeyWindows -- see its docstring for the full design. */
+function unwrapVaultKeyWindows(blob) {
+  if (process.platform !== "win32") throw new Error("unwrapVaultKeyWindows is Windows-only.");
+  const escaped = String(blob).replace(/'/g, "''");
+  const script =
+    "$ErrorActionPreference='Stop'; " +
+    "Add-Type -AssemblyName System.Security; " +
+    `$enc = [Convert]::FromBase64String('${escaped}'); ` +
+    "$dec = [Security.Cryptography.ProtectedData]::Unprotect($enc, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser); " +
+    "[System.Text.Encoding]::UTF8.GetString($dec)";
+  return cp.execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf-8" }).trim();
 }
 
 /**
@@ -97,13 +201,13 @@ function store(account, secret, keychainFile, service = SERVICE) {
     const kf = keychainFile || testKeychainFile();
     const args = ["add-generic-password", "-a", account, "-s", service, "-w", secret, "-U"];
     if (kf) args.push(kf);
-    execFileSync("security", args, { stdio: "ignore" });
+    cp.execFileSync("security", args, { stdio: "ignore" });
     return;
   }
   if (process.platform === "linux") {
     // secret-tool reads the secret from stdin, never a CLI argument, so it
     // never appears in a process listing or shell history.
-    execFileSync("secret-tool", [
+    cp.execFileSync("secret-tool", [
       "store", "--label", "residoo sealed vault key", "service", service, "account", account,
     ], { input: secret, stdio: ["pipe", "ignore", "ignore"] });
     return;
@@ -120,10 +224,10 @@ function retrieve(account, keychainFile, service = SERVICE) {
     const kf = keychainFile || testKeychainFile();
     const args = ["find-generic-password", "-a", account, "-s", service, "-w"];
     if (kf) args.push(kf);
-    return execFileSync("security", args, { encoding: "utf8" }).trim();
+    return cp.execFileSync("security", args, { encoding: "utf8" }).trim();
   }
   if (process.platform === "linux") {
-    return execFileSync("secret-tool", [
+    return cp.execFileSync("secret-tool", [
       "lookup", "service", service, "account", account,
     ], { encoding: "utf8" }).trim();
   }
@@ -142,14 +246,17 @@ function remove(account, keychainFile, service = SERVICE) {
     const kf = keychainFile || testKeychainFile();
     const args = ["delete-generic-password", "-a", account, "-s", service];
     if (kf) args.push(kf);
-    execFileSync("security", args, { stdio: "ignore" });
+    cp.execFileSync("security", args, { stdio: "ignore" });
     return;
   }
   if (process.platform === "linux") {
-    execFileSync("secret-tool", ["clear", "service", service, "account", account], { stdio: "ignore" });
+    cp.execFileSync("secret-tool", ["clear", "service", service, "account", account], { stdio: "ignore" });
     return;
   }
   throw new Error(unsupportedReason());
 }
 
-module.exports = { isSupported, unsupportedReason, store, retrieve, remove, CRED_SERVICE };
+module.exports = {
+  isSupported, unsupportedReason, store, retrieve, remove, CRED_SERVICE,
+  isVaultKeySupported, wrapVaultKeyWindows, unwrapVaultKeyWindows,
+};
