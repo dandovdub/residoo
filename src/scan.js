@@ -609,21 +609,31 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
   // at all, so this mirrors decodeLine/ocrLine's simpler shape, not
   // matchLine's. `validate` (Luhn, IBAN's MOD 97-10) runs before a
   // candidate is even considered for suppression -- an invalid checksum
-  // is not a "placeholder," it's simply not a match.
+  // is not a "placeholder," it's simply not a match. `validate` may return
+  // `true` (record the regex's own match verbatim -- Luhn/IBAN) or a
+  // narrower STRING (record that instead -- crypto_seed_phrase's
+  // findBip39Phrase, since the regex candidate deliberately over-captures
+  // surrounding prose and the checksum-valid phrase is usually a
+  // sub-string of it, not the whole match).
   const piiLine = (line, file, relFile, lineNo, mtimeMs) => {
     if (!includePii) return;
     for (const rule of PII_PATTERNS) {
       rule.re.lastIndex = 0;
       let m;
       while ((m = rule.re.exec(line)) !== null) {
-        if (rule.validate && !rule.validate(m[0])) continue;
+        let value = m[0];
+        if (rule.validate) {
+          const v = rule.validate(m[0]);
+          if (!v) continue;
+          if (typeof v === "string") value = v;
+        }
         const before = line.slice(Math.max(0, m.index - CONTEXT_WINDOW), m.index);
-        const suppressedReason = suppressionReason(m[0], before, rule.id);
+        const suppressedReason = suppressionReason(value, before, rule.id);
         if (suppressedReason && !includeSuppressed) {
           suppressedCount++;
           continue;
         }
-        record(rule, m[0], relFile, file, lineNo, mtimeMs,
+        record(rule, value, relFile, file, lineNo, mtimeMs,
           suppressedReason ? "low" : rule.confidence, suppressedReason, { pii: true });
       }
     }

@@ -1181,6 +1181,23 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "This passed the real ISO 7064 MOD 97-10 checksum every valid IBAN must satisfy, so it is very unlikely to be a random-looking placeholder.",
   },
+  // Framed like every credential rule above, not like the two PII entries
+  // just above it: unlike an SSN or an IBAN, a seed phrase is a bearer
+  // credential with an actual "rotation" action available -- move the
+  // funds to a new wallet -- so it belongs with "revoke and replace," not
+  // "there is no console for this."
+  crypto_seed_phrase: {
+    label: "Crypto wallet seed phrase (BIP-39, checksum-validated)",
+    consolePath: "No vendor console -- this is a self-custodied wallet's own master key, not an account credential a company can revoke for you.",
+    steps: [
+      "Treat the wallet as fully compromised the moment this leaves your control, even if you don't see funds move immediately -- anyone with the phrase can derive every key and address it controls",
+      "Create a brand-new wallet from a freshly-generated seed phrase, on a device you trust, never by reusing or deriving from the exposed one",
+      "Move all funds and any NFTs/tokens to the new wallet as soon as possible, paying attention to network fees so a move doesn't get front-run",
+      "Update every dApp, exchange, or service that had the old wallet's address on file",
+      "Remove the phrase from the transcript file if it doesn't need to be there -- residoo scan --seal quarantines the whole file without deleting anything, if you want a reversible first step",
+    ],
+    revokeNote: "This passed the real BIP-39 SHA-256 checksum every valid seed phrase must satisfy, so it is very unlikely to be a random-looking placeholder -- treat it as a real, live wallet key until shown otherwise.",
+  },
 
   // ── NOISY_PATTERNS (only reachable via --include-noisy) ───────────────
   generic_password_assignment: {

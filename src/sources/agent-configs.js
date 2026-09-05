@@ -107,6 +107,18 @@ const { createInterface } = require("readline/promises");
  *    (global config; their own security page recommends `chmod 600` on
  *    it, a vendor admission it holds secrets) + named verbatim in JFrog's
  *    Bitwarden-CLI target list.
+ *  - `~/.mcp.json` (bare, directly under HOME, distinct from every
+ *    subdirectory-nested path above) — Visual Studio (the full Windows
+ *    IDE, not VS Code; VS Code's own MCP config is `.vscode/mcp.json`,
+ *    already project-scoped below) documents this exact path as its
+ *    global, all-solutions MCP config: Microsoft's own docs repo
+ *    (github.com/MicrosoftDocs/visualstudio-docs, docs/ide/mcp-servers.md,
+ *    fetched directly), "Serves as a global MCP server configuration for
+ *    a specific user. Adding an MCP server here makes it load for all
+ *    Visual Studio solutions." Visual Studio's remote-MCP OAuth tokens go
+ *    through "the Visual Studio keychain" per the same doc -- an OS-backed
+ *    store, not a plaintext file, so there is no separate credential
+ *    vault to name here the way `.codex/auth.json` needed one.
  *
  * DELIBERATELY NOT READ, and why:
  *  - `~/.claude/projects/**` AS SCAN CONTENT — claude-code.js's territory;
@@ -194,6 +206,7 @@ const CANDIDATES = [
   path.join(GEMINI_DIR, "settings.json"),
   path.join(CODEX_HOME, "config.toml"),
   path.join(KIRO_DIR, "settings", "mcp.json"),
+  path.join(HOME, ".mcp.json"),
 ];
 
 // Configs are KB-scale in every real observation this source's research
@@ -229,7 +242,12 @@ function available() {
     dirExists(CURSOR_DIR) ||
     dirExists(GEMINI_DIR) ||
     dirExists(CODEX_HOME) ||
-    dirExists(KIRO_DIR)
+    dirExists(KIRO_DIR) ||
+    // Visual Studio (the full IDE) has no dedicated root directory the way
+    // every other tool above does -- its one machine-level artifact is this
+    // bare file, so it needs its own direct existence check rather than a
+    // dirExists() on some ~/.visualstudio root that doesn't exist.
+    fileExists(path.join(HOME, ".mcp.json"))
   );
 }
 
@@ -319,6 +337,13 @@ const PROJECT_CONFIG_RELPATHS = [
   ".mcp.json",
   path.join(".claude", "settings.json"),
   path.join(".claude", "settings.local.json"),
+  // Visual Studio's per-solution, VS-only MCP config: Microsoft's own docs
+  // (same source cited for ~/.mcp.json above) list this as a distinct
+  // location from <SOLUTIONDIR>/.mcp.json (source-controlled) --
+  // "Specific to Visual Studio and loads the specified MCP servers only
+  // for a specific user, for the specified solution," living inside the
+  // hidden, not-source-controlled .vs/ folder Visual Studio already owns.
+  path.join(".vs", "mcp.json"),
 ];
 
 // Probe bounds: transcript first-records are KB-scale; 256KB and 20 lines is

@@ -548,6 +548,58 @@ async function main() {
       })());
   }
 
+  // ── pii: bip39ChecksumValid / findBip39Phrase (crypto seed phrases) ────────
+  {
+    const { bip39ChecksumValid, findBip39Phrase, PII_PATTERNS } = require("../src/pii");
+    // BIP-39's own canonical all-zero-entropy test vector
+    // (github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) -- published,
+    // not computed by this project, so this is an independent cross-check
+    // of the whole checksum implementation, not just a self-consistency test.
+    const ALL_ZERO_12 = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const ALL_ZERO_24 = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    // A second, independently-computed-valid 12-word phrase (real entropy,
+    // not all-zero) -- cross-checked against a from-scratch Python
+    // implementation of the same spec before being hardcoded here.
+    const REALISTIC_12 = "legend sponsor menu bike stock clap need wood section shoot have toward";
+
+    check("bip39ChecksumValid: accepts BIP-39's own published all-zero 12-word test vector",
+      bip39ChecksumValid(ALL_ZERO_12.split(" ")));
+    check("bip39ChecksumValid: accepts the all-zero vector at 24 words too (different ENT/CS split)",
+      bip39ChecksumValid(ALL_ZERO_24.split(" ")));
+    check("bip39ChecksumValid: accepts an independently-computed non-trivial 12-word phrase",
+      bip39ChecksumValid(REALISTIC_12.split(" ")));
+    check("bip39ChecksumValid: rejects the same phrase with the last word changed (breaks the checksum)",
+      !bip39ChecksumValid(REALISTIC_12.replace(/toward$/, "zone").split(" ")));
+    check("bip39ChecksumValid: rejects a real English sentence of the same length (words not in the wordlist)",
+      !bip39ChecksumValid("the quick brown fox jumps over the lazy dog while it runs".split(" ")));
+    check("bip39ChecksumValid: rejects the wrong word count (11) rather than throwing",
+      bip39ChecksumValid(REALISTIC_12.split(" ").slice(0, 11)) === false);
+    check("bip39ChecksumValid: rejects a non-array input rather than throwing",
+      bip39ChecksumValid(REALISTIC_12) === false);
+
+    check("findBip39Phrase: extracts the exact phrase from a longer sentence, dropping surrounding prose",
+      findBip39Phrase(`here is my wallet seed ${REALISTIC_12} please help me recover it`) === REALISTIC_12);
+    check("findBip39Phrase: returns null for long ordinary prose with no embedded phrase",
+      findBip39Phrase("the quick brown fox jumps over the lazy dog while the cat sits on the mat and watches the birds fly over the trees near the old house by the river") === null);
+
+    check("crypto_seed_phrase rule finds the phrase end to end via PII_PATTERNS, embedded in prose",
+      (() => {
+        const rule = PII_PATTERNS.find((p) => p.id === "crypto_seed_phrase");
+        rule.re.lastIndex = 0;
+        const m = rule.re.exec(`note to self: ${REALISTIC_12} keep it safe`);
+        return !!m && rule.validate(m[0]) === REALISTIC_12;
+      })());
+    check("crypto_seed_phrase rule does not fire on typical AI-assistant prose",
+      (() => {
+        const rule = PII_PATTERNS.find((p) => p.id === "crypto_seed_phrase");
+        rule.re.lastIndex = 0;
+        const line = "please run npm install then npm test to verify everything works correctly before you commit your changes to the repository and push them up to the remote branch";
+        let m, any = false;
+        while ((m = rule.re.exec(line))) { if (rule.validate(m[0])) any = true; }
+        return !any;
+      })());
+  }
+
   // ── pii: full scan.js wiring, --include-pii end to end ─────────────────────
   {
     const ssnLine = JSON.stringify({ message: { content: "here is an SSN: 123-45-6789 for the form" } }) + "\n";
@@ -2141,6 +2193,17 @@ async function main() {
       JSON.stringify({ type: "summary", summary: "clean up the beta service" }) + "\n" +
       JSON.stringify({ type: "user", cwd: "/Users/someoneelse/work/beta", message: { content: "run the tests" } }) + "\n");
 
+    // Visual Studio's two MCP config surfaces, machine-level and
+    // project-level (Microsoft's own docs, docs/ide/mcp-servers.md):
+    // a bare ~/.mcp.json global config, and <root>/.vs/mcp.json per solution.
+    fs.writeFileSync(path.join(dHome, ".mcp.json"), JSON.stringify({
+      mcpServers: { duckdb: { command: "uvx", args: ["mcp-server-duckdb"], env: { VS_GLOBAL_TOKEN: "ghp_" + "vG7q".repeat(9) } } },
+    }, null, 2));
+    fs.mkdirSync(path.join(rootA, ".vs"), { recursive: true });
+    fs.writeFileSync(path.join(rootA, ".vs", "mcp.json"), JSON.stringify({
+      mcpServers: { azure: { command: "npx", args: ["-y", "@azure/mcp@latest"], env: { VS_SOLUTION_TOKEN: "glpat-" + "hK9m".repeat(5) } } },
+    }, null, 2));
+
     const disc = spawnSync(process.execPath,
       [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--json"], {
         cwd: dCwd,
@@ -2159,8 +2222,15 @@ async function main() {
       !!pd && pd.findings.some((f) => f.rule === "github_pat" && f.source === "agent-configs" && f.file === ".mcp.json"));
     check("config discovery finds the token in a project settings.local.json via a re-rooted transcript cwd",
       !!pd && pd.findings.some((f) => f.rule === "gitlab_pat" && f.source === "agent-configs" && f.file === "settings.local.json"));
+    check("config discovery finds Visual Studio's global ~/.mcp.json (bare, machine-level)",
+      !!pd && pd.findings.some((f) => f.rule === "github_pat" && f.source === "agent-configs" &&
+        f.file === ".mcp.json" && f.preview.includes("vG7q")));
+    check("config discovery finds Visual Studio's per-solution .vs/mcp.json via the state-recorded root",
+      !!pd && pd.findings.some((f) => f.rule === "gitlab_pat" && f.source === "agent-configs" &&
+        f.file === "mcp.json" && f.preview.includes("hK9m")));
     check("config discovery output never contains the raw planted values",
-      !disc.stdout.includes("eF3a".repeat(9)) && !disc.stdout.includes("f2Xk".repeat(5)));
+      !disc.stdout.includes("eF3a".repeat(9)) && !disc.stdout.includes("f2Xk".repeat(5)) &&
+      !disc.stdout.includes("vG7q".repeat(9)) && !disc.stdout.includes("hK9m".repeat(5)));
     check("config discovery reports no unreadable files on the clean fixture",
       !!pd && pd.summary.unreadableFiles.length === 0);
   }
@@ -3817,6 +3887,82 @@ async function main() {
       upsAllowRun.stderr === "");
     check("guard CLI: an ALLOWED PreToolUse also writes zero stderr bytes",
       allowRun.stderr === "");
+
+    // ── PostToolUse: evaluatePostToolUse, pure-function tests ───────────────
+    const { evaluatePostToolUse } = require("../src/guard");
+    const realGithubToken = "ghp_" + "aB3dEfGhIjKlMnOpQrStUvWxYz01234567";
+    check("guard PostToolUse: a real-shaped secret in Bash stdout is redacted, not the raw value",
+      (() => {
+        const r = evaluatePostToolUse("Bash", { stdout: `GITHUB_TOKEN=${realGithubToken}\n`, stderr: "" });
+        return r.act === true && r.updatedToolOutput.stdout.includes("ghp_") &&
+          !r.updatedToolOutput.stdout.includes(realGithubToken);
+      })());
+    check("guard PostToolUse: a secret in stderr is also caught, not just stdout",
+      (() => {
+        const r = evaluatePostToolUse("Bash", { stdout: "", stderr: `error: token was ${realGithubToken}\n` });
+        return r.act === true && !r.updatedToolOutput.stderr.includes(realGithubToken);
+      })());
+    check("guard PostToolUse: clean output never triggers a decision",
+      evaluatePostToolUse("Bash", { stdout: "build succeeded\n", stderr: "" }).act === false);
+    check("guard PostToolUse: non-Bash tools are out of scope by design (undocumented output shape), never acted on",
+      evaluatePostToolUse("Read", { filePath: "/x", success: true }).act === false &&
+      evaluatePostToolUse("Grep", { matches: [realGithubToken] }).act === false);
+    check("guard PostToolUse: a documented AWS vendor-example key in output is suppressed, never redacted",
+      evaluatePostToolUse("Bash", { stdout: "AKIAIOSFODNN7EXAMPLE\n", stderr: "" }).act === false);
+    check("guard PostToolUse: preserves interrupted/isImage fields verbatim in the replacement shape",
+      (() => {
+        const r = evaluatePostToolUse("Bash", { stdout: `${realGithubToken}\n`, stderr: "", interrupted: true, isImage: false });
+        return r.updatedToolOutput.interrupted === true && r.updatedToolOutput.isImage === false;
+      })());
+    check("guard PostToolUse: malformed/missing tool_response never throws, never acts",
+      evaluatePostToolUse("Bash", null).act === false && evaluatePostToolUse("Bash", undefined).act === false &&
+      evaluatePostToolUse("Bash", {}).act === false);
+
+    // ── PostToolUse: full CLI dispatch, real spawned subprocess ─────────────
+    const potuRedactRun = runGuardCli(JSON.stringify({
+      hook_event_name: "PostToolUse", session_id: "s1", cwd: "/tmp",
+      tool_name: "Bash", tool_input: { command: "cat .env" },
+      tool_response: { stdout: `TOKEN=${realGithubToken}\n`, stderr: "", interrupted: false, isImage: false },
+    }));
+    let potuParsed = null;
+    try { potuParsed = JSON.parse(potuRedactRun.stdout); } catch { /* checked below */ }
+    check("guard CLI: PostToolUse with a real-shaped secret emits updatedToolOutput, exit 0",
+      potuRedactRun.status === 0 && !!potuParsed &&
+      potuParsed.hookSpecificOutput.hookEventName === "PostToolUse" &&
+      typeof potuParsed.hookSpecificOutput.updatedToolOutput.stdout === "string");
+    check("guard CLI: PostToolUse's redacted output never contains the raw secret value",
+      !potuRedactRun.stdout.includes(realGithubToken) && !potuRedactRun.stderr.includes(realGithubToken));
+    check("guard CLI: a PostToolUse redact decision writes exactly one structured JSON audit line to stderr with decision:\"redact\"",
+      (() => {
+        const lines = potuRedactRun.stderr.trim().split("\n").filter(Boolean);
+        if (lines.length !== 1) return false;
+        const entry = JSON.parse(lines[0]);
+        return entry.tool === "residoo guard" && entry.event === "PostToolUse" && entry.decision === "redact" &&
+          typeof entry.label === "string" && typeof entry.preview === "string" && !JSON.stringify(entry).includes(realGithubToken);
+      })());
+
+    const potuCleanRun = runGuardCli(JSON.stringify({
+      hook_event_name: "PostToolUse", tool_name: "Bash",
+      tool_response: { stdout: "clean output\n", stderr: "" },
+    }));
+    check("guard CLI: PostToolUse with clean output emits zero stdout bytes (implicit allow) and zero stderr bytes",
+      potuCleanRun.stdout === "" && potuCleanRun.stderr === "" && potuCleanRun.status === 0);
+
+    // Regression test for the fix landing alongside PostToolUse: before it,
+    // ANY event other than UserPromptSubmit fell through to evaluateToolInput
+    // unconditionally. A PostToolUse payload also carries tool_input (Claude
+    // Code's own docs confirm both tool_input and tool_response are present),
+    // so a PostToolUse call whose tool_input.command matches a sensitive-path
+    // pattern would have been wrongly re-evaluated as a PreToolUse decision
+    // and could have emitted permissionDecision:"deny" for a tool call that
+    // had already finished running.
+    const potuMisrouteRun = runGuardCli(JSON.stringify({
+      hook_event_name: "PostToolUse", tool_name: "Bash",
+      tool_input: { command: "cat .env" }, // would match PreToolUse's sensitive-path check if misrouted
+      tool_response: { stdout: "clean output, no secret here\n", stderr: "" },
+    }));
+    check("guard CLI: a PostToolUse payload with a sensitive-path-shaped tool_input is never misrouted into a PreToolUse deny",
+      potuMisrouteRun.stdout === "" && potuMisrouteRun.stderr === "" && potuMisrouteRun.status === 0);
   }
 
   // ── mcp: hand-rolled MCP server over stdio (src/mcp.js + src/mcpTools.js) ───

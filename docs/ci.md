@@ -23,7 +23,7 @@ Add to `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/dandovdub/residoo
-    rev: v0.16.0
+    rev: v0.17.0
     hooks:
       - id: residoo
 ```
@@ -37,7 +37,7 @@ tag, moved to the latest release after every publish -- the same convention
 `actions/checkout@v4` and `actions/setup-node@v4` use, so your workflow picks
 up new detection rules automatically instead of scanning with a stale rule
 set until someone remembers to bump the pin. Pin an exact release instead
-(`@v0.16.0`) if you need reproducible CI runs.
+(`@v0.17.0`) if you need reproducible CI runs.
 
 ```yaml
 name: residoo
@@ -100,5 +100,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm install -g residoo@0.16.0 && residoo scan --project . --fail-on-find
+      - run: npm install -g residoo@0.17.0 && residoo scan --project . --fail-on-find
 ```

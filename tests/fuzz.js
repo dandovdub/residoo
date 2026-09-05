@@ -23,10 +23,10 @@
 const fc = require("fast-check");
 const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("../src/decode");
 const { PATTERNS, NOISY_PATTERNS, redact } = require("../src/patterns");
-const { evaluateToolInput, matchSensitivePath, evaluatePromptText } = require("../src/guard");
+const { evaluateToolInput, matchSensitivePath, evaluatePromptText, evaluatePostToolUse } = require("../src/guard");
 const { fingerprintFinding } = require("../src/rotation");
 const { extractImageBlocks } = require("../src/ocr");
-const { luhnValid, ibanValid } = require("../src/pii");
+const { luhnValid, ibanValid, bip39ChecksumValid, findBip39Phrase } = require("../src/pii");
 
 const ALL_RULES = PATTERNS.concat(NOISY_PATTERNS);
 const NUM_RUNS = process.env.FUZZ_RUNS ? Number(process.env.FUZZ_RUNS) : 2000;
@@ -130,6 +130,32 @@ property("evaluatePromptText never throws on any string, any input type",
     return typeof r === "object" && typeof r.block === "boolean";
   });
 
+// evaluatePostToolUse runs on every Bash tool call's actual output --
+// attacker-shapeable in a different way than a path or a prompt: this is
+// arbitrary command output, which can contain anything a command prints,
+// including malformed UTF-8-adjacent sequences, control characters, or a
+// tool_response object missing fields a real Bash invocation would always
+// have. Must never throw regardless of tool name or tool_response shape.
+property("evaluatePostToolUse never throws on any tool name and any tool_response shape",
+  fc.tuple(
+    fc.oneof(fc.constant("Bash"), fc.constant("Read"), fc.string({ maxLength: 30 })),
+    fc.oneof(
+      fc.constant(null),
+      fc.constant(undefined),
+      fc.record({
+        stdout: fc.oneof(fc.string({ maxLength: 500 }), fc.constant(undefined), fc.integer()),
+        stderr: fc.oneof(fc.string({ maxLength: 500 }), fc.constant(undefined), fc.integer()),
+        interrupted: fc.boolean(),
+        isImage: fc.boolean(),
+      }),
+      fc.dictionary(fc.string({ maxLength: 20 }), fc.anything(), { maxKeys: 5 })
+    )
+  ),
+  ([toolName, toolResponse]) => {
+    const r = evaluatePostToolUse(toolName, toolResponse);
+    return typeof r === "object" && typeof r.act === "boolean";
+  });
+
 // ── rotation.js: fingerprintFinding is called on every scan result before
 // anything reaches the ledger or an MCP response. Must never throw, and
 // must always produce the documented rf1-<32 hex> shape for any
@@ -170,6 +196,18 @@ property("luhnValid never throws on any string, digit-only or not",
 property("ibanValid never throws on any string, any length or content",
   fc.string({ maxLength: 200 }),
   (s) => { ibanValid(s); return true; });
+
+property("bip39ChecksumValid never throws on any array of strings, any length or content",
+  fc.array(fc.string({ maxLength: 20 }), { maxLength: 30 }),
+  (words) => { bip39ChecksumValid(words); return true; });
+
+property("bip39ChecksumValid never throws on a non-array input",
+  fc.oneof(fc.string(), fc.integer(), fc.constant(null), fc.constant(undefined), fc.object()),
+  (v) => { bip39ChecksumValid(v); return true; });
+
+property("findBip39Phrase never throws on any string, any length or content",
+  fc.string({ maxLength: 500 }),
+  (s) => { findBip39Phrase(s); return true; });
 
 console.log(`\n${NUM_RUNS} runs per property, ${failed === 0 ? "0 failed" : `${failed} FAILED`}`);
 process.exitCode = failed ? 1 : 0;

@@ -45,17 +45,29 @@ terminal output, and whatever got pasted into a prompt.
 Two newer categories are adjacent but solve a different problem:
 
 - **Real-time hooks** (GitGuardian's `ggshield` AI hook, GitHub's secret
-  scanning via its MCP server) intercept a prompt or a code change *as it
-  happens*, going forward, only in a session that has the hook installed.
-  They do nothing for months of transcripts already on disk, or for any
-  session run without the hook active. `residoo scan` / `watch` / `mcp`
-  cover the opposite, load-bearing case: **retroactively, at rest**, every
-  file already there, from every past session -- and, as of `residoo
-  guard`'s `UserPromptSubmit` hook, residoo now ALSO does real-time
-  prevention on one narrow surface (a secret typed directly into the
-  prompt box, blocked before Claude processes it), on top of the
-  retroactive coverage, not instead of it. See
-  [Guard](features.md#guard-block-a-sensitive-read-or-a-sensitive-prompt-before-it-happens).
+  scanning via its MCP server) intercept a prompt or a tool call *as it
+  happens*, only in a session that has the hook installed. `ggshield`'s own
+  version has grown into a real three-stage design (confirmed directly
+  against `docs.gitguardian.com`'s own AI-coding-tools page, not assumed):
+  prompt-submission scanning, pre-tool-use scanning, and a post-tool-use
+  output scan -- and its `ai discover --activity` command (shipped in
+  v1.53.0, July 2026) now ALSO reads existing session data from Claude
+  Code, Codex, Cursor, Copilot CLI, and VS Code, closing some of the
+  purely-forward-looking gap this section used to describe. The
+  differences that remain: `ggshield`'s core detection is GitGuardian's
+  own cloud API, so its normal path is a network call per scan by design,
+  and each hook has to be installed into each tool's own hook system
+  separately; `residoo scan` / `watch` / `mcp` are fully local pattern
+  matching with zero network calls in the default path, one process
+  watching every known agent source at once. `residoo guard`'s own
+  `UserPromptSubmit` and `PostToolUse` hooks now cover the same two
+  prompt/output stages `ggshield`'s hook does, using the same
+  locally-computed 84-rule set `scan` already scores, not a cloud call --
+  see
+  [Guard](features.md#guard-block-a-sensitive-read-a-sensitive-prompt-or-a-sensitive-output),
+  and residoo's own retroactive, at-rest coverage (every file already on
+  disk, from every past session, not just what a newly-installed hook sees
+  going forward) is unchanged and remains the load-bearing case.
 - This isn't a gap Anthropic plans to close upstream either: a
   [request to scrub secrets from `~/.claude/projects` natively](https://github.com/anthropics/claude-code/issues/50014)
   was filed and closed as **not planned**.

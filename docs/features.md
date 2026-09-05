@@ -192,38 +192,58 @@ Storage is macOS (`security`) or Linux (`secret-tool`) only, matching
 with a clear message rather than half-built. There is no `residoo cred
 list` in v1: you need to already know the name you set.
 
-## Guard: block a sensitive read, or a sensitive prompt, before it happens
+## Guard: block a sensitive read, a sensitive prompt, or a sensitive output
 
 Everything above finds a leak after it's already written to disk. `residoo
-guard` is one binary covering two Claude Code hooks, dispatched on the
-payload's own `hook_event_name` field, that both try to stop a leak from
-happening in the first place instead of finding it afterward.
+guard` is one binary covering three Claude Code hooks, dispatched on the
+payload's own `hook_event_name` field, that all try to stop a leak from
+happening (or from reaching the model at all) instead of finding it
+afterward.
 
 **`PreToolUse`** blocks an obviously-sensitive file read (`.env`,
-`id_rsa`, `.aws/credentials`, and similar) before the command runs at all.
+`id_rsa`, `.aws/credentials`, and similar) before the command runs at all
+— based on WHAT you're about to touch (a path), not what actually comes
+back.
 
-**`UserPromptSubmit`** closes the gap `PreToolUse` explicitly can't:
-Claude Code's hooks API lets a `PreToolUse` hook see the proposed tool
-INPUT before it runs, but never a secret typed directly into the prompt
-box, or one arriving in an unrelated command's OUTPUT (by the time a
-`PostToolUse` hook fires, that output is already committed to the
-transcript). `UserPromptSubmit` runs before either of those: Claude
-Code's own docs (`code.claude.com/docs/en/hooks`, read directly, not
-summarized secondhand) confirm it "runs before every prompt and blocks
-model processing until it completes," and a JSON response with
-`"decision": "block"` "prevents the prompt from being processed and
-erases it from context" — a real prevention point, not an after-the-fact
-alert. It checks the user's own typed text against residoo's 79
-high-confidence rules only — never `--verify` (a network call), never
-`--ocr` (irrelevant to text anyway, and both are too slow): this event has
-no matcher support, so it fires on **every single prompt** with a default
-30-second budget, confirmed to run in practice in well under 5ms even
-against a 220KB pasted block (measured directly, not assumed). Because a
-wrong block here erases the user's *entire* typed message — a materially
-higher cost than denying one tool call — this path is deliberately more
-conservative than `PreToolUse`'s: a documented vendor-example key or an
-obvious placeholder is suppressed before ever blocking, the same
-suppression `residoo scan` itself applies.
+**`UserPromptSubmit`** closes the "typed directly into a prompt" gap
+`PreToolUse` can't: Claude Code's own docs (`code.claude.com/docs/en/hooks`,
+read directly, not summarized secondhand) confirm it "runs before every
+prompt and blocks model processing until it completes," and a JSON
+response with `"decision": "block"` "prevents the prompt from being
+processed and erases it from context" — a real prevention point, not an
+after-the-fact alert. It checks the user's own typed text against
+residoo's 84 high-confidence rules only — never `--verify` (a network
+call), never `--ocr` (irrelevant to text anyway, and both are too slow):
+this event has no matcher support, so it fires on **every single prompt**
+with a default 30-second budget, confirmed to run in practice in well
+under 5ms even against a 220KB pasted block (measured directly, not
+assumed). Because a wrong block here erases the user's *entire* typed
+message — a materially higher cost than denying one tool call — this path
+is deliberately more conservative than `PreToolUse`'s: a documented
+vendor-example key or an obvious placeholder is suppressed before ever
+blocking, the same suppression `residoo scan` itself applies.
+
+**`PostToolUse`** closes the "arriving through a command's output" gap,
+for the `Bash` tool specifically. An earlier version of this section
+claimed that gap was uncatchable — wrong, corrected after a competitive
+research pass found GitGuardian's `ggshield` already scans tool output at
+this exact stage. Claude Code's own docs (same page, `PostToolUse decision
+control`) confirm a hook can return `hookSpecificOutput.updatedToolOutput`
+to replace what the model sees, and give the Bash tool's exact output
+shape (`{stdout, stderr, interrupted, isImage}`) needed to build a
+replacement that Claude Code will actually accept — a mismatched shape is
+silently ignored, not reported as a failure, so this is the one built-in
+tool whose shape is documented precisely enough to target safely. It scans
+the command's actual stdout/stderr against the same 84 rules and redacts
+any match in place — catching a secret in `git log`, `env`, or a build
+log, none of which `PreToolUse`'s path-based check was ever going to see.
+The command has already run by the time this fires (Claude Code's own
+docs, same section): this cannot undo a file write, a command's side
+effect, or a network call it made — only keep the raw value out of the
+model's context, and so out of the transcript `residoo scan` exists to
+check. Every other built-in tool's output shape is undocumented at this
+precision; scanning it is a stated, disclosed gap, not silently assumed
+covered.
 
 Best-effort, stated plainly rather than oversold: per Claude Code's own
 docs, a `command`-type hook (what this is) that times out on
@@ -241,6 +261,9 @@ this is prevention layered on top of detection, not a replacement for it.
     ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "residoo guard" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "residoo guard" }] }
     ]
   }
 }
@@ -253,31 +276,35 @@ untouched, with zero output, exit 0.
 
 ### Audit trail
 
-Every BLOCK decision (either hook) also writes one structured JSON line to
-**stderr** — never a file. `CONTRIBUTING.md`'s own rule names
-`~/.residoo/rotations.json` as the only file residoo ever writes outside
-an explicit `--seal`; a new persistent log file would need to break that
-rule, so this makes the same choice `residoo cred`'s own audit trail
-already made for the identical reason. Durability is the operator's
-choice: redirect the hook's own stderr at launch if you want it kept.
+Every BLOCK or REDACT decision (any of the three hooks) also writes one
+structured JSON line to **stderr** — never a file. `CONTRIBUTING.md`'s own
+rule names `~/.residoo/rotations.json` as the only file residoo ever
+writes outside an explicit `--seal`; a new persistent log file would need
+to break that rule, so this makes the same choice `residoo cred`'s own
+audit trail already made for the identical reason. Durability is the
+operator's choice: redirect the hook's own stderr at launch if you want it
+kept.
 
 ```json
 {"ts":"2026-09-04T23:06:07.828Z","tool":"residoo guard","event":"UserPromptSubmit","decision":"block","label":"Stripe API key (live mode)","preview":"sk_l…C6yH  (32 chars)","sessionId":"...","cwd":"..."}
+{"ts":"2026-09-05T03:13:25.328Z","tool":"residoo guard","event":"PostToolUse","decision":"redact","label":"GitHub personal access token","preview":"ghp_…4567  (38 chars)","sessionId":"...","cwd":"..."}
 ```
 
 `preview` is the same `redact()`'d, first/last-4-characters value every
 other output format already uses — never the raw match. A `PreToolUse`
 block carries a `label` (which path pattern matched) but no `preview`
 field at all: a file path isn't a secret value, so there's nothing to
-redact. Allowed events write nothing — this is a log of what got blocked,
-not a record of every prompt or every tool call.
+redact. `PostToolUse`'s `decision` reads `"redact"`, not `"block"` — the
+tool already ran, nothing was actually blocked, and the log should say
+what really happened. Allowed events write nothing — this is a log of
+what got acted on, not a record of every prompt or every tool call.
 
 ### Measured, not claimed
 
 The numbers below are for `PreToolUse`'s path-pattern list specifically.
-`UserPromptSubmit`'s own detection accuracy is not separately re-measured
-on a dedicated corpus — it reuses residoo's 79 high-confidence rules
-exactly as `residoo scan` already scores them (see
+`UserPromptSubmit` and `PostToolUse`'s own detection accuracy is not
+separately re-measured on a dedicated corpus — both reuse residoo's 84
+high-confidence rules exactly as `residoo scan` already scores them (see
 [docs/benchmark.md](benchmark.md)), and the new code on top of that (the
 dispatch, and the vendor-example/placeholder suppression) is covered by
 `tests/smoke.js` and a `tests/fuzz.js` property, not a scored benchmark of

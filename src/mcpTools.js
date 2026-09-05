@@ -365,7 +365,7 @@ function buildTools({ sources }) {
         projectDir: { type: "string", description: "Absolute path to a project/repo directory to scan instead of the machine-wide transcript stores (same as `residoo scan --project <dir>`). Omit for the default machine-wide scan." },
         includeNoisy: { type: "boolean", default: false, description: "Also run residoo's two low-confidence heuristic rules (generic password/secret assignments) -- catches more, false-positives more. Off by default." },
         includeSuppressed: { type: "boolean", default: false, description: "Include matches normally hidden because they look like vendor-documented example values or placeholder text. Off by default." },
-        includePii: { type: "boolean", default: false, description: "Also scan for PII (US Social Security Numbers, Luhn-validated credit card numbers, checksum-validated IBANs) -- a different risk category from a credential, not a lower confidence bar. Off by default; residoo is deliberately credentials-only otherwise." },
+        includePii: { type: "boolean", default: false, description: "Also scan for PII and adjacent secrets (US Social Security Numbers, Luhn-validated credit card numbers, checksum-validated IBANs, BIP-39 checksum-validated crypto wallet seed phrases) -- a different risk category from a vendor credential, not a lower confidence bar. Off by default; residoo is deliberately credentials-only otherwise." },
         maxEntries: { type: "integer", minimum: 1, maximum: 200, default: 25, description: "Cap on distinct findings returned in full detail, pending-first. Counts in the response are always exact even when the entry list is truncated." },
       },
       required: [],

@@ -1427,6 +1427,112 @@ misapplying it. Touches no scan.js matching logic -- pure integrity-check
 addition -- so the full benchmark reproduce sequence wasn't re-run;
 `npm test` (685 checks) and `npm run fuzz` both green instead.
 
+## residoo 0.17.0: three findings from a second competitive research pass -- one new source, one new opt-in detector, one closed guard gap (added 2026-09-05)
+
+A follow-up research pass, this time split across two angles: what named
+competitor tools (Sieve, Medusa, DidILeak, AgentSweep, GitGuardian's
+ggshield, gitleaks/trufflehog/betterleaks/kingfisher) have shipped in the
+last ~6 months, and whether any AI coding tool beyond Claude Code changed
+its local storage surface in the same window. Both runs' top-level
+synthesis broke again (the same "Test claim"/example.com placeholder bug
+seen twice before this session) -- recovered the same way, by reading each
+run's own journal.jsonl for the real, adversarially-verified claims rather
+than trusting or discarding the broken wrapper.
+
+**New source: Visual Studio's two MCP config surfaces.** Microsoft's own
+docs repo (github.com/MicrosoftDocs/visualstudio-docs, docs/ide/mcp-servers.md,
+fetched directly) name a bare `~/.mcp.json` as Visual Studio's global,
+all-solutions MCP config -- a genuinely new file, distinct from every
+subdirectory-nested path already covered (`~/.claude/mcp.json`,
+`~/.cursor/mcp.json`, etc.) -- and `<SOLUTIONDIR>/.vs/mcp.json` as its
+per-solution, not-source-controlled equivalent. Visual Studio itself
+(the full Windows IDE, never covered before -- distinct from VS Code,
+which residoo already reaches via Copilot Chat/Cursor/Windsurf) stores
+remote-MCP OAuth tokens in "the Visual Studio keychain," an OS-backed
+store, so there's no new plaintext credential file to add alongside the
+two config paths. Wired into `agent-configs.js`'s existing global-candidate
+and project-relpath-discovery mechanisms -- no new source file, no new
+architecture, since this is exactly the shape that module already handles
+for six other tools.
+
+**New opt-in detector: BIP-39 crypto wallet seed phrases.** AgentSweep's
+own README confirmed it ships checksum-validated seed-phrase detection
+(BIP-39 mnemonics, Electrum seeds) that residoo didn't have. Implemented
+against the spec itself (github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
+and its own english.txt wordlist, both fetched directly, not retyped from
+memory) and cross-checked against the spec's own published all-zero test
+vector ("abandon" x11 + "about") before ever touching real code -- an
+independent correctness check, not a self-consistency one. Ships inside
+`--include-pii` rather than a new flag: a seed phrase is a CREDENTIAL, not
+personal data, but shares the same "no vendor prefix to anchor on, ask
+first" shape as SSN/card/IBAN, and one flag beats flag proliferation for
+mechanically the same "checksum before ever reporting" pattern.
+
+One real bug caught before shipping, not after: the first regex candidate
+(`{11,23}` words, greedy) swallowed trailing prose past the actual phrase
+("here's my seed: <12 words> keep it safe" matched all 17 words as one
+span, which isn't a valid BIP-39 length, so the real 12-word phrase inside
+it was never separately tried). Fixed by widening the candidate to up to
+100 words and adding `findBip39Phrase`, which slides every valid length
+(24 down to 12) across every offset in the wider capture and returns the
+first checksum-valid exact substring -- `pii.js`'s `validate` contract
+grew a new option (returning a narrowed string, not just true/false) to
+carry that refined match back to the caller instead of the over-wide one.
+
+**Closed guard gap: `PostToolUse` output redaction, Bash only.** A prior
+version of `guard.js`'s own docstring claimed a secret arriving through a
+command's OUTPUT was uncatchable by any documented hook mechanism -- wrong,
+and corrected here after this pass found GitGuardian's ggshield already
+scans tool output at exactly this stage (a real three-stage hook: prompt
+submission, pre-tool-use, post-tool-use, confirmed against
+docs.gitguardian.com directly). Re-checked Claude Code's own hooks
+reference fresh rather than trusting months-old notes, and found
+`PostToolUse`'s `updatedToolOutput` decision field genuinely can replace
+what the model sees -- for the one built-in tool (`Bash`) whose exact
+output shape (`{stdout, stderr, interrupted, isImage}`) those same docs
+publish precisely enough to reconstruct safely; every other tool's shape
+isn't documented at that precision, and Claude Code silently ignores a
+wrong-shaped replacement rather than erroring, so guessing one risks a
+no-op that looks like coverage. A real, disclosed scope limit, not full
+"every tool's output" coverage. The tool has already run by the time this
+fires -- it cannot undo a file write or a network call, only keep the raw
+value out of the model's context and the transcript.
+
+Found and fixed one real latent bug while wiring this in, not a
+hypothetical one: `runGuard`'s dispatch fell through to the PreToolUse
+deny path for anything other than `UserPromptSubmit` -- harmless while
+only two hook types were ever registered, but a `PostToolUse` payload also
+carries `tool_input` (Claude Code's own docs confirm both `tool_input` and
+`tool_response` are present on it), so without an explicit
+`hook_event_name === "PreToolUse"` guard, a `PostToolUse` event whose
+command happened to match a sensitive-path pattern would have been
+silently re-evaluated as a PreToolUse decision and could have emitted
+`permissionDecision: "deny"` for a tool call that had already finished
+running -- a response Claude Code has no defined behavior for. Fixed
+alongside the new feature, with a dedicated regression test.
+
+Also researched and explicitly declined, for the record: MCPM.sh (a
+third-party MCP config manager) -- confidence stayed "medium" because it's
+unconfirmed whether it persists credentials of its own versus only writing
+into each client's already-covered native config; Microsoft's APM
+(cross-tool MCP manifest generator) -- generates native configs residoo
+already scans, not a new secret-bearing artifact itself; the GitHub
+Copilot JetBrains plugin's separate `mcp.json` path -- named only by APM's
+own docs (2-1 vote, "without the exact filesystem detail" independently
+confirmed), not yet verified precisely enough to add; and a Black Hat
+USA 2026 / Cloud Security Alliance report on Claude Code, Gemini CLI, and
+Codex CI/CD secrets exposure (real, CVE-2026-54316) -- a live CI-runtime
+attack path, not a local file format, and so out of reach of a static
+file-based scanner like residoo by construction, not by oversight.
+
+Touches scan.js (`piiLine`'s `validate` contract), but only on the
+`--include-pii` code path -- the benchmark harness never passes that flag
+(confirmed by inspection of `bench/harness/adapters/residoo.js`), so the
+default scan path is provably unaffected. Confirmed directly rather than
+just asserted: a residoo-only rerun against the regenerated corpus still
+scores 45/45 (100%) distinct credentials, byte-identical to the last full
+reproduce. `npm test` (710 checks) and `npm run fuzz` both green.
+
 ## Reproduce
 
 ```

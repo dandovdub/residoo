@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * `residoo guard`: two Claude Code hooks in one binary, dispatched on the
+ * `residoo guard`: three Claude Code hooks in one binary, dispatched on the
  * payload's own `hook_event_name` field.
  *
  * PreToolUse blocks an obviously-sensitive file read before it happens,
@@ -11,14 +11,18 @@
  * from leaking": Claude Code's hooks API gives a PreToolUse hook the
  * PROPOSED tool input (a Bash command string, a Read file_path) before the
  * tool runs, and lets it deny the call outright -- but it never sees the
- * tool's OUTPUT, and by the time a PostToolUse hook fires, that output is
- * already committed to the transcript and can no longer be redacted. There
- * is no documented hook mechanism for "let the read happen, but strip the
- * secret out of what the model sees." So this can only block INPUT that
- * matches a known-sensitive file path pattern (.env, id_rsa, .aws/credentials,
- * and similar) -- it cannot catch a secret typed directly into a prompt, a
- * secret arriving in the output of an otherwise-unremarkable command
- * (curl, a build log), or any file path this pattern list does not name.
+ * tool's OUTPUT. So on its own, this can only block INPUT that matches a
+ * known-sensitive file path pattern (.env, id_rsa, .aws/credentials, and
+ * similar) -- it cannot catch a secret typed directly into a prompt, or one
+ * arriving in the output of an otherwise-unremarkable command (curl, `git
+ * log`, a build log), or any file path this pattern list does not name.
+ * UserPromptSubmit (below) closes the first gap; PostToolUse (below) closes
+ * the second, corrected from an earlier version of this comment that
+ * called it uncatchable -- Claude Code's own `updatedToolOutput` decision
+ * field (confirmed directly against code.claude.com/docs/en/hooks, not
+ * assumed) can in fact replace what the model sees, discovered during a
+ * later competitive-research pass after GitGuardian's ggshield was found to
+ * already scan tool output at this exact stage.
  *
  * UserPromptSubmit closes exactly the "typed directly into a prompt" gap
  * named above: Claude Code's own docs (code.claude.com/docs/en/hooks,
@@ -204,8 +208,86 @@ function evaluatePromptText(promptText) {
 }
 
 /**
- * Writes one structured audit line to stderr for a block decision --
- * CONTRIBUTING.md's own hard rule (rule 3) names `~/.residoo/rotations.json`
+ * Redacts every high-confidence match in `text`, tracking the first REAL
+ * (non-suppressed) hit for the audit trail/preview. Same suppression rule
+ * as evaluatePromptText (a documented vendor-example key or an obvious
+ * zero-entropy placeholder is never redacted) and the same rule set
+ * (PROMPT_GUARD_RULES) -- one bar for everything this module scans text
+ * content with, whether that content is a typed prompt or a command's
+ * output. `String.prototype.replace` with each rule's own global regex
+ * redacts every occurrence in one pass per rule; a value already inside a
+ * PREVIOUS rule's redaction (unlikely given how distinct these vendor
+ * prefixes are, but not impossible) is walked past unchanged rather than
+ * double-redacted, since only literal ORIGINAL text can still match a
+ * pattern from patterns.js.
+ */
+function redactSecretsInText(text) {
+  if (typeof text !== "string" || !text) return { text: typeof text === "string" ? text : "", hit: null };
+  let result = text;
+  let hit = null;
+  for (const rule of PROMPT_GUARD_RULES) {
+    rule.re.lastIndex = 0;
+    result = result.replace(rule.re, (match) => {
+      if (VENDOR_EXAMPLE_VALUES.has(match) || zeroEntropyTail(match)) return match;
+      if (!hit) hit = { label: rule.label, preview: redact(match) };
+      return redact(match);
+    });
+  }
+  return { text: result, hit };
+}
+
+/**
+ * Pure decision function: given a PostToolUse hook payload's tool_name and
+ * tool_response, decide whether to redact. No I/O, fully unit-testable.
+ *
+ * Bash only, and stated why rather than left implicit: Claude Code's own
+ * docs (code.claude.com/docs/en/hooks, "PostToolUse decision control",
+ * fetched directly) state `updatedToolOutput` "must match the tool's
+ * output shape" and "a value that doesn't match the tool's output schema
+ * is ignored and the original output is used" -- a SILENT no-op, not an
+ * error residoo could detect and report. Bash's shape ({stdout, stderr,
+ * interrupted, isImage}) is the one built-in tool output shape those same
+ * docs actually publish; every other built-in tool's tool_response shape
+ * is not documented at this level of precision, so reconstructing one
+ * would risk exactly the silent-no-op failure this project's own
+ * discipline exists to avoid. A stated, narrow scope limit, not full
+ * "every tool's output" coverage -- and still a real, new defense layer:
+ * PreToolUse's matchSensitivePath blocks based on WHAT you're about to
+ * read (a path), this blocks based on WHAT ACTUALLY CAME BACK (content),
+ * catching a secret in `git log`, `env`, a build log, or any other Bash
+ * output PreToolUse's path-based check was never going to see coming.
+ *
+ * The tool has ALREADY run by the time this fires (Claude Code's own docs,
+ * same section) -- this cannot undo the read/write/network call the
+ * command made, and does not try to. It only keeps the raw value out of
+ * the model's context (and so out of the transcript this project's own
+ * `scan` exists to check), a narrower guarantee than PreToolUse's denial,
+ * disclosed as such rather than oversold.
+ */
+function evaluatePostToolUse(toolName, toolResponse) {
+  if (toolName !== "Bash" || !toolResponse || typeof toolResponse !== "object") {
+    return { act: false, label: null, preview: null, updatedToolOutput: null };
+  }
+  const stdout = redactSecretsInText(toolResponse.stdout);
+  const stderr = redactSecretsInText(toolResponse.stderr);
+  const hit = stdout.hit || stderr.hit;
+  if (!hit) return { act: false, label: null, preview: null, updatedToolOutput: null };
+  return {
+    act: true,
+    label: hit.label,
+    preview: hit.preview,
+    updatedToolOutput: {
+      stdout: stdout.text,
+      stderr: stderr.text,
+      interrupted: !!toolResponse.interrupted,
+      isImage: !!toolResponse.isImage,
+    },
+  };
+}
+
+/**
+ * Writes one structured audit line to stderr for a block OR redact decision
+ * -- CONTRIBUTING.md's own hard rule (rule 3) names `~/.residoo/rotations.json`
  * as "the only file residoo ever writes outside an explicit --seal...
  * nothing else may claim this carve-out," so this is NOT a new file, the
  * same choice `cred`'s own audit trail already made for the same reason
@@ -213,28 +295,45 @@ function evaluatePromptText(promptText) {
  * hook's own stderr at launch if you want it kept, same as `cred`.
  * Never the raw matched value -- `preview` is already redact()'d by the
  * caller (rule 4: no raw value in any log line, ever), and PreToolUse
- * decisions carry no value at all, only a path-pattern label.
+ * decisions carry no value at all, only a path-pattern label. `decision`
+ * defaults to "block" (every call site before PostToolUse existed) --
+ * PostToolUse passes "redact" since nothing is actually blocked there, the
+ * tool already ran; the log should say what really happened.
  */
-function logAuditLine(errOutput, { event, label, preview, sessionId, cwd }) {
+function logAuditLine(errOutput, { event, label, preview, sessionId, cwd, decision = "block" }) {
   try {
     errOutput.write(JSON.stringify({
-      ts: new Date().toISOString(), tool: "residoo guard", event, decision: "block",
+      ts: new Date().toISOString(), tool: "residoo guard", event, decision,
       label, ...(preview ? { preview } : {}), sessionId: sessionId || null, cwd: cwd || null,
     }) + "\n");
   } catch { /* stderr write failing is never a reason to fail the hook decision itself */ }
 }
 
 /**
- * Reads one PreToolUse OR UserPromptSubmit hook payload from `input`
- * (default stdin) -- distinguished by the payload's own `hook_event_name`
- * common field, a single binary handling both the way Claude Code's own
- * hook registration allows -- decides, and writes the hook's own JSON
- * response protocol to `output` (default stdout) -- exit code is the
- * caller's job (bin/residoo.js), this returns the intended process exit
- * code instead of calling process.exit itself, matching every other run*
- * function in cli.js. Every BLOCK decision also gets one structured line
- * on `errOutput` (default stderr) -- see logAuditLine's own docstring for
- * why stderr, never a file.
+ * Reads one PreToolUse, UserPromptSubmit, OR PostToolUse hook payload from
+ * `input` (default stdin) -- distinguished by the payload's own
+ * `hook_event_name` common field, a single binary handling all three the
+ * way Claude Code's own hook registration allows -- decides, and writes
+ * the hook's own JSON response protocol to `output` (default stdout) --
+ * exit code is the caller's job (bin/residoo.js), this returns the
+ * intended process exit code instead of calling process.exit itself,
+ * matching every other run* function in cli.js. Every BLOCK or REDACT
+ * decision also gets one structured line on `errOutput` (default stderr)
+ * -- see logAuditLine's own docstring for why stderr, never a file.
+ *
+ * The final `hook_event_name !== "PreToolUse"` guard fixes a real latent
+ * bug, not a hypothetical one: before PostToolUse existed here, anything
+ * OTHER than UserPromptSubmit fell through unconditionally to
+ * evaluateToolInput -- harmless while only PreToolUse and UserPromptSubmit
+ * were ever registered, but a PostToolUse payload also carries a
+ * `tool_input` field (Claude Code's own docs confirm both `tool_input` and
+ * `tool_response` are present), so without this guard a PostToolUse event
+ * would have been silently re-evaluated as a PreToolUse decision and could
+ * have emitted a `permissionDecision: "deny"` response for a tool call
+ * that had already finished executing -- a response Claude Code has no
+ * defined behavior for. Explicit is safer than "everything else falls
+ * through," the same fail-safe posture this whole module already commits
+ * to elsewhere.
  */
 async function runGuard({ input = process.stdin, output = process.stdout, errOutput = process.stderr } = {}) {
   const chunks = [];
@@ -266,6 +365,24 @@ async function runGuard({ input = process.stdin, output = process.stdout, errOut
     return 0;
   }
 
+  if (payload.hook_event_name === "PostToolUse") {
+    const decision = evaluatePostToolUse(payload.tool_name, payload.tool_response);
+    if (!decision.act) return 0;
+    logAuditLine(errOutput, {
+      event: "PostToolUse", label: decision.label, preview: decision.preview,
+      sessionId: payload.session_id, cwd: payload.cwd, decision: "redact",
+    });
+    output.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        updatedToolOutput: decision.updatedToolOutput,
+      },
+    }) + "\n");
+    return 0;
+  }
+
+  if (payload.hook_event_name !== "PreToolUse") return 0;
+
   const decision = evaluateToolInput(payload.tool_name, payload.tool_input);
   if (!decision.block) return 0;
 
@@ -283,4 +400,7 @@ async function runGuard({ input = process.stdin, output = process.stdout, errOut
   return 0;
 }
 
-module.exports = { evaluateToolInput, matchSensitivePath, evaluatePromptText, runGuard, SENSITIVE_PATH_PATTERNS };
+module.exports = {
+  evaluateToolInput, matchSensitivePath, evaluatePromptText, evaluatePostToolUse,
+  runGuard, SENSITIVE_PATH_PATTERNS,
+};

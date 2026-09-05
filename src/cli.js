@@ -150,13 +150,19 @@ Scan options:
                           similar characters (0/O, Y/*) can be misread,
                           which breaks an exact-format match, so this is
                           best-effort additional coverage, not a guarantee.
-  --include-pii           also scan for PII: US Social Security Numbers
-                          (dashed format only), credit card numbers
-                          (Luhn-validated), and IBANs (checksum-validated).
-                          A different RISK CATEGORY, not a lower confidence
-                          bar -- residoo is deliberately credentials-only
-                          by default. Deliberately excludes bare email/
-                          phone (too common in ordinary text to meet this
+  --include-pii           also scan for PII and adjacent secrets: US Social
+                          Security Numbers (dashed format only), credit
+                          card numbers (Luhn-validated), IBANs (checksum-
+                          validated), and crypto wallet seed phrases
+                          (BIP-39, SHA-256-checksum-validated -- a
+                          CREDENTIAL, not personal data, kept in this flag
+                          rather than a new one to avoid flag proliferation
+                          for the same "opt in, then checksum-validate"
+                          shape). A different RISK CATEGORY, not a lower
+                          confidence bar -- residoo is deliberately
+                          credentials-only by default. Deliberately
+                          excludes bare email/phone (too common in
+                          ordinary text to meet this
                           project's own high-confidence bar even opt-in).
 
 Watch:
@@ -227,22 +233,20 @@ Cred:
   tool, present only when RESIDOO_CRED_ALLOWED_COMMANDS is configured.
 
 Guard:
-  residoo guard             one binary, two Claude Code hooks, dispatched on
-                          the payload's own hook_event_name:
+  residoo guard             one binary, three Claude Code hooks, dispatched
+                          on the payload's own hook_event_name:
 
                           PreToolUse blocks an obviously-sensitive file read
                           (.env, id_rsa, .aws/credentials, and similar)
                           before it can be written to the session
-                          transcript at all. Narrower than it sounds:
-                          Claude Code's hooks API can see a proposed Bash
-                          command or Read path before it runs, but never
-                          the command's OUTPUT, so this alone cannot catch
-                          a secret typed into a prompt or one arriving
-                          through an unrelated command's output.
+                          transcript at all. Narrower than it sounds on its
+                          own: this only sees a proposed Bash command or
+                          Read path before it runs, based on WHAT you're
+                          about to touch, not what actually comes back.
 
-                          UserPromptSubmit closes exactly that gap: it
-                          checks the user's own typed prompt against
-                          residoo's 79 high-confidence rules (never
+                          UserPromptSubmit closes the "typed into a prompt"
+                          gap: it checks the user's own typed prompt against
+                          residoo's 84 high-confidence rules (never
                           --verify, never --ocr -- this hook has no matcher
                           and fires on every single prompt, so it must stay
                           fast) and can block it before Claude processes it
@@ -258,15 +262,34 @@ Guard:
                           consistent with this hook never blocking on
                           anything it doesn't recognize.
 
+                          PostToolUse closes the "arriving through a
+                          command's output" gap for Bash specifically: it
+                          scans the command's actual stdout/stderr against
+                          the same 84 rules and, if one matches, replaces
+                          the output with a redacted version before Claude
+                          ever sees it (Claude Code's own updatedToolOutput
+                          decision field). Bash only, disclosed rather than
+                          silently partial: every other built-in tool's
+                          exact output shape isn't documented precisely
+                          enough to reconstruct a replacement safely, and a
+                          wrong shape is silently ignored by Claude Code,
+                          not reported as a failure. The command has
+                          already run by this point -- this cannot undo a
+                          file write or network call, only keep the raw
+                          value out of the model's context.
+
                           scan/watch/mcp remain the real safety net either
                           way -- this is prevention on top of detection,
-                          not a replacement for it. Add both to
+                          not a replacement for it. Add all three to
                           .claude/settings.json:
                             {"hooks":{
                               "PreToolUse":[{"matcher":"Bash|Read",
                                 "hooks":[{"type":"command",
                                 "command":"residoo guard"}]}],
                               "UserPromptSubmit":[{"hooks":[{"type":"command",
+                                "command":"residoo guard"}]}],
+                              "PostToolUse":[{"matcher":"Bash",
+                                "hooks":[{"type":"command",
                                 "command":"residoo guard"}]}]}}
 
 Rotation:
