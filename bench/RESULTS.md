@@ -1835,6 +1835,108 @@ green. Total sources: 45 (was 44).
 
 No scan.js/decode.js/patterns.js change; no benchmark reproduce needed.
 
+## residoo 0.22.0: prompt-injection detection, the first of three "be better than Medusa" areas -- a genuinely different angle, not a clone (added 2026-09-05)
+
+Direct response to a standing instruction: focus specifically on the
+three areas where Medusa is a broader tool than residoo -- prompt
+injection, MCP vulnerabilities, CVE checks -- and be better, not just
+catch up on source count. This release is the first of the three.
+
+**The scope decision that mattered most, made before writing any code**:
+fetched Medusa's own `docs/AI_SECURITY.md` directly (2026-09-05) to find
+out exactly what its PI-SCAN checks, rather than assume. It audits an LLM
+*application's own source code* for vulnerable prompt-construction
+patterns (an f-string concatenating unsanitized user input into a
+prompt, external content reaching a prompt template unsanitized) --
+static analysis of code residoo has no access to and isn't built to
+read. Cloning that with a worse implementation would not be "better than
+Medusa," it would be a worse Medusa. residoo's actual advantage is
+different: it already has the agent's own TRANSCRIPT, the record of what
+was actually fed to a live agent. New module
+[`src/injection.js`](../src/injection.js) uses that advantage --
+detecting a REALIZED injection attempt already sitting in transcript
+content (a fetched page, a tool's own output, a file the agent read),
+not auditing hypothetical vulnerable code.
+
+**Two structural signals, `--include-injection`, off by default (the same
+"different risk category" posture `--include-pii` already established)**:
+
+1. Special/role-token injection -- `<|im_start|>`, `<|im_end|>`,
+   `<|system|>`/`<|user|>`/`<|assistant|>`, `<|endoftext|>`,
+   `<|endofprompt|>`, `[INST]`/`[/INST]`, `<<SYS>>`/`<</SYS>>`. A named,
+   real technique -- "Special Token Injection" (Sentry's own STI attack
+   guide, fetched directly: "the model expects certain token patterns to
+   signify roles... analogous to injecting a SQL query via an input
+   field"), corroborated by OWASP's LLM01 entry and a 2026 arXiv paper on
+   chat-template abuse for indirect injection ("ChatInject"). Medusa's
+   own docs name this same technique family ("ChatML tokens, role
+   manipulation"), confirming it's a converged-upon signal, not invented
+   here. HIGH confidence: verified in Node directly against realistic and
+   adversarial test strings before shipping -- these exact sequences
+   don't appear in ordinary prose or code by accident.
+2. Hidden instructions carried by invisible Unicode -- reuses
+   `scanZeroWidth` from `integrity.js` VERBATIM (additive export, zero
+   duplicated logic), extending the same TrapDoor-campaign-sourced
+   detection that already covers CLAUDE.md/memory files to every line of
+   every transcript this project reads. This closes a real, disclosed gap
+   in the existing check: a hidden instruction delivered via a fetched
+   web page lands in ordinary transcript content, not one of
+   `checkIntegrity`'s known config-file locations, so the existing
+   fixed-location check could not see it.
+
+**`--include-noisy` additionally enables** a small, explicitly
+heuristic set of canonical override phrases ("ignore previous
+instructions" and close variants) at LOW confidence -- mirroring
+`NOISY_PATTERNS`'s own contract exactly (never part of the default
+report). Disclosed plainly rather than oversold: OWASP's own LLM01
+guidance and independent practitioner writing both describe reliable
+phrase-based injection detection as an open, unsolved problem. Shipping
+it anyway, gated the same way this project already gates its other
+known-noisy rule, is more honest than either omitting it or shipping it
+at a confidence it hasn't earned.
+
+**What this deliberately does NOT cover, verified rather than assumed**:
+Medusa's own "Tool Poisoning (MCP101)" -- a malicious MCP server changing
+a tool's description after approval. Checked directly against a real
+transcript on this project's own build machine: a Claude Code `tool_use`
+record for an `mcp__`-namespaced tool carries only `{name, input}`,
+never the tool's description or input schema (confirmed by locating a
+real `inputSchema` string match in the transcript and tracing it to a
+`Write` tool call's own file CONTENT, not live MCP protocol data -- an
+important self-caught false lead, not assumed clean). Detecting tool-
+description poisoning would need a live MCP client connection to query
+`tools/list`, a fundamentally different architecture (an active protocol
+client, not a file scanner) this project has not built and isn't faking
+here.
+
+**Wired everywhere `--include-pii` already reaches**, not just `scan`:
+`residoo watch` (baseline seeding and live sweeps both), and both
+`residoo_scan`/`residoo_check` MCP tool schemas -- verified end to end
+via the real spawned `residoo mcp` server, not just scan.js's own unit
+tests, after confirming by hand that a mechanical wiring slip (the exact
+kind PII's own MCP surface test was written to catch) wouldn't otherwise
+be caught by scan()-level tests alone. Added the `injection: true` JSON
+marker (mirroring `pii: true`) and three new `ROTATION_GUIDANCE` entries
+framed as investigation steps, not credential rotation -- checked
+`guidanceFor`'s fallback behavior first and confirmed an unmapped rule id
+silently produces "rotate or revoke the credential" text, which would
+have been actively wrong, misleading advice for a finding that isn't a
+credential at all.
+
+13 new tests: detection across both structural signal types, the noisy
+phrase gate, the `injection:true` marker, confirmation nothing fires
+without the flag, real rotation-guidance for all three new rule ids (not
+the generic unknown-rule fallback), and the MCP-surface opt-in gate
+verified against a real spawned server process. `npm test` (777 checks)
+and `npm run fuzz` (2000 runs/property) both green. Live-verified against
+a synthetic fixture end to end via the actual CLI binary before writing
+any automated test.
+
+No scan.js/decode.js/patterns.js change to the DEFAULT rule set; no
+benchmark reproduce needed (injection detection is a new, separate
+category, not a change to the 84 credential-detection rules the
+benchmark measures).
+
 ## Reproduce
 
 ```

@@ -267,14 +267,14 @@ function makeSyntheticSource(realId, batchesByFile) {
  * `verify` is always forced off here: seeding a dedup cache must never be
  * the reason a live vendor API gets hit.
  */
-async function baselineSeed(source, sourceId, file, sizeBytes, mtimeMs, seen, includeNoisy, includeSuppressed, noColor, includePii) {
+async function baselineSeed(source, sourceId, file, sizeBytes, mtimeMs, seen, includeNoisy, includeSuppressed, noColor, includePii, includeInjection) {
   const batch = await readWholeFile(source, file, sizeBytes, mtimeMs);
   if (!batch) return;
   let result;
   try {
     result = await scan({
       sources: [makeSyntheticSource(sourceId, new Map([[file, batch]]))],
-      includeNoisy, includeSuppressed, verify: false, noColor, includePii,
+      includeNoisy, includeSuppressed, verify: false, noColor, includePii, includeInjection,
     });
   } catch {
     return; // best-effort: a failure here just leaves this file's dedup
@@ -300,7 +300,7 @@ async function baselineSeed(source, sourceId, file, sizeBytes, mtimeMs, seen, in
  * `dismiss` takes effect without a restart.
  */
 async function sweepOnce({ sources, tracked, seen, ledger, options, emit }) {
-  const { includeNoisy, includeSuppressed, verify, noColor, includePii } = options || {};
+  const { includeNoisy, includeSuppressed, verify, noColor, includePii, includeInjection } = options || {};
   let loud = 0;
   let quiet = 0;
   let suppressedByLedger = 0;
@@ -364,7 +364,7 @@ async function sweepOnce({ sources, tracked, seen, ledger, options, emit }) {
           contentHash: tailable ? null : wholeFileHash(file),
         });
         if (!tailable) {
-          await baselineSeed(source, sourceId, file, sizeBytes, mtimeMs, seen, includeNoisy, includeSuppressed, noColor, includePii);
+          await baselineSeed(source, sourceId, file, sizeBytes, mtimeMs, seen, includeNoisy, includeSuppressed, noColor, includePii, includeInjection);
         }
         continue;
       }
@@ -433,7 +433,7 @@ async function sweepOnce({ sources, tracked, seen, ledger, options, emit }) {
     try {
       result = await scan({
         sources: [makeSyntheticSource(sourceId, batchesByFile)],
-        includeNoisy, includeSuppressed, verify, noColor, includePii,
+        includeNoisy, includeSuppressed, verify, noColor, includePii, includeInjection,
       });
     } catch (err) {
       emit({ type: "watch-error", at: new Date(), source: sourceId, detail: "scan failed: " + (err && err.message) });

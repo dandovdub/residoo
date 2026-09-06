@@ -57,8 +57,47 @@ residoo watch [options]
   --verify                same opt-in vendor check as scan --verify, applied to
                           each newly found credential once
   --no-notify             skip the desktop notification, keep the terminal line
-  --include-noisy, --include-suppressed, --include-pii, --no-color   same meaning as scan
+  --include-noisy, --include-suppressed, --include-pii,
+  --include-injection, --no-color                       same meaning as scan
 ```
+
+## Injection: prompt-injection signatures in transcript content
+
+`--include-injection` scans the same transcript content every other pass
+already reads for signs a prompt-injection attempt actually reached the
+agent -- a fetched web page, a file the agent read, a tool's own output.
+This is not a static-analysis check of an application's own
+prompt-construction code (a different, much bigger product -- see
+[docs/comparison.md](comparison.md)'s Medusa section); it's evidence
+something already happened, in the same at-rest data residoo already
+scans. Off by default, the same "different risk category, not a lower
+confidence bar" posture `--include-pii` already has.
+
+Two structural signals, on by default once the flag is passed:
+special/role-token sequences (`<|im_start|>`, `[INST]`, `<<SYS>>`, and
+similar control tokens chat-templated models use to delineate a
+message's role -- a named technique, "Special Token Injection") and
+hidden instructions carried by invisible Unicode (the same
+TrapDoor-sourced detection `residoo scan`'s own integrity check already
+uses for CLAUDE.md and memory files, extended here to every line of
+every transcript). Add `--include-noisy` for a small set of canonical
+override phrases ("ignore previous instructions" and close variants),
+shipped at low confidence and disclosed plainly: phrase-based detection
+is a genuinely unsolved problem, prone to matching a security-research
+conversation about this exact technique, not something this rule set
+claims to have solved.
+
+Not covered, disclosed rather than silently gapped: a malicious MCP
+server changing a tool's own description after approval ("tool
+poisoning" / "rug-pull"). Verified directly against a real transcript on
+this project's own build machine: Claude Code's JSONL logs a tool call's
+name and input, never the tool's description or schema, so there is
+nothing on disk for a file-scanner to check that against -- detecting it
+would need a live MCP client connection, a fundamentally different
+architecture this project has not built.
+
+See [`src/injection.js`](../src/injection.js) for the full rule set and
+every cited source.
 
 ## MCP: query findings from inside Claude Code
 

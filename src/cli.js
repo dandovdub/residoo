@@ -165,6 +165,27 @@ Scan options:
                           excludes bare email/phone (too common in
                           ordinary text to meet this
                           project's own high-confidence bar even opt-in).
+  --include-injection      also scan transcript content for prompt-
+                          injection signatures: special/role-token
+                          sequences (<|im_start|>, [INST], <<SYS>>, and
+                          similar -- the control tokens an attacker can
+                          smuggle into fetched content to make a model
+                          treat it as a privileged turn instead of
+                          untrusted data) and hidden instructions carried
+                          by invisible Unicode. A third RISK CATEGORY,
+                          neither a credential nor PII: this looks for
+                          evidence an injection attempt already reached
+                          the agent, in the same at-rest transcript
+                          content every other pass scans -- not a
+                          static-analysis check of an application's own
+                          prompt-construction code (that's a different,
+                          much bigger product; see docs/comparison.md).
+                          Combine with --include-noisy for a small set of
+                          canonical override phrases ("ignore previous
+                          instructions" and close variants) -- disclosed
+                          as genuinely heuristic and prone to matching a
+                          security-research conversation about this exact
+                          technique, not a solved detection problem.
 
 Watch:
   residoo watch            continuous scanning instead of one snapshot:
@@ -182,7 +203,8 @@ Watch:
   --verify                same opt-in vendor check as scan --verify,
                           applied to each newly found credential once,
                           never to one already seen
-  --include-noisy, --include-suppressed, --include-pii, --no-color
+  --include-noisy, --include-suppressed, --include-pii,
+  --include-injection, --no-color
                           same meaning as scan
   --no-notify             skip the OS desktop notification watch fires for
                           each genuinely new finding (macOS via osascript,
@@ -774,6 +796,7 @@ async function runWatch(args) {
   const verify = args.includes("--verify");
   const noColor = args.includes("--no-color");
   const includePii = args.includes("--include-pii");
+  const includeInjection = args.includes("--include-injection");
   const noNotify = args.includes("--no-notify");
 
   let intervalSeconds = 5;
@@ -800,7 +823,7 @@ async function runWatch(args) {
 
   const { promise, stop } = startWatch({
     sources,
-    options: { includeNoisy, includeSuppressed, verify, noColor, includePii, noNotify, json: wantsJson, pollMs: intervalSeconds * 1000 },
+    options: { includeNoisy, includeSuppressed, verify, noColor, includePii, includeInjection, noNotify, json: wantsJson, pollMs: intervalSeconds * 1000 },
   });
 
   const printFinalSummary = (stats) => {
@@ -1098,6 +1121,11 @@ async function main(argv) {
   // card numbers, IBAN) rather than the shape-only, much noisier
   // categories (bare email, phone) some competitors also ship.
   const wantsPii = args.includes("--include-pii");
+  // --include-injection: a third, separate risk category from either of the
+  // above (see injection.js) -- detects a realized prompt-injection
+  // signature already sitting in transcript content, not a credential or
+  // personal data.
+  const wantsInjection = args.includes("--include-injection");
 
   // --project [dir]: the dir is optional (CI passes ".", a bare --project
   // means the current directory). null means machine mode.
@@ -1209,7 +1237,7 @@ async function main(argv) {
 
   const progress = makeProgressReporter(noColor);
   const result = await scan({
-    sources, includeNoisy, includeSuppressed, verify, noColor, ocr: wantsOcr, includePii: wantsPii,
+    sources, includeNoisy, includeSuppressed, verify, noColor, ocr: wantsOcr, includePii: wantsPii, includeInjection: wantsInjection,
     onProgress: progress.onProgress,
     // Clears the spinner's last frame before --verify's own stderr lines
     // print; without this the last spinner line sits uncleared on screen

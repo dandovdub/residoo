@@ -129,6 +129,26 @@ scanner has a reason to prefer Medusa's single-tool coverage; someone who
 wants the narrowest, most auditable thing that does exactly one job has a
 reason to prefer residoo.
 
+One of those four areas is now also, narrowly, residoo's: `--include-injection`
+(see [`src/injection.js`](../src/injection.js) and
+[Injection](features.md#injection-prompt-injection-signatures-in-transcript-content))
+scans transcript content for prompt-injection signatures. Fetched
+directly against Medusa's own `docs/AI_SECURITY.md` (2026-09-05) to be
+precise about the difference rather than claim parity: Medusa's own
+PI-SCAN audits an LLM *application's own source code* for a vulnerable
+prompt-construction pattern (an f-string concatenating unsanitized user
+input into a prompt) -- a static-analysis product residoo has no
+equivalent of and isn't attempting to clone. residoo's angle is
+different because its data is different: it already has the agent's own
+transcript, so `--include-injection` looks for evidence an injection
+*actually reached* a live agent (a special/role-token sequence or a
+hidden-Unicode instruction sitting in a fetched page or a tool's own
+output), not a hypothetical vulnerability in code residoo never reads.
+MCP vulnerability scanning and CVE checking remain open -- Medusa's own
+docs name specific checks in both (MCP tool-poisoning/confused-deputy
+patterns, a curated CVE table for AI/ML-ecosystem packages) that residoo
+does not yet have an equivalent of.
+
 Two things worth naming precisely, in both directions:
 
 - Medusa's `purge` does in-place redaction with a byte-for-byte backup of

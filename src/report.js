@@ -541,11 +541,15 @@ function renderJson(result, integrity = null, rotation = null) {
         // value was never plain text at all -- it was read out of a
         // pasted or tool-returned image (see ocr.js); `pii` means this is
         // a --include-pii finding, a different risk category from a
-        // credential, not a rule from the default set (see pii.js).
+        // credential, not a rule from the default set (see pii.js);
+        // `injection` means this is a --include-injection finding -- a
+        // prompt-injection signature, not a credential or PII at all (see
+        // injection.js).
         ...(f.encoding ? { encoding: f.encoding } : {}),
         ...(f.spanLines ? { spanLines: f.spanLines } : {}),
         ...(f.ocr ? { ocr: true } : {}),
         ...(f.pii ? { pii: true } : {}),
+        ...(f.injection ? { injection: true } : {}),
         fingerprint: fingerprintFinding(f),
         // Only present on an --include-suppressed run: says WHY this finding
         // is low-confidence, so a JSON consumer doesn't have to guess.

@@ -5,6 +5,8 @@ const { PATTERNS, NOISY_PATTERNS, redact } = require("./patterns");
 const { findDecodedMatches, findBoundaryMatches, contentProjection } = require("./decode");
 const { isTesseractAvailable, extractImageBlocks, ocrImageBase64 } = require("./ocr");
 const { PII_PATTERNS } = require("./pii");
+const { INJECTION_PATTERNS, NOISY_INJECTION_PATTERNS, CHATML_TOKEN_RE, summarizeInvisibles } = require("./injection");
+const { scanZeroWidth } = require("./integrity");
 const { findPairedSecret, findNearbyCandidate } = require("./pairing");
 const { looksRandom } = require("./rarity");
 const { decodeJwtExpiryMs } = require("./jwtExpiry");
@@ -273,7 +275,7 @@ function localTimestamp(d) {
  * absolute path can itself carry a username or a project name the rest of
  * this report is careful never to print.
  */
-async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, verifyOnlyFingerprint = null, onBeforeVerify = null, noColor = false, ocr = false, includePii = false } = {}) {
+async function scan({ sources, includeNoisy = false, includeSuppressed = false, onProgress = null, verify = false, verifyOnlyFingerprint = null, onBeforeVerify = null, noColor = false, ocr = false, includePii = false, includeInjection = false } = {}) {
   const rules = includeNoisy ? PATTERNS.concat(NOISY_PATTERNS) : PATTERNS;
   // --ocr: checked once, not per line/image -- isTesseractAvailable shells
   // out, and this scan can touch thousands of lines. ocrRequestedButMissing
@@ -639,6 +641,40 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
     }
   };
 
+  // --include-injection: a third, separate risk category (see injection.js's
+  // own header for why this is neither a secret nor PII). No suppression
+  // heuristics apply here -- there is no "vendor-documented example" or
+  // "placeholder-like context" equivalent for a special-token sequence or a
+  // hidden Unicode character, unlike a value-shaped secret. NOISY_INJECTION_
+  // PATTERNS additionally require --include-noisy, mirroring exactly how
+  // patterns.js's own NOISY_PATTERNS require it for secrets.
+  const injectionLine = (line, file, relFile, lineNo, mtimeMs) => {
+    if (!includeInjection) return;
+    for (const rule of INJECTION_PATTERNS) {
+      if (rule.id === "chatml_special_token") {
+        CHATML_TOKEN_RE.lastIndex = 0;
+        let m;
+        while ((m = CHATML_TOKEN_RE.exec(line)) !== null) {
+          record(rule, m[0], relFile, file, lineNo, mtimeMs, rule.confidence, null, { injection: true });
+        }
+      } else if (rule.id === "zero_width_hidden_instruction") {
+        const hits = scanZeroWidth(line).filter((h) => h.suspicious);
+        if (hits.length > 0) {
+          record(rule, summarizeInvisibles(hits), relFile, file, lineNo, mtimeMs, rule.confidence, null, { injection: true });
+        }
+      }
+    }
+    if (includeNoisy) {
+      for (const rule of NOISY_INJECTION_PATTERNS) {
+        rule.re.lastIndex = 0;
+        let m;
+        while ((m = rule.re.exec(line)) !== null) {
+          record(rule, m[0], relFile, file, lineNo, mtimeMs, rule.confidence, null, { injection: true });
+        }
+      }
+    }
+  };
+
   // Feature 2: split-line boundary join. A finding here means one credential
   // was split across this line and the next and is contiguous on neither. It
   // is recorded against BOTH contributing lines (each holds a fragment of the
@@ -759,6 +795,13 @@ async function scan({ sources, includeNoisy = false, includeSuppressed = false, 
           if (includePii) {
             try {
               piiLine(line, file, relFile, i + 1, mtimeMs);
+            } catch (err) {
+              flagFailed();
+            }
+          }
+          if (includeInjection) {
+            try {
+              injectionLine(line, file, relFile, i + 1, mtimeMs);
             } catch (err) {
               flagFailed();
             }

@@ -52,18 +52,20 @@ function rejectUnknownKeys(args, allowed) {
 
 /**
  * Shared arg shape for residoo_scan/residoo_check: includeNoisy,
- * includeSuppressed, includePii, maxEntries. includePii is exposed here
- * (unlike ocr or verify, see this file's own header comment on verify's
- * exclusion) because it is architecturally identical to includeNoisy --
- * local-only, no network call, no external process, just a different
- * detection category (see pii.js) -- not the network/live-secret trust
- * boundary verify's own exclusion is specifically about.
+ * includeSuppressed, includePii, includeInjection, maxEntries. includePii
+ * and includeInjection are exposed here (unlike ocr or verify, see this
+ * file's own header comment on verify's exclusion) because they are
+ * architecturally identical to includeNoisy -- local-only, no network
+ * call, no external process, just a different detection category (see
+ * pii.js and injection.js respectively) -- not the network/live-secret
+ * trust boundary verify's own exclusion is specifically about.
  */
 function validateSweepArgs(args, allowedKeys) {
   const errs = rejectUnknownKeys(args, allowedKeys);
   if (args.includeNoisy !== undefined && typeof args.includeNoisy !== "boolean") errs.push("includeNoisy must be a boolean");
   if (args.includeSuppressed !== undefined && typeof args.includeSuppressed !== "boolean") errs.push("includeSuppressed must be a boolean");
   if (args.includePii !== undefined && typeof args.includePii !== "boolean") errs.push("includePii must be a boolean");
+  if (args.includeInjection !== undefined && typeof args.includeInjection !== "boolean") errs.push("includeInjection must be a boolean");
   let maxEntries = 25;
   if (args.maxEntries !== undefined) {
     if (typeof args.maxEntries !== "number" || !Number.isInteger(args.maxEntries) || args.maxEntries < 1 || args.maxEntries > 200) {
@@ -74,7 +76,7 @@ function validateSweepArgs(args, allowedKeys) {
   }
   return {
     errs, includeNoisy: args.includeNoisy === true, includeSuppressed: args.includeSuppressed === true,
-    includePii: args.includePii === true, maxEntries,
+    includePii: args.includePii === true, includeInjection: args.includeInjection === true, maxEntries,
   };
 }
 
@@ -134,8 +136,8 @@ function buildTools({ sources }) {
   let checkStarted = false;
 
   async function handleScan(args) {
-    const SCAN_KEYS = new Set(["projectDir", "includeNoisy", "includeSuppressed", "includePii", "maxEntries"]);
-    const { errs, includeNoisy, includeSuppressed, includePii, maxEntries } = validateSweepArgs(args, SCAN_KEYS);
+    const SCAN_KEYS = new Set(["projectDir", "includeNoisy", "includeSuppressed", "includePii", "includeInjection", "maxEntries"]);
+    const { errs, includeNoisy, includeSuppressed, includePii, includeInjection, maxEntries } = validateSweepArgs(args, SCAN_KEYS);
     if (args.projectDir !== undefined && typeof args.projectDir !== "string") errs.push("projectDir must be a string");
     if (errs.length) return errorResult(`Invalid arguments: ${errs.join("; ")}`);
 
@@ -152,7 +154,7 @@ function buildTools({ sources }) {
       scanSources = sources;
     }
 
-    const result = await scan({ sources: scanSources, includeNoisy, includeSuppressed, includePii, verify: false, noColor: true });
+    const result = await scan({ sources: scanSources, includeNoisy, includeSuppressed, includePii, includeInjection, verify: false, noColor: true });
     const acks = loadAcks();
     const dismissed = loadDismissed();
     const rotation = renderRotation(result.findings, acks, dismissed);
@@ -179,8 +181,8 @@ function buildTools({ sources }) {
   }
 
   async function handleCheck(args) {
-    const CHECK_KEYS = new Set(["includeNoisy", "includeSuppressed", "includePii", "maxEntries"]);
-    const { errs, includeNoisy, includeSuppressed, includePii, maxEntries } = validateSweepArgs(args, CHECK_KEYS);
+    const CHECK_KEYS = new Set(["includeNoisy", "includeSuppressed", "includePii", "includeInjection", "maxEntries"]);
+    const { errs, includeNoisy, includeSuppressed, includePii, includeInjection, maxEntries } = validateSweepArgs(args, CHECK_KEYS);
     if (errs.length) return errorResult(`Invalid arguments: ${errs.join("; ")}`);
 
     const firstCheckThisSession = !checkStarted;
@@ -191,7 +193,7 @@ function buildTools({ sources }) {
     const emit = (e) => events.push(e);
     const stats = await sweepOnce({
       sources, tracked: checkTracked, seen: checkSeen, ledger,
-      options: { includeNoisy, includeSuppressed, includePii, verify: false, noColor: true }, emit,
+      options: { includeNoisy, includeSuppressed, includePii, includeInjection, verify: false, noColor: true }, emit,
     });
 
     const allNew = events.filter((e) => e.type === "finding");
@@ -366,6 +368,7 @@ function buildTools({ sources }) {
         includeNoisy: { type: "boolean", default: false, description: "Also run residoo's two low-confidence heuristic rules (generic password/secret assignments) -- catches more, false-positives more. Off by default." },
         includeSuppressed: { type: "boolean", default: false, description: "Include matches normally hidden because they look like vendor-documented example values or placeholder text. Off by default." },
         includePii: { type: "boolean", default: false, description: "Also scan for PII and adjacent secrets (US Social Security Numbers, Luhn-validated credit card numbers, checksum-validated IBANs, BIP-39 checksum-validated crypto wallet seed phrases) -- a different risk category from a vendor credential, not a lower confidence bar. Off by default; residoo is deliberately credentials-only otherwise." },
+        includeInjection: { type: "boolean", default: false, description: "Also scan transcript content for prompt-injection signatures (special/role-token sequences like <|im_start|> or [INST], and hidden instructions carried by invisible Unicode) -- evidence an injection attempt already reached the agent, not a static-analysis check of application code. A third risk category, off by default." },
         maxEntries: { type: "integer", minimum: 1, maximum: 200, default: 25, description: "Cap on distinct findings returned in full detail, pending-first. Counts in the response are always exact even when the entry list is truncated." },
       },
       required: [],
@@ -382,6 +385,7 @@ function buildTools({ sources }) {
         includeNoisy: { type: "boolean", default: false, description: "Same meaning as residoo_scan." },
         includeSuppressed: { type: "boolean", default: false, description: "Same meaning as residoo_scan." },
         includePii: { type: "boolean", default: false, description: "Same meaning as residoo_scan." },
+        includeInjection: { type: "boolean", default: false, description: "Same meaning as residoo_scan." },
         maxEntries: { type: "integer", minimum: 1, maximum: 200, default: 25, description: "Cap on new findings / re-exposures returned in full detail. Counts are always exact even when truncated." },
       },
       required: [],

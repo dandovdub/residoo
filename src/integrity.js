@@ -836,4 +836,9 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd(), projectMode 
   };
 }
 
-module.exports = { checkIntegrity };
+// scanZeroWidth is also reused by injection.js, applying the same
+// TrapDoor-sourced invisible-character classification (see its own
+// docstring above) to general transcript content, not just this file's
+// own fixed config-location list -- additive export, this module's own
+// behavior is unchanged.
+module.exports = { checkIntegrity, scanZeroWidth };

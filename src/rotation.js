@@ -1222,6 +1222,43 @@ const ROTATION_GUIDANCE = {
     ],
     revokeNote: "Low-confidence match: verify before rotating anything.",
   },
+
+  // ── INJECTION_PATTERNS (--include-injection; see injection.js) ─────────
+  // Framed like the PII entries above, not like a credential: there is no
+  // issuer, no console, nothing to rotate. The real action is investigating
+  // HOW this reached the transcript -- a fetched page, a file the agent
+  // read, a tool's own output -- since that's the actual attack surface,
+  // not the token/character itself.
+  chatml_special_token: {
+    label: "Special/role-token injection (ChatML or similar)",
+    consolePath: "No vendor console -- this is a structural signature in content, not a credential.",
+    steps: [
+      "Find which tool call or fetched source produced the line this was found in -- that's the actual entry point, not this file",
+      "If it came from external content (a web page, an API response, a file the agent read), treat that source as untrusted going forward and review what the agent did in the turns immediately after seeing it",
+      "If this is a false positive -- code or documentation that legitimately discusses these tokens by name (a tokenizer bug report, this project's own docs) -- no action needed",
+    ],
+    revokeNote: "High confidence structurally (these exact token sequences are rare in ordinary prose/code), but confidence in the MATCH is not the same as confidence an attack succeeded -- whether it actually altered the agent's behavior depends on the specific model/serving pipeline, which this check cannot see.",
+  },
+  zero_width_hidden_instruction: {
+    label: "Hidden instruction carried by invisible Unicode",
+    consolePath: "No vendor console -- this is a structural signature in content, not a credential.",
+    steps: [
+      "Inspect the source file in a hex viewer or an editor that reveals invisible characters -- never trust how it renders in a normal terminal, that's the whole point of this technique",
+      "Find which tool call or fetched source produced this line, the same way as the special-token rule above",
+      "This is the same technique named in the TrapDoor campaign (see integrity.js's own citation) -- if this pattern shows up in a fixed config location (CLAUDE.md, a hook script) rather than ordinary transcript content, `residoo scan`'s own integrity check (not this rule) is what already covers that case with campaign-specific detail",
+    ],
+    revokeNote: "The always-suspicious codepoint tier (not the context-dependent emoji-joiner tier) is what reaches this rule -- see integrity.js's scanZeroWidth for exactly which codepoints qualify and why.",
+  },
+  injection_override_phrase: {
+    label: "Instruction-override phrase (noisy rule)",
+    generic: true,
+    consolePath: "No vendor console -- this is a phrase match in content, not a credential.",
+    steps: [
+      "Read the surrounding context before treating this as a real attempt -- this exact phrase is also what a security-research conversation, a GitHub issue, or a prompt-engineering discussion about this technique looks like, and this rule cannot tell the difference",
+      "If it's a real attempt, find which tool call or fetched source it came from",
+    ],
+    revokeNote: "Low-confidence, phrase-based match: OWASP's own LLM01 guidance and independent practitioner writing both describe reliable phrase-based injection detection as unsolved, not something this rule claims to have done.",
+  },
 };
 Object.freeze(ROTATION_GUIDANCE);
 
