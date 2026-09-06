@@ -1767,6 +1767,74 @@ research pass.
 No scan.js/decode.js/patterns.js change; no benchmark reproduce needed.
 `npm test` (754 checks) and `npm run fuzz` both green.
 
+## residoo 0.21.0: shell/REPL history -- a real, competitor-named gap closed, found real secrets on the first run (added 2026-09-05)
+
+A direct answer to "how do we get better than the competition, not just
+better at reaching users": docs/comparison.md's own Medusa section already
+named a real, disclosed gap -- Medusa's `secrets scan` covers bash, zsh,
+fish, psql, mysql, and Python-REPL history; residoo didn't touch any of
+it. New source: [`src/sources/shell-history.js`](../src/sources/shell-history.js),
+covering all six plus the Node.js REPL, closing the gap and going one
+tool wider than the competitor that named it.
+
+Every path is verified against that tool's own primary documentation
+(fetched directly on 2026-09-05, not assumed by analogy to a sibling
+tool), with one real nuance the first draft of this got wrong before
+checking: zsh's own manual states plainly that if `HISTFILE` is unset,
+"the history is not saved" at all -- there is no shell-level default the
+way bash's `~/.bash_history` is one. `~/.zsh_history` is still checked,
+because it's the exact path zsh's own bundled `zsh-newuser-install`
+script offers a new user, and what Oh My Zsh's and Prezto's stock
+templates both set -- a real, near-universal convention, correctly
+labeled as a convention rather than a shell guarantee. The other five
+(`fish`, `psql`, `mysql`, Python, Node.js) each have a real documented
+default and, where the tool supports it, an environment-variable
+override (`$MYSQL_HISTFILE`, `$PYTHON_HISTORY` -- 3.13+, `$NODE_REPL_HISTORY`
+including its documented "empty/whitespace means explicitly disabled"
+semantics, `$XDG_DATA_HOME` for fish) all read fresh, never cached.
+
+Verification status split honestly, the same way agent-configs.js already
+splits by path rather than claiming one tier for a whole source:
+`~/.bash_history` and `~/.python_history` are REAL-INSTALL-VERIFIED --
+both exist on this project's own build machine with genuine, non-empty
+content, checked directly before this source was written. The other five
+paths are MULTI-SOURCE-CORROBORATED-BUT-UNVERIFIED: real, cited primary
+docs, but none of those five files exist on this machine to verify
+against real content.
+
+**This found real, previously-uncaught findings on the very first run
+against this project's own build machine**: 20 findings in
+`~/.bash_history` and `~/.python_history` that residoo could not see an
+hour earlier -- 15 JWT-shaped tokens and 5 Cloudflare API tokens,
+confirmed via `residoo scan --json`'s own `source: "shell-history"` field,
+counts only, no raw value ever printed to get that confirmation. Not a
+synthetic benchmark result: a live demonstration, on this exact machine,
+of the gap this release closes.
+
+Scope, stated plainly: this is the second source in the project (after
+agent-configs.js) that isn't literally "an AI agent's session history" --
+it's what a developer typed at a real interactive prompt, one hop away
+from what residoo already covers (the same credential, tested with curl
+or connected to directly, before it might have been pasted into an agent
+prompt a moment later). Included as a deliberate, disclosed scope
+decision, not scope creep -- see the source file's own header for the
+full reasoning.
+
+9 new tests, real end-to-end (`spawnSync` against the actual built CLI, a
+synthetic `$HOME`, `--json` output), covering: detection in each of five
+formats (bash plain text, Python REPL, a `$HISTFILE` override, a
+`$MYSQL_HISTFILE` override, fish's real YAML-ish shape via a
+`$XDG_DATA_HOME` override), a dangling symlink surfaced as unreadable
+rather than silently skipped, the Node.js REPL's disabled-semantics
+branch, and confirmation the source is entirely absent from
+`sourcesScanned` on a machine with none of the seven files -- there's no
+per-tool root directory the way `~/.cursor` gives agent-configs.js an
+installed-but-empty signal, so presence is the only signal available()
+has. `npm test` (764 checks) and `npm run fuzz` (2000 runs/property) both
+green. Total sources: 45 (was 44).
+
+No scan.js/decode.js/patterns.js change; no benchmark reproduce needed.
+
 ## Reproduce
 
 ```

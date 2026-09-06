@@ -251,10 +251,11 @@ prompt. There is no recovery if you lose it, so pick one you keep.
 
 ## Sources supported today
 
-44 sources, real-install-verified for Claude Code and its config family,
-multi-source-corroborated for the rest (Cursor, Codex CLI, Cline, Windsurf,
-Gemini CLI, Copilot, and 30+ more). Full list, what "corroborated" means,
-and how to add one: [docs/sources.md](docs/sources.md).
+45 sources, real-install-verified for Claude Code, its config family, and
+bash/Python-REPL shell history, multi-source-corroborated for the rest
+(Cursor, Codex CLI, Cline, Windsurf, Gemini CLI, Copilot, and 30+ more).
+Full list, what "corroborated" means, and how to add one:
+[docs/sources.md](docs/sources.md).
 
 ## License
 

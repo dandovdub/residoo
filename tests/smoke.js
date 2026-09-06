@@ -2235,6 +2235,127 @@ async function main() {
       !!pd && pd.summary.unreadableFiles.length === 0);
   }
 
+  // ── shell-history: real end-to-end detection across every covered format,
+  // including the two override environment variables and the XDG-aware fish
+  // path -- see src/sources/shell-history.js's own header for exactly what
+  // each path/override is verified against. Values are pattern-true fakes,
+  // never real credentials, matching this file's own SM0KETESTFAKEKEY style.
+  {
+    const { spawnSync } = require("child_process");
+    const shHome = path.join(tmp, "shellhist-home");
+    const shCwd = path.join(tmp, "shellhist-cwd");
+    fs.mkdirSync(shCwd, { recursive: true });
+    fs.mkdirSync(shHome, { recursive: true });
+
+    const awsFake = "AKIA" + "SHELLH1ST0RYFAKE"; // 16 chars after AKIA
+    const jwtFake = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dGhpc2lzYXNpZ25hdHVyZXBhcnQxMjM0";
+    const gitlabFake = "glpat-" + "SHELLHISTORYFAKETOK01";
+    const connStrFake = "postgres://shelluser:ShellHistFakePass1@dbhost.example.com:5432/mydb";
+    const githubFake = "ghp_" + "SHELLHISTORYFAKETOKEN01";
+
+    // bash: plain one-command-per-line, its own hardcoded default path.
+    fs.writeFileSync(path.join(shHome, ".bash_history"),
+      "cd ~/work\ncurl -H \"X-Key: " + awsFake + "\" https://api.example.com\nls -la\n");
+
+    // Python REPL: plain readline history, one statement per line.
+    fs.writeFileSync(path.join(shHome, ".python_history"),
+      "import requests\ntoken = \"" + jwtFake + "\"\nprint(token)\n");
+
+    // $HISTFILE override, at a path distinct from either default -- proves
+    // the "checked once, generically, for whichever shell set it" behavior.
+    const customHistfile = path.join(shHome, "custom-shell-history.txt");
+    fs.writeFileSync(customHistfile, "psql \"" + connStrFake + "\"\n");
+
+    // $MYSQL_HISTFILE override, at a non-default path.
+    const customMysqlHist = path.join(shHome, "custom-mysql-history");
+    fs.writeFileSync(customMysqlHist, "-- connecting\nSET PASSWORD = '" + gitlabFake + "';\n");
+
+    // fish: real YAML-ish shape (`- cmd: ...` / `  when: ...`), under a
+    // custom $XDG_DATA_HOME to prove the override, not just the default.
+    const xdgDataHome = path.join(shHome, "xdg-data");
+    fs.mkdirSync(path.join(xdgDataHome, "fish"), { recursive: true });
+    fs.writeFileSync(path.join(xdgDataHome, "fish", "fish_history"),
+      "- cmd: curl -H \"Authorization: Bearer " + githubFake + "\" https://api.example.com\n  when: 1699999999\n");
+
+    const shScan = spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--json"], {
+        cwd: shCwd,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          HOME: shHome, USERPROFILE: shHome,
+          HISTFILE: customHistfile,
+          MYSQL_HISTFILE: customMysqlHist,
+          XDG_DATA_HOME: xdgDataHome,
+          XDG_CONFIG_HOME: path.join(shHome, ".config"),
+          GEMINI_CLI_HOME: shHome, CODEX_HOME: path.join(shHome, ".codex"),
+        },
+      });
+    let sh = null;
+    try { sh = JSON.parse(shScan.stdout); } catch { /* checked below */ }
+    check("shell-history e2e emits valid JSON", sh !== null);
+    check("shell-history is listed among sources scanned",
+      !!sh && sh.summary.sourcesScanned.includes("shell-history"));
+    check("shell-history finds the AWS key in .bash_history",
+      !!sh && sh.findings.some((f) => f.rule === "aws_access_key_id" && f.source === "shell-history" && f.file === ".bash_history"));
+    check("shell-history finds the JWT in .python_history",
+      !!sh && sh.findings.some((f) => f.rule === "jwt" && f.source === "shell-history" && f.file === ".python_history"));
+    check("shell-history finds the connection string via the $HISTFILE override",
+      !!sh && sh.findings.some((f) => f.rule === "connection_string_with_password" && f.source === "shell-history" &&
+        f.file === path.basename(customHistfile)));
+    check("shell-history finds the token via the $MYSQL_HISTFILE override",
+      !!sh && sh.findings.some((f) => f.rule === "gitlab_pat" && f.source === "shell-history" &&
+        f.file === path.basename(customMysqlHist)));
+    check("shell-history finds the GitHub token in fish_history via $XDG_DATA_HOME",
+      !!sh && sh.findings.some((f) => f.rule === "github_pat" && f.source === "shell-history" && f.file === "fish_history"));
+    check("shell-history output never contains any raw planted value",
+      !shScan.stdout.includes(awsFake) && !shScan.stdout.includes(jwtFake) &&
+      !shScan.stdout.includes(gitlabFake) && !shScan.stdout.includes(connStrFake) &&
+      !shScan.stdout.includes(githubFake));
+
+    // A dangling symlink named exactly like a known candidate must be
+    // surfaced as unreadable, never silently skipped (CONTRIBUTING.md rule
+    // 5) -- separate fixture so it doesn't interfere with the findings above.
+    const brokenHome = path.join(tmp, "shellhist-broken-home");
+    const brokenCwd = path.join(tmp, "shellhist-broken-cwd");
+    fs.mkdirSync(brokenCwd, { recursive: true });
+    fs.mkdirSync(brokenHome, { recursive: true });
+    fs.symlinkSync(path.join(brokenHome, "does-not-exist"), path.join(brokenHome, ".bash_history"));
+    const brokenScan = spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--json"], {
+        cwd: brokenCwd,
+        encoding: "utf-8",
+        env: { ...process.env, HOME: brokenHome, USERPROFILE: brokenHome, HISTFILE: "", MYSQL_HISTFILE: "" },
+      });
+    let bd = null;
+    try { bd = JSON.parse(brokenScan.stdout); } catch { /* checked below */ }
+    check("a dangling .bash_history symlink is reported unreadable, not silently skipped",
+      !!bd && bd.summary.unreadableFiles.some((u) => u.file === ".bash_history"));
+
+    // A machine with none of the seven candidates present shouldn't list
+    // this source at all -- there's no per-tool root directory the way
+    // agent-configs.js has, so presence is the only signal available().
+    const emptyHome = path.join(tmp, "shellhist-empty-home");
+    const emptyCwd = path.join(tmp, "shellhist-empty-cwd");
+    fs.mkdirSync(emptyCwd, { recursive: true });
+    fs.mkdirSync(emptyHome, { recursive: true });
+    const emptyScan = spawnSync(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "scan", "--json"], {
+        cwd: emptyCwd,
+        encoding: "utf-8",
+        // NODE_REPL_HISTORY set to whitespace: Node's own documented
+        // "explicitly disabled" value -- must not be treated as "use the
+        // default path" (there is no history file to find there either,
+        // but this proves the disabled-semantics branch doesn't crash or
+        // resolve to a bogus path).
+        env: { ...process.env, HOME: emptyHome, USERPROFILE: emptyHome, HISTFILE: "", MYSQL_HISTFILE: "", NODE_REPL_HISTORY: "  " },
+      });
+    let ed = null;
+    try { ed = JSON.parse(emptyScan.stdout); } catch { /* checked below */ }
+    check("shell-history is absent from sources scanned when no candidate file exists",
+      !!ed && !ed.summary.sourcesScanned.includes("shell-history"));
+  }
+
   // ── integrity: campaign-signature detection on a synthetic HOME/CWD ───────
   // Fixtures reproduce the published 2026 plant shapes (SessionStart hook
   // running a dot-directory script, zero-width Unicode in CLAUDE.md,

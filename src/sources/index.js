@@ -140,6 +140,13 @@ const atlassianRovoDev = require("./atlassian-rovo-dev");
 // cache/offline copy of thread content is documented anywhere found — the
 // same cloud-only reasoning as Augment Code/CodeGPT above, not missed.
 
+// Not a transcript store either — interactive shell/REPL history (bash,
+// zsh, fish, psql, mysql, Python, Node.js). See shell-history.js's own
+// header for why this is in scope despite not being literally "an AI
+// agent's session history," and for exactly which paths are
+// real-install-verified versus documented-but-unverified on this machine.
+const shellHistory = require("./shell-history");
+
 const ALL_SOURCES = [
   claudeCode,
   agentConfigs,
@@ -185,6 +192,7 @@ const ALL_SOURCES = [
   kimiCode,
   fx,
   atlassianRovoDev,
+  shellHistory,
 ];
 
 function availableSources() {

@@ -2,14 +2,18 @@
 
 ## Sources supported today
 
-44 sources: 43 transcript stores plus the agent-config source, in two
-honestly-distinct tiers. `--project` adds one more, opt-in source that
-scans a checkout instead of the machine.
+45 sources: 43 transcript stores plus two non-transcript sources (agent
+configs, and shell/REPL history), in two honestly-distinct tiers.
+`--project` adds one more, opt-in source that scans a checkout instead of
+the machine.
 
 **Real-install-verified**: run against an actual, populated installation
 and confirmed to find real content: **Claude Code**
-(`~/.claude/projects/**/*.jsonl`) and **agent config files** for its
-Claude-family paths.
+(`~/.claude/projects/**/*.jsonl`), **agent config files** for its
+Claude-family paths, and **shell/REPL history** for its bash and
+Python-REPL paths (`~/.bash_history`, `~/.python_history` — both present
+with genuine content on this project's own build machine; see that
+source's own header for which of its other five paths are not).
 
 **Multi-source-corroborated-but-unverified**: backed by 2+ independent,
 credible sources but not checked against a real install on any machine this
@@ -22,7 +26,9 @@ Goose, GitHub Copilot Chat/CLI, `llm`, Codebuff, Mentat, Hermes, OpenClaw,
 Warp, Crush, Grok Build, Kiro CLI/IDE, Zed, JetBrains Junie/AI Assistant,
 Sourcegraph Cody, Amazon Q Developer, Qodo Gen, OpenHands, Factory Droid
 CLI, Devin CLI, Pi, Google Antigravity, Kimi Code, Atlassian Rovo Dev CLI,
-and `fx`.
+and `fx` — plus shell/REPL history's zsh, fish, psql, mysql, and Node.js
+REPL paths (same source as above; only the bash/Python-REPL paths are
+verified, per the tier note above).
 
 A few are SQLite-backed (Cursor, Crush, Cody, Devin CLI, Hermes, Kiro CLI,
 `llm`, Trae, Void, Warp, Zed) and need Node.js 22.5+ for the built-in

@@ -12,7 +12,7 @@ for anyone deciding between residoo and an adjacent tool.
 | Verification | opt-in, 35 vendors | none | on **by default**, 700+ vendors | none |
 | Remediation | `--seal` (encrypted copy) | none | none | in-place redaction |
 | Runtime deps | 0 (Node only) | 0 (Go binary) | 0 (Go binary) | Python 3.11+, 3 pip packages |
-| Agent sources covered | 44 | n/a | n/a | 31 |
+| Agent sources covered | 45 | n/a | n/a | 31 |
 | Continuous mode | `residoo watch` | none | none | none |
 
 The rows above (rule counts, deps, sources) are documented facts, not
@@ -76,7 +76,7 @@ Two newer categories are adjacent but solve a different problem:
 
 Broader on detection rules (209 to residoo's smaller, deliberately
 high-confidence set) and it does in-place redaction, where residoo's
-`--seal` makes an encrypted copy instead. residoo has more agent sources (44
+`--seal` makes an encrypted copy instead. residoo has more agent sources (45
 to 31), and both now ship SARIF output and a pre-commit hook.
 
 The tradeoffs are worth naming precisely:
@@ -113,8 +113,10 @@ scanner, a `--trace-rules` diagnostics mode) -- an actively developed
 project, not a weekend script. Its `medusa secrets scan`/`purge`
 sub-feature shipped in release 2026.5.8 (2026-05-20) and covers the same
 target residoo does (Claude Code, Cursor, Copilot, Zed, Gemini CLI, plus
-shell history residoo does not touch: bash/zsh/fish, psql, mysql, python
-REPL), across 21 issuer types with interactive `[y/n/s/a/q]` redaction.
+shell history: bash/zsh/fish, psql, mysql, python REPL — a gap residoo has
+since closed too, see [`src/sources/shell-history.js`](../src/sources/shell-history.js)
+and [docs/sources.md](sources.md)), across 21 issuer types with interactive
+`[y/n/s/a/q]` redaction.
 
 It's one piece of a much bigger, differently-shaped tool: alongside
 secrets, Medusa also scans for prompt injection, MCP vulnerabilities, RAG
@@ -228,7 +230,7 @@ Cursor's schema changes between versions -- residoo's own Cursor source
 hits the same reality, and reports it as a `"failed"` read rather than
 silently returning zero findings). Four
 tools total (ChatGPT, Claude web exports, Cursor, Kimi K3) against
-residoo's 44 sources, needs Python 3.9+ and a pip install (residoo needs
+residoo's 45 sources, needs Python 3.9+ and a pip install (residoo needs
 only Node), no continuous/watch mode, and no live vendor verification.
 
 One real, worth-naming safety difference, the opposite direction from the

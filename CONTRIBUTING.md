@@ -48,7 +48,12 @@ implementation and its comments explain the two contracts `scan.js` depends on:
 
 Then register it in `src/sources/index.js`.
 
-A source does not have to be a transcript store. `src/sources/agent-configs.js`
+A source does not have to be a transcript store, or even AI-agent-related at
+all: `src/sources/shell-history.js` scans interactive shell/REPL history
+(bash, zsh, fish, psql, mysql, Python, Node.js) for the same class of
+plaintext secret a developer might otherwise paste into an agent prompt one
+step later — see that file's own header for the full scope reasoning on
+why it's in bounds. `src/sources/agent-configs.js`
 scans agent **config** files (settings, MCP server configs, memory files)
 through the identical `{ id, label, available, files, readLines }` contract;
 the engine matches raw text lines either way, so JSON/TOML/Markdown configs
@@ -79,11 +84,13 @@ builds a configured instance via its `withRoot(root)` factory instead. Read
 its header before extending it; the inclusion and exclusion lists are
 evidence-cited line by line.
 
-**43 sources are supported as of this writing** (42 transcript stores plus
-agent-configs, not counting the opt-in project source above). See `src/sources/index.js` for the full registry and its
+**45 sources are supported as of this writing** (43 transcript stores plus
+agent-configs and shell-history, not counting the opt-in project source
+above). See `src/sources/index.js` for the full registry and its
 trust-tier note, and README.md's "Sources supported today" for the same list
-from a user's perspective. Only Claude Code and agent-configs' Claude-family
-paths are real-install-verified; every other source, Cursor included, is
+from a user's perspective. Only Claude Code, agent-configs' Claude-family
+paths, and shell-history's bash/Python-REPL paths are real-install-verified;
+every other source, Cursor included, is
 **multi-source-corroborated-but-unverified**: its path/schema is backed by
 2+ independent, credible sources (official docs, the tool's own shipped
 source, a real community tool reading the same files, or a real user's

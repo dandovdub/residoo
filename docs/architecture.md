@@ -44,7 +44,7 @@ counted clean.
                     YOUR MACHINE · no network calls
   ┌───────────────────────────────────────────────────────────────┐
   │                                                               │
-  │   44 transcript sources           agent config files          │
+  │   43 transcript sources           configs & shell history     │
   │   ~/.claude, Cursor, Codex…       settings · MCP · memory     │
   │   (--project <dir>: a repo checkout instead of the machine)   │
   │            │                              │                   │
