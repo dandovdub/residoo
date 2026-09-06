@@ -2042,6 +2042,25 @@ No scan.js/decode.js/patterns.js change; no benchmark reproduce needed
 (this is a new integrity-check category, not a change to the 84
 credential-detection rules the benchmark measures).
 
+## residoo 0.23.1: one more real MCP CVE, found while broadening coverage the way cve.js's own header invites (added 2026-09-06)
+
+`src/cve.js`'s own header states the table is meant to grow through
+"the same API query, cited the same way -- never by guessing." Queried
+GitHub's Security Advisory API for a further batch of popular MCP server
+packages (official Anthropic reference servers, browser/search/database
+integrations) to see what else belonged. Most came back clean; one real
+hit: Microsoft's own `@playwright/mcp` (browser-automation MCP server,
+independently confirmed on the npm registry, current version far past
+the fix) has CVE-2025-9611, a DNS rebinding attack granting an attacker
+access to every tool the server exposes, fixed in 0.0.40. Added with the
+same sourcing discipline as every other entry -- table now ~27 entries
+across 11 packages.
+
+1 new test (the new entry's pre-fix/patched boundary). `npm test` (803
+checks) and `npm run fuzz` (2000 runs/property) both green.
+
+No scan.js/decode.js/patterns.js change; no benchmark reproduce needed.
+
 ## Reproduce
 
 ```

@@ -23,7 +23,7 @@
  * the same "never a false all-clear" concern CONTRIBUTING.md states for
  * source paths, applied to this table instead.
  *
- * DELIBERATELY SMALL, on purpose: this is ~24 entries across 10 packages,
+ * DELIBERATELY SMALL, on purpose: this is ~27 entries across 11 packages,
  * not a claim of exhaustive coverage the way Medusa's own "~200 CVEs" is.
  * Every single entry here is individually traceable to a specific GHSA/
  * CVE id and a real advisory -- the same "84 high-confidence rules beat a
@@ -144,6 +144,12 @@ const CVE_DATABASE = [
     id: "CVE-2025-53109", ecosystem: "npm", package: "@modelcontextprotocol/server-filesystem", severity: "high",
     ranges: [{ maxInclusive: "0.6.2" }, { min: "2025.1.14", maxExclusive: "2025.7.1" }],
     summary: "Path validation bypass via prefix matching and symlink handling.",
+    source: "GHSA (fetched via api.github.com/advisories)",
+  },
+  {
+    id: "CVE-2025-9611", ecosystem: "npm", package: "@playwright/mcp", severity: "high",
+    ranges: [{ maxExclusive: "0.0.40" }],
+    summary: "Vulnerable to a DNS rebinding attack, allowing an attacker access to all server tools.",
     source: "GHSA (fetched via api.github.com/advisories)",
   },
 

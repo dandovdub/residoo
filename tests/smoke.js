@@ -2560,6 +2560,9 @@ async function main() {
       CVE_DATABASE.every((e) => e.id && e.ecosystem && e.package && e.severity && Array.isArray(e.ranges) && e.ranges.length > 0 && e.summary));
     check("cve.js: a known-vulnerable version matches",
       checkVersion("npm", "mcp-remote", "0.0.9").matches.some((m) => m.id === "CVE-2025-6514"));
+    check("cve.js: @playwright/mcp's DNS-rebinding CVE matches a pre-fix version and not the patched one",
+      checkVersion("npm", "@playwright/mcp", "0.0.30").matches.some((m) => m.id === "CVE-2025-9611") &&
+      !checkVersion("npm", "@playwright/mcp", "0.0.40").matches.some((m) => m.id === "CVE-2025-9611"));
     check("cve.js: the exact patched boundary version does not match (maxExclusive is exclusive)",
       !checkVersion("npm", "mcp-remote", "0.1.16").matches.some((m) => m.id === "CVE-2025-6514"));
     check("cve.js: a version just inside the vulnerable range still matches",

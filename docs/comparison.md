@@ -152,11 +152,11 @@ project-level `.mcp.json`/`.vs/mcp.json`) for two real risk classes --
 a server pinned to a known-vulnerable package version, and a remote
 server configured over plain HTTP instead of HTTPS -- and checks pinned
 versions against [`src/cve.js`](../src/cve.js), a hand-curated table of
-~26 real CVEs across 10 MCP-ecosystem npm/PyPI packages, every single
+~27 real CVEs across 11 MCP-ecosystem npm/PyPI packages, every single
 entry fetched directly from GitHub's own Security Advisory API
-(api.github.com/advisories) on 2026-09-05, not guessed or copied from a
-secondary summary. Deliberately not a claim of parity with Medusa's own
-"~200 CVEs, 400+ MCP patterns": this is ~26 individually-traceable
+(api.github.com/advisories) on 2026-09-05/06, not guessed or copied from
+a secondary summary. Deliberately not a claim of parity with Medusa's own
+"~200 CVEs, 400+ MCP patterns": this is ~27 individually-traceable
 entries, the same "high-confidence over high-count" trade-off already
 proven on this project's own detection benchmark (see
 [`bench/RESULTS.md`](../bench/RESULTS.md)), applied to CVE data instead
