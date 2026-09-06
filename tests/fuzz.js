@@ -28,6 +28,7 @@ const { fingerprintFinding } = require("../src/rotation");
 const { extractImageBlocks } = require("../src/ocr");
 const { luhnValid, ibanValid, bip39ChecksumValid, findBip39Phrase } = require("../src/pii");
 const { notifyDesktop } = require("../src/notify");
+const { checkVersion, parseVersion } = require("../src/cve");
 
 const ALL_RULES = PATTERNS.concat(NOISY_PATTERNS);
 const NUM_RUNS = process.env.FUZZ_RUNS ? Number(process.env.FUZZ_RUNS) : 2000;
@@ -223,6 +224,24 @@ property("bip39ChecksumValid never throws on a non-array input",
 property("findBip39Phrase never throws on any string, any length or content",
   fc.string({ maxLength: 500 }),
   (s) => { findBip39Phrase(s); return true; });
+
+// cve.js: package name and version string both come from an MCP config
+// file's `args` array -- attacker-shapeable in the same sense as anything
+// else in this file (a poisoned or malicious MCP server definition).
+property("parseVersion never throws on any string, any length or content",
+  fc.string({ maxLength: 200 }),
+  (s) => { parseVersion(s); return true; });
+
+property("checkVersion never throws on any ecosystem/package/version string, including non-string types",
+  fc.tuple(fc.anything(), fc.anything(), fc.anything()),
+  ([eco, pkg, ver]) => { checkVersion(eco, pkg, ver); return true; });
+
+property("checkVersion always returns the documented {checkable, matches} shape",
+  fc.tuple(fc.string({ maxLength: 30 }), fc.string({ maxLength: 80 }), fc.string({ maxLength: 40 })),
+  ([eco, pkg, ver]) => {
+    const r = checkVersion(eco, pkg, ver);
+    return typeof r.checkable === "boolean" && Array.isArray(r.matches);
+  });
 
 // notifyDesktop shells out to a real OS binary (osascript/notify-send) --
 // child_process.spawn is monkey-patched to a no-op for the run so this

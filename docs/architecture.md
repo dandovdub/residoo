@@ -33,6 +33,13 @@ and zero-width-Unicode prompt injection. Every scan now also runs
   grant on Windows), home-level only. Content is never read; a live
   credential leaking via a widened file mode or ACL (a WSL mount, a naive
   backup restore) is the thing being caught, not the token itself.
+- Every MCP client config's `mcpServers` block (the same standard shape
+  Claude Code, Claude Desktop, Cursor, and Visual Studio's own docs
+  converge on) is parsed for two risk classes: a server pinned to a
+  version matching a known CVE (see [`src/cve.js`](../src/cve.js)'s
+  hand-curated, GitHub-Advisory-sourced table), and a remote server
+  configured over plain HTTP instead of HTTPS. A launch command that
+  fetches a script and pipes it directly into a shell is flagged too.
 
 Read-only like everything else. `--no-integrity` skips it entirely. A
 config that can't be read is reported as unverified, never silently

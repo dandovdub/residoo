@@ -1937,6 +1937,111 @@ benchmark reproduce needed (injection detection is a new, separate
 category, not a change to the 84 credential-detection rules the
 benchmark measures).
 
+## residoo 0.23.0: MCP vulnerability + CVE checks, the second and third "be better than Medusa" areas -- found real GitHub-Advisory-sourced CVEs, checked against real config shapes (added 2026-09-06)
+
+Continuation of the same standing instruction as 0.22.0. This release
+closes the remaining two of the three named areas together, because they
+turned out to share one real mechanism: checking a version PINNED in an
+MCP server's launch command against a table of known CVEs.
+
+**The data-quality decision that mattered most**: an earlier draft built
+the CVE table from a dedicated MCP-CVE tracking site
+(vulnerablemcp.info), summarized via a single fetch. Before shipping,
+every package name was re-verified live against the real npm/PyPI
+registries, and -- more importantly -- every version range was re-derived
+from **GitHub's own Security Advisory REST API**
+(`api.github.com/advisories?ecosystem=<npm|pip>&affects=<package>`), a
+primary, GHSA-reviewed source with each CVE's own exact
+`vulnerable_version_range` and `first_patched_version` fields, queried
+directly with `curl`, no auth required. This surfaced real gaps in the
+first draft: `mcp-server-kubernetes` alone has 5 distinct CVEs across its
+version history, not the 1 the aggregator's summary had mentioned. The
+final table -- [`src/cve.js`](../src/cve.js) -- is ~26 entries across 10
+npm/PyPI packages, every single one traceable to its own CVE/GHSA id,
+not a re-derived-from-memory estimate. Deliberately not a claim of
+parity with Medusa's own "~200 CVEs": the same "84 high-confidence rules
+beat a higher rule count" trade-off this project's own benchmark already
+proved for secrets, applied to CVE data instead.
+
+**Version comparison**: a minimal, hand-written major.minor.patch
+numeric comparator, not a full semver-range grammar -- sufficient for
+every range in the table, including
+`@modelcontextprotocol/server-filesystem`'s date-based versioning scheme
+(`2025.1.14`, `2025.7.1`), verified directly that component-by-component
+comparison orders those correctly the same way it would an ordinary
+semver triple. An unparseable version string is reported as "cannot
+determine," never silently treated as safe.
+
+**MCP server configuration risk checks**, new section 6 in
+[`src/integrity.js`](../src/integrity.js), on by default with every
+`residoo scan` (the same `--no-integrity`-gated posture every other
+integrity check already has -- no new flag, since these are deterministic,
+low-noise checks, not a new opt-in risk category the way `--include-pii`/
+`--include-injection` are). Parses the `mcpServers` block every real MCP
+client config this project has verified converges on (Claude Code,
+Claude Desktop, Cursor, Kiro, Visual Studio, plus project-level
+`.mcp.json`/`.vs/mcp.json`) and checks three things:
+
+1. A server's launch command pinning a known-vulnerable
+   `package@version` (npm) or `package==version` (pip) -- against
+   `cve.js`. Deliberately does NOT treat an UNPINNED invocation (`npx
+   mcp-remote` with no version) as a finding: that's a real, debatable
+   trade-off (always getting the latest patched release vs. exposure to
+   a compromised "latest" publish), not a clear vulnerability the way a
+   specific known-bad pinned version is.
+2. A remote (non-loopback) server configured over plain HTTP instead of
+   HTTPS -- MCP protocol traffic, including tool definitions, crossing a
+   real network in cleartext. Loopback URLs (ordinary local dev) are
+   excluded.
+3. A launch command that fetches a script and pipes it directly into a
+   shell (`curl ... | bash`) -- a well-known, independently-flagged
+   supply-chain red flag, checked against the whole command+args joined
+   since the risky text usually lives in `args`, not `command`.
+
+Project mode correctly reuses this function's own existing contract
+(`home` aliased to the project root): verified directly that a
+project-mode scan finds the checkout's own `.mcp.json` vulnerability
+without ever pulling in the real invoking machine's home-level MCP
+configs into a verdict that claims to be about the checkout only.
+
+**What this deliberately does not cover**, named rather than silently
+gapped: source-code-level checks (Medusa's confused-deputy/data-
+exfiltration/argument-injection rules audit an MCP SERVER's own handler
+code, which residoo never reads -- it only reads client-side config
+referencing that server) and tool-description poisoning (the same live-
+protocol-connection limitation injection.js's own header already
+discloses). Also deliberately NOT extended to general `--project`
+package.json/requirements.txt dependency scanning: that's mature,
+already-crowded territory (npm audit, pip-audit, Dependabot, Snyk all do
+it, almost certainly already available to anyone who'd run residoo) where
+a residoo clone would add nothing; the MCP-config-specific check above is
+the genuinely uncovered gap, so that's where this stayed scoped.
+
+38 new tests (13 MCP-config-audit fixtures covering every check plus
+project-mode isolation and unparseable-config handling, 12 pure cve.js
+logic tests, 3 new fuzz properties for `parseVersion`/`checkVersion`
+since both parse attacker-influenced MCP config content). `npm test`
+(802 checks) green throughout. Live-verified end to end against a real
+fixture via the actual CLI binary, both JSON and human-readable output,
+before writing any automated test.
+
+**The fuzz suite earned its keep again**: the new `checkVersion` property
+failed on its first real run -- `checkVersion([], [], {toString: ""})`
+threw `TypeError: Cannot convert object to primitive value`.
+`parseVersion`'s `String(v)` coercion assumed every input could be
+stringified; an object whose own `toString` property is present but not
+a function (a real shape fast-check generated, not a hypothetical one)
+fails JavaScript's ToPrimitive algorithm before the version regex ever
+runs. Since `v` here can be anything an attacker-controlled MCP config's
+`args` array contains, this needed to degrade to "unparseable," not
+throw -- fixed by wrapping the coercion in its own try/catch. Caught and
+fixed before shipping, the exact reason this project runs `npm run fuzz`
+as part of every release, not just `npm test`.
+
+No scan.js/decode.js/patterns.js change; no benchmark reproduce needed
+(this is a new integrity-check category, not a change to the 84
+credential-detection rules the benchmark measures).
+
 ## Reproduce
 
 ```

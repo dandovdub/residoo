@@ -144,10 +144,30 @@ transcript, so `--include-injection` looks for evidence an injection
 *actually reached* a live agent (a special/role-token sequence or a
 hidden-Unicode instruction sitting in a fetched page or a tool's own
 output), not a hypothetical vulnerability in code residoo never reads.
-MCP vulnerability scanning and CVE checking remain open -- Medusa's own
-docs name specific checks in both (MCP tool-poisoning/confused-deputy
-patterns, a curated CVE table for AI/ML-ecosystem packages) that residoo
-does not yet have an equivalent of.
+
+The other two areas are also now, narrowly, residoo's: every `residoo
+scan` (unless `--no-integrity`) parses every MCP client config it finds
+(`~/.claude.json`, Claude Desktop, Cursor, Kiro, Visual Studio, and any
+project-level `.mcp.json`/`.vs/mcp.json`) for two real risk classes --
+a server pinned to a known-vulnerable package version, and a remote
+server configured over plain HTTP instead of HTTPS -- and checks pinned
+versions against [`src/cve.js`](../src/cve.js), a hand-curated table of
+~26 real CVEs across 10 MCP-ecosystem npm/PyPI packages, every single
+entry fetched directly from GitHub's own Security Advisory API
+(api.github.com/advisories) on 2026-09-05, not guessed or copied from a
+secondary summary. Deliberately not a claim of parity with Medusa's own
+"~200 CVEs, 400+ MCP patterns": this is ~26 individually-traceable
+entries, the same "high-confidence over high-count" trade-off already
+proven on this project's own detection benchmark (see
+[`bench/RESULTS.md`](../bench/RESULTS.md)), applied to CVE data instead
+of secret patterns. What residoo's version of MCP-vulnerability scanning
+does NOT cover, disclosed rather than glossed over: source-code-level
+checks (Medusa's confused-deputy/data-exfiltration/argument-injection
+rules audit an MCP SERVER's own handler code, which residoo never reads)
+and tool-description poisoning (see [Injection](features.md#injection-prompt-injection-signatures-in-transcript-content)'s
+own disclosure of the same limitation) -- both would need either reading
+arbitrary third-party server source or a live MCP protocol connection,
+neither of which this project has built.
 
 Two things worth naming precisely, in both directions:
 

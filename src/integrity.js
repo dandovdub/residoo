@@ -10,6 +10,7 @@ const os = require("os");
 // reference at import time and never see a later patch.
 const cp = require("child_process");
 const { PATTERNS, redact } = require("./patterns");
+const { checkVersion } = require("./cve");
 
 /**
  * Integrity checks for agent config directories.
@@ -384,6 +385,100 @@ function extractHooks(parsed) {
     }
   }
   return { hooks, unrecognized, hadHooksKey: true, truncated, sawLeaf };
+}
+
+// ── MCP server configuration risk checks ────────────────────────────────
+//
+// Distinct from agent-configs.js (which scans these same files' raw TEXT
+// for leaked secrets) and from injection.js (which scans transcript
+// CONTENT for injection payloads): this parses the STRUCTURED
+// `mcpServers` object every MCP client config converges on
+// (`{"mcpServers": {"<name>": {"command", "args", "env", "url"}}}` --
+// Claude Code, Claude Desktop, Cursor, and Visual Studio's own docs all
+// document this identical shape, already cited in agent-configs.js's own
+// header) and checks it for two named, real risk classes:
+//
+//   1. A known-vulnerable version of a specific MCP-ecosystem package
+//      pinned in the server's launch command (see cve.js).
+//   2. A remote (non-loopback) server configured over plain HTTP instead
+//      of HTTPS -- MCP protocol traffic, including tool definitions,
+//      crossing a real network in cleartext.
+//
+// NOT checked, disclosed rather than silently gapped (see injection.js's
+// own header for the fuller version of this point): a malicious server
+// changing a TOOL'S OWN DESCRIPTION after approval ("tool poisoning") --
+// a tool's description is protocol data returned by a live server at
+// request time, never present in a static config file, so there is
+// nothing here for a file-scanner to check it against.
+
+/**
+ * Extract the `mcpServers` object from a parsed config file. Every real
+ * MCP client this project has verified (Claude Code, Claude Desktop,
+ * Cursor, Visual Studio) uses this identical top-level shape. Anything
+ * else (the key absent, present but not an object) yields an empty
+ * object -- a config with no MCP servers configured is not an error.
+ */
+function extractMcpServers(parsed) {
+  if (!parsed || typeof parsed !== "object") return {};
+  const servers = parsed.mcpServers;
+  if (!servers || typeof servers !== "object" || Array.isArray(servers)) return {};
+  return servers;
+}
+
+// npm: optional @scope/, then a name, a literal @, then a version
+// starting with a digit. pip: a name, a literal ==, then a version
+// starting with a digit. Both anchored full-string (^...$) -- matched
+// against ONE argv element at a time, never a substring of a longer
+// string that happens to contain a coincidental match.
+const NPM_PKG_VERSION_RE = /^(@[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+|[a-zA-Z0-9._-]+)@(\d[\w.-]*)$/;
+const PIP_PKG_VERSION_RE = /^([a-zA-Z0-9._-]+)==(\d[\w.-]*)$/;
+
+/**
+ * Scan one MCP server's `args` array for a `package@version` (npm) or
+ * `package==version` (pip) argv element -- the documented invocation
+ * shape for `npx <pkg>@<version>` / `uvx <pkg>==<version>` / `pip install
+ * <pkg>==<version>`. An unpinned invocation (`npx mcp-remote` with no
+ * `@version`) yields nothing here on purpose: there's no version to
+ * check, and this deliberately does NOT treat "unpinned" itself as a
+ * finding -- that's a real, genuinely debatable trade-off (always
+ * getting the latest PATCHED release vs. exposure to a compromised
+ * "latest" publish), not a clear vulnerability the way a specific
+ * known-bad pinned version is.
+ */
+function extractPackageVersions(args) {
+  if (!Array.isArray(args)) return [];
+  const found = [];
+  for (const a of args) {
+    if (typeof a !== "string") continue;
+    const npm = NPM_PKG_VERSION_RE.exec(a);
+    if (npm) { found.push({ ecosystem: "npm", package: npm[1], version: npm[2] }); continue; }
+    const pip = PIP_PKG_VERSION_RE.exec(a);
+    if (pip) found.push({ ecosystem: "pip", package: pip[1], version: pip[2] });
+  }
+  return found;
+}
+
+// A well-known, widely-flagged supply-chain red flag: an installer script
+// fetched and piped directly into a shell, never saved or reviewed first.
+// Checked against the whole command+args joined, not `command` alone,
+// since the realistic shape is `command: "sh", args: ["-c", "curl ... |
+// bash"]` -- the risky text lives in `args`, not `command`.
+const CURL_PIPE_SHELL_RE = /\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/i;
+
+/**
+ * True for a URL-transport MCP server (`url` field present) using plain
+ * HTTP to a non-loopback host. A loopback URL (localhost/127.0.0.1/::1)
+ * is excluded -- an ordinary local-dev MCP server, not the actual risk
+ * this names: MCP protocol traffic, including tool definitions, crossing
+ * a real network where it can be observed or altered in transit.
+ */
+function isInsecureRemoteUrl(url) {
+  if (typeof url !== "string") return false;
+  let parsed;
+  try { parsed = new URL(url); } catch { return false; }
+  if (parsed.protocol !== "http:") return false;
+  const host = parsed.hostname;
+  return host !== "localhost" && host !== "127.0.0.1" && host !== "::1" && host !== "[::1]";
 }
 
 // ── the checker ───────────────────────────────────────────────────────────
@@ -823,6 +918,66 @@ function checkIntegrity({ home = os.homedir(), cwd = process.cwd(), projectMode 
         const shown = display(file);
         add("warn", "insecure-credential-permissions", file,
           `${note}; current mode ${octal} grants group and/or other accounts on this machine access to a live credential. Fix: chmod 600 "${shown}"`);
+      }
+    }
+  }
+
+  // ---- 6. MCP server configuration risks ---------------------------------
+  // Home/machine-level configs (none of these are ever project-scoped by
+  // any vendor's own design, the same reasoning section 5 states) plus
+  // the two genuinely project-scoped MCP config locations, which use `cwd`
+  // unconditionally -- `cwd` already equals the project root in project
+  // mode (see this function's own docstring), so no separate branch is
+  // needed for them.
+  const mcpConfigFiles = [];
+  if (!projectMode) {
+    mcpConfigFiles.push(path.join(home, ".claude.json"));
+    const desktopConfig =
+      process.platform === "darwin" ? path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json") :
+      process.platform === "win32" ? path.join(process.env.APPDATA || path.join(home, "AppData", "Roaming"), "Claude", "claude_desktop_config.json") :
+      null; // Linux: no official build, unofficial ports disagree -- see agent-configs.js's own header
+    if (desktopConfig) mcpConfigFiles.push(desktopConfig);
+    mcpConfigFiles.push(path.join(home, ".cursor", "mcp.json"));
+    mcpConfigFiles.push(path.join(home, ".kiro", "settings", "mcp.json"));
+    mcpConfigFiles.push(path.join(home, ".mcp.json"));
+  }
+  mcpConfigFiles.push(path.join(cwd, ".mcp.json"));
+  mcpConfigFiles.push(path.join(cwd, ".vs", "mcp.json"));
+
+  for (const file of mcpConfigFiles) {
+    const text = readOrReport(file);
+    if (text === null) continue;
+
+    let parsed;
+    try { parsed = JSON.parse(text); } catch {
+      add("warn", "unparseable-config", file, "exists in a known MCP config location but is not valid JSON; the client's own loader would also choke on it, so corruption or tampering is worth a look");
+      continue;
+    }
+
+    const servers = extractMcpServers(parsed);
+    for (const [name, def] of Object.entries(servers)) {
+      if (!def || typeof def !== "object") continue;
+      const label = safePreview(name, 60);
+
+      for (const { ecosystem, package: pkg, version } of extractPackageVersions(def.args)) {
+        const { checkable, matches } = checkVersion(ecosystem, pkg, version);
+        if (!checkable) continue; // a version string this comparator can't parse: unverified, not silently clean, but nothing more to say than that
+        for (const m of matches) {
+          add("warn", "mcp-known-cve", file,
+            `MCP server "${label}" pins ${pkg}@${version}, matching ${m.id} (${m.severity}): ${m.summary} Upgrade past the vulnerable range.`);
+        }
+      }
+
+      if (isInsecureRemoteUrl(def.url)) {
+        add("warn", "mcp-insecure-transport", file,
+          `MCP server "${label}" connects to ${safePreview(def.url, 80)} over plain HTTP -- protocol traffic, including tool definitions, can be observed or altered in transit. Use an HTTPS URL if the server supports one.`);
+      }
+
+      const commandLine = [def.command, ...(Array.isArray(def.args) ? def.args : [])]
+        .filter((x) => typeof x === "string").join(" ");
+      if (commandLine && CURL_PIPE_SHELL_RE.test(commandLine)) {
+        add("warn", "mcp-curl-pipe-shell", file,
+          `MCP server "${label}" launch command fetches a script and pipes it directly into a shell: "${safePreview(commandLine)}". Review and pin to a specific, reviewed version instead of trusting whatever the URL currently serves.`);
       }
     }
   }
