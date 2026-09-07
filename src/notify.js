@@ -97,4 +97,89 @@ function notifyWindows(title, message) {
   child.unref();
 }
 
-module.exports = { notifyDesktop };
+/**
+ * A PERSISTENT Windows tray icon -- genuinely different from `notifyWindows`
+ * above, not a variant of it: that function is fire-and-forget (one balloon,
+ * then the process disposes itself and exits); this one stays alive and
+ * visible for as long as the CALLER wants it to (`residoo watch --tray`,
+ * the standing-presence "residoo is watching" indicator this project's own
+ * platform-scope.md records as a real, scoped follow-up). The two are
+ * deliberately DECOUPLED, not merged into one mechanism: this function only
+ * shows a static icon + tooltip; actual per-finding alerts keep firing
+ * through the existing, already-proven `notifyWindows` balloon-tip path,
+ * completely independently. Combining them into one process would mean
+ * finding a way to push live UPDATES into an already-running PowerShell
+ * process (a named pipe, a polled state file) -- real inter-process-
+ * communication complexity this project has no way to verify without a
+ * real Windows machine, so it was deliberately left out of scope rather
+ * than shipped unverified. A static presence icon needs no such channel.
+ *
+ * API surface verified directly against Microsoft's own current docs
+ * (learn.microsoft.com, fetched 2026-09-07), the same bar every other
+ * Windows-specific function in this project holds to, and likewise NOT
+ * live-tested against a real Windows install:
+ *   - `NotifyIcon.ContextMenuStrip` (not the older, pre-.NET-2.0
+ *     `ContextMenu`/`MenuItem` classes) is the current, non-deprecated
+ *     property, listed through the windowsdesktop-11.0 moniker.
+ *   - `SystemIcons.Shield` is a real, current static property ("an Icon
+ *     object that contains the shield icon") -- used here instead of
+ *     bundling a custom .ico file, matching zero-dependency the same way
+ *     `notifyWindows` reuses `SystemIcons.Information`.
+ *   - `NotifyIcon.Text` (the tooltip) has a REAL, documented, THROWING
+ *     limit: Microsoft's own docs give an exact table -- 63 characters
+ *     for .NET Framework and .NET 5/Core 3.0-3.1, 127 for .NET 6+. Windows
+ *     PowerShell (`powershell.exe`, what this project shells out to
+ *     everywhere, never `pwsh.exe`) runs on .NET Framework, so 63 is the
+ *     applicable limit, and exceeding it throws `ArgumentException` --
+ *     not a cosmetic detail, a real crash this function truncates against
+ *     before it can happen.
+ *
+ * Lifecycle, the one place this genuinely departs from every other spawn
+ * in this file: NOT `.unref()`'d, because the caller (`watch.js`) needs
+ * to `.kill()` this exact child process on its own SIGINT/SIGTERM
+ * shutdown -- an unref'd handle a caller has already discarded can't be
+ * reached again later. `[System.Windows.Forms.Application]::Run()` blocks
+ * the spawned PowerShell process in its own message loop for as long as
+ * the icon should stay visible; the "Hide icon" context-menu item calls
+ * `Application.Exit()` so a user can dismiss it independently of whether
+ * `residoo watch` itself keeps running.
+ */
+function startWindowsTray(tooltip) {
+  if (process.platform !== "win32") return null;
+  // Unlike notifyDesktop's callers, nothing wraps a call to this function
+  // in an outer try/catch -- runWatch calls it directly, and this returns
+  // a real value (the child, or null) callers branch on, so the "never
+  // throw" contract has to be enforced right here, not borrowed from a
+  // caller the way notifyWindows borrows notifyDesktop's. The whole body
+  // is inside this one try, not just the spawn call: `String(tooltip)`
+  // itself can throw -- an object whose own `toString` property isn't a
+  // function fails JavaScript's ToPrimitive coercion before anything else
+  // runs, the exact real (fast-check-found, not hypothetical) shape
+  // cve.js's parseVersion hit and was fixed for earlier this same
+  // project -- confirmed directly here too before shipping, not assumed
+  // fixed by analogy.
+  try {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const truncated = String(tooltip).slice(0, 63); // NotifyIcon.Text's real, throwing limit on .NET Framework -- see docstring
+    const script =
+      "Add-Type -AssemblyName System.Windows.Forms; " +
+      "Add-Type -AssemblyName System.Drawing; " +
+      "$ni = New-Object System.Windows.Forms.NotifyIcon; " +
+      "$ni.Icon = [System.Drawing.SystemIcons]::Shield; " +
+      `$ni.Text = '${esc(truncated)}'; ` +
+      "$ni.Visible = $true; " +
+      "$menu = New-Object System.Windows.Forms.ContextMenuStrip; " +
+      "$hideItem = New-Object System.Windows.Forms.ToolStripMenuItem 'Hide icon'; " +
+      "$hideItem.add_Click({ $ni.Visible = $false; $ni.Dispose(); [System.Windows.Forms.Application]::Exit() }); " +
+      "[void]$menu.Items.Add($hideItem); " +
+      "$ni.ContextMenuStrip = $menu; " +
+      "[System.Windows.Forms.Application]::Run()";
+    const child = cp.spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script], { stdio: "ignore" });
+    child.on("error", () => {}); // binary missing or spawn failed: never throw
+    return child;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { notifyDesktop, startWindowsTray };

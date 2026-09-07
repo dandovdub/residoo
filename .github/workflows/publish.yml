@@ -144,11 +144,11 @@ jobs:
     needs: publish
     runs-on: macos-latest
     permissions:
-      contents: write # uploads the built .pkg to the GitHub Release
+      contents: write # uploads the built .pkg files to the GitHub Release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - run: bash packaging/macos-pkg/build.sh
+      - run: bash packaging/macos-pkg/build.sh # builds both the install and uninstall .pkg
 
       - env:
           GH_TOKEN: ${{ github.token }}
@@ -156,5 +156,7 @@ jobs:
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
           tag="${GITHUB_REF_NAME}"
-          gh release upload "$tag" "packaging/macos-pkg/residoo-${version}.pkg" \
+          gh release upload "$tag" \
+            "packaging/macos-pkg/residoo-${version}.pkg" \
+            "packaging/macos-pkg/residoo-uninstall-${version}.pkg" \
             --repo "${GITHUB_REPOSITORY}" --clobber

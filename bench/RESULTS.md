@@ -2206,6 +2206,86 @@ is a distribution decision, not a detection one; no benchmark reproduce
 needed. `npm test` (824 checks, unchanged) still green -- confirmed
 nothing in this pass touched anything the test suite covers.
 
+## residoo 0.26.0: the two loose ends from the last two releases -- an uninstaller, and the Windows tray icon that was named as "straightforward" and then actually built (added 2026-09-07)
+
+Two independent pieces of the "polish the developer tool" arc, shipped
+together: the .pkg installer's missing mirror image, and the one Windows/
+macOS asymmetry that was already fully researched and just needed
+building.
+
+**`residoo-uninstall-<version>.pkg`**, a second script-only package
+(distinct identifier: `com.dandovdub.residoo.uninstall`, so macOS's own
+package-receipt tracking never conflates the two) that mirrors the
+installer's shape but had to solve one thing the installer didn't:
+`npm uninstall -g residoo` only removes an install `npm install -g`
+itself created. residoo installed via Homebrew lives inside Homebrew's
+own Cellar, invisible to a plain `npm uninstall -g` from outside it --
+running that command against a Homebrew-managed install would report
+nothing and silently do nothing, a false "it's gone." The uninstaller
+resolves the installed binary's real path first (`readlink -f`) and
+checks for `/Cellar/residoo/`, routing to the right instructions
+(`brew uninstall residoo`, left for the user to run themselves --
+correctly invoking `brew` itself is a different, larger scope) instead of
+ever attempting the doomed npm command. Tested against this exact
+project's own real, Homebrew-installed residoo -- confirmed the
+Homebrew-detection branch correctly stops without touching anything --
+and against a separate isolated npm-managed install, confirmed the
+plain-npm path actually removes it while leaving the real install alone.
+
+**`residoo watch --tray`**: `notify.js` gained `startWindowsTray`, a
+persistent "residoo is watching" system-tray icon via `NotifyIcon`/
+`ContextMenuStrip` -- exactly the path 0.25.0's own platform-scope.md
+entry named as "straightforward" for Windows, now actually built.
+Deliberately kept DECOUPLED from `--no-notify`'s existing balloon-tip
+alerts rather than merged into one mechanism: live-updating the same
+persistent icon from an already-running process would need real inter-
+process communication (a named pipe, a polled state file) this project
+has no way to verify without a real Windows machine, so a static
+presence icon plus the already-proven, independent balloon-tip alerts
+was the scope that could actually be verified. API surface confirmed
+directly against Microsoft's own current docs (`NotifyIcon.
+ContextMenuStrip` -- current, not the deprecated pre-.NET-2.0
+`ContextMenu`; `SystemIcons.Shield` -- a real static property, avoiding a
+bundled `.ico` file) the same bar every other Windows-specific function
+in this project holds to, and one real, previously-undocumented limit
+that verification pass surfaced: `NotifyIcon.Text` has an exact,
+THROWING 63-character limit on the .NET Framework runtime
+`powershell.exe` uses (Microsoft's own docs give the precise table --
+63 for .NET Framework/.NET 5, 127 for .NET 6+), handled with client-side
+truncation before it could crash the spawned script.
+
+**A real bug caught before shipping, the second time this exact bug
+class has been found this session**: `startWindowsTray` initially wasn't
+wrapped in its own try/catch around the `String(tooltip)` coercion --
+an object whose own `toString` property isn't a function fails
+JavaScript's ToPrimitive algorithm and throws, the identical shape
+`cve.js`'s `parseVersion` was fixed for during the CVE-checking work
+two releases ago. Checked directly here too rather than assumed already
+covered by that earlier fix (a different file, a different function),
+confirmed it reproduced, and fixed by wrapping the whole function body
+in one try -- not just the `cp.spawn` call, which is where the first
+draft's try/catch stopped short.
+
+`--tray` is Windows-only and says so rather than silently doing nothing
+elsewhere: live-verified on this (non-Windows) machine that `residoo
+watch --tray` prints a one-line disclosure to stderr and continues
+normally, never crashing or hanging.
+
+11 new `npm test` checks (`startWindowsTray`, via the same mocked-
+platform technique `notifyDesktop`'s own Windows tests already use)
+plus 1 new fuzz property. The uninstaller has the same test posture the
+installer already does -- none in `npm test` (a shell postinstall script
+isn't something this suite's testing infrastructure covers today),
+verified instead the same manual, real-machine way documented in
+`packaging/macos-pkg/README.md`: against this project's own actual
+Homebrew-installed residoo (confirmed the Homebrew-detection branch
+stops cleanly) and against a separate isolated npm-managed install
+(confirmed the plain-npm path actually removes it). `npm test`
+(835 checks) and `npm run fuzz` (2000 runs/property, including the
+newly-caught-and-fixed `startWindowsTray` property) both green.
+
+No scan.js/decode.js/patterns.js change; no benchmark reproduce needed.
+
 ## Reproduce
 
 ```

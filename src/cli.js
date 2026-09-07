@@ -13,6 +13,7 @@ const {
 } = require("./rotation");
 const { startWatch, isTailable } = require("./watch");
 const { startDashboardServer, openBrowser } = require("./dashboard");
+const { startWindowsTray } = require("./notify");
 const { startMcpServer } = require("./mcp");
 const { buildTools } = require("./mcpTools");
 const { runGuard: runGuardEngine, buildHookConfig } = require("./guard");
@@ -216,8 +217,17 @@ Watch:
                           nobody is watching a terminal for needs more than
                           a printed line. Never fires for a re-exposure of
                           something already seen, and never in --json mode.
-  Ctrl+C stops cleanly and prints a session summary (skipped with --json,
-  where the same information is one final NDJSON event).
+  --tray                  Windows only: a persistent "residoo is watching"
+                          tray icon for the life of this session, separate
+                          from --no-notify's own per-finding balloon-tip
+                          alerts (which still fire independently). No
+                          equivalent stock mechanism exists on macOS/Linux
+                          yet -- disclosed with a one-line message there,
+                          not silently ignored. Right-click > Hide icon to
+                          dismiss it without stopping the watch itself.
+  Ctrl+C stops cleanly, closes the tray icon if one was shown, and prints a
+  session summary (skipped with --json, where the same information is one
+  final NDJSON event).
 
 Dashboard:
   residoo dashboard        the exact "scan --html" report, served live at
@@ -823,6 +833,7 @@ async function runWatch(args) {
   const includePii = args.includes("--include-pii");
   const includeInjection = args.includes("--include-injection");
   const noNotify = args.includes("--no-notify");
+  const wantsTray = args.includes("--tray");
 
   let intervalSeconds = 5;
   const intervalArg = argValue(args, "--interval");
@@ -846,6 +857,22 @@ async function runWatch(args) {
 
   if (!wantsJson) printWatchBanner(sources);
 
+  // --tray: a PERSISTENT status-presence icon, deliberately decoupled from
+  // the per-finding balloon-tip alerts --no-notify already controls (see
+  // notify.js's startWindowsTray docstring for why merging them would need
+  // real inter-process communication this project has no way to verify).
+  // Windows-only, disclosed rather than silently ignored elsewhere: a real
+  // stock mechanism exists there (PowerShell + .NET's own NotifyIcon); macOS
+  // has none without a compiled app, and this flag doesn't attempt one.
+  let trayProcess = null;
+  if (wantsTray) {
+    if (process.platform === "win32") {
+      trayProcess = startWindowsTray("residoo is watching");
+    } else if (!wantsJson) {
+      process.stderr.write("--tray is Windows-only (no equivalent stock mechanism on this platform yet) -- ignored on this run.\n");
+    }
+  }
+
   const { promise, stop } = startWatch({
     sources,
     options: { includeNoisy, includeSuppressed, verify, noColor, includePii, includeInjection, noNotify, json: wantsJson, pollMs: intervalSeconds * 1000 },
@@ -863,6 +890,10 @@ async function runWatch(args) {
   const onSignal = () => {
     if (signalled) return;
     signalled = true;
+    // Not .unref()'d when spawned (see startWindowsTray's own docstring),
+    // specifically so this kill() can still reach it here -- a spawned
+    // child Node has already lost its handle to can never be stopped again.
+    if (trayProcess) trayProcess.kill();
     printFinalSummary(stop());
   };
   process.once("SIGINT", onSignal);
@@ -871,6 +902,7 @@ async function runWatch(args) {
   const stats = await promise;
   process.removeListener("SIGINT", onSignal);
   process.removeListener("SIGTERM", onSignal);
+  if (trayProcess && !signalled) trayProcess.kill();
   // promise can also resolve because something ELSE called stop() (not
   // possible from outside this function today, but the contract allows
   // it) -- print the summary exactly once regardless of which path got here.

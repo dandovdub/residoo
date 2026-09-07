@@ -1,0 +1,93 @@
+#!/bin/bash
+# residoo's UNINSTALL .pkg postinstall script -- the mirror image of
+# scripts/postinstall (the install one): same "no payload, script does
+# the work" shape, same root-vs-console-user handling, same real-path
+# npm detection. See that file's own header for the shared reasoning;
+# this one only documents what's genuinely different.
+#
+# THE ONE THING THAT ISN'T A MIRROR IMAGE, and the reason this file
+# exists as more than a one-line swap of "install" for "uninstall":
+# `npm uninstall -g residoo` only removes an install `npm install -g`
+# itself created. residoo installed via Homebrew lives inside Homebrew's
+# own Cellar, built by Homebrew's OWN internal `npm install` run inside
+# an isolated prefix -- invisible to a plain `npm ls -g` / `npm
+# uninstall -g` from outside it. Running the npm uninstall command
+# against a Homebrew-managed install would report success while doing
+# nothing at all, leaving Homebrew's own symlink in place -- a false
+# "it's gone" that CONTRIBUTING.md's rule 5 (never a false all-clear)
+# exists to prevent, applied here to an uninstaller instead of a scanner.
+# So the install method is detected first (the resolved binary's real
+# path, `readlink -f`, contains Homebrew's own `/Cellar/residoo/` if and
+# only if Homebrew installed it), and the RIGHT removal command is used
+# for each case -- `brew uninstall residoo` is left for the user to run
+# themselves rather than invoked here, since correctly locating and
+# invoking `brew` itself (which Homebrew prefix, whether it needs `sudo`,
+# first-run behavior) is a different, larger scope than mirroring the
+# plain-npm install path this uninstaller was built to reverse.
+
+set -uo pipefail
+
+LOG="/tmp/residoo-uninstaller.log"
+{ echo "=== residoo uninstaller: $(date) ==="; } > "$LOG"
+
+notify() {
+  osascript -e "display dialog \"$1\" with title \"residoo uninstaller\" buttons {\"OK\"} default button \"OK\"" >> "$LOG" 2>&1 || true
+}
+
+EXISTING_RESIDOO=""
+for candidate in /opt/homebrew/bin/residoo /usr/local/bin/residoo; do
+  if [ -x "$candidate" ]; then EXISTING_RESIDOO="$candidate"; break; fi
+done
+if [ -z "$EXISTING_RESIDOO" ]; then
+  EXISTING_RESIDOO=$(command -v residoo 2>/dev/null || true)
+fi
+
+if [ -z "$EXISTING_RESIDOO" ]; then
+  echo "residoo not found anywhere; nothing to uninstall" >> "$LOG"
+  osascript -e 'display notification "residoo was not found on this Mac -- nothing to uninstall." with title "residoo uninstaller"' >> "$LOG" 2>&1 || true
+  exit 0
+fi
+echo "found residoo at: $EXISTING_RESIDOO" >> "$LOG"
+
+REAL_PATH=$(readlink -f "$EXISTING_RESIDOO" 2>/dev/null || echo "$EXISTING_RESIDOO")
+echo "resolved real path: $REAL_PATH" >> "$LOG"
+
+case "$REAL_PATH" in
+  */Cellar/residoo/*)
+    echo "installed via Homebrew -- npm uninstall would silently do nothing here" >> "$LOG"
+    notify "residoo was installed via Homebrew, not npm directly -- this uninstaller can't remove that safely. Please run this instead, in Terminal:\n\nbrew uninstall residoo"
+    exit 0
+    ;;
+esac
+
+NPM_BIN=""
+for candidate in /opt/homebrew/bin/npm /usr/local/bin/npm /usr/bin/npm; do
+  if [ -x "$candidate" ]; then NPM_BIN="$candidate"; break; fi
+done
+if [ -z "$NPM_BIN" ]; then
+  NPM_BIN=$(command -v npm 2>/dev/null || true)
+fi
+if [ -z "$NPM_BIN" ]; then
+  echo "npm not found" >> "$LOG"
+  notify "residoo could not be uninstalled automatically: npm was not found on this Mac."
+  exit 0
+fi
+echo "using npm at: $NPM_BIN" >> "$LOG"
+
+TARGET_USER=$(stat -f%Su /dev/console 2>/dev/null || true)
+if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
+  echo "could not determine a real logged-in user (got \"$TARGET_USER\")" >> "$LOG"
+  notify "residoo could not determine which user account to uninstall for. Please run this instead, in Terminal:\n\nnpm uninstall -g residoo"
+  exit 0
+fi
+echo "uninstalling for user: $TARGET_USER" >> "$LOG"
+
+if sudo -u "$TARGET_USER" "$NPM_BIN" uninstall -g residoo >> "$LOG" 2>&1; then
+  echo "npm uninstall succeeded" >> "$LOG"
+  osascript -e 'display notification "residoo has been uninstalled." with title "residoo uninstaller"' >> "$LOG" 2>&1 || true
+else
+  echo "npm uninstall failed (exit $?)" >> "$LOG"
+  notify "residoo could not be uninstalled automatically. Details were saved to /tmp/residoo-uninstaller.log -- or run this in Terminal:\n\nnpm uninstall -g residoo"
+fi
+
+exit 0

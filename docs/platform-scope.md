@@ -212,3 +212,21 @@ not shipping it this pass -- recorded here as a real, scoped, buildable
 follow-up (Windows: straightforward; macOS: needs a `swiftc`-availability
 check and a graceful "not on this Mac" fallback, the same feature-
 detection pattern `ocr.js` already uses for `tesseract`), not ruled out.
+
+**Update, same session: the Windows half shipped.** `residoo watch --tray`
+(see `notify.js`'s `startWindowsTray` and
+[features.md](features.md#watch-continuous-scanning)) is exactly the
+"straightforward" path named above -- a persistent "residoo is watching"
+tray icon via `NotifyIcon`/`ContextMenuStrip`, deliberately decoupled
+from the existing balloon-tip alerts rather than merged with them (live-
+updating the SAME icon from a separate, already-running Node process
+would need real inter-process communication this project has no way to
+verify without a real Windows machine; a static presence icon needs no
+such channel). Verified against Microsoft's own current docs the same
+way as everything else Windows-specific here, not live-tested -- and one
+real, previously-unstated limit surfaced by that verification pass, not
+assumed: `NotifyIcon.Text` has a documented, THROWING 63-character limit
+on the .NET Framework runtime `powershell.exe` uses (127 on .NET 6+,
+which this project doesn't target), handled with client-side truncation
+before it could ever crash the spawned script. The macOS half remains
+exactly as described above -- open, not attempted.

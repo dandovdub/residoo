@@ -4034,6 +4034,86 @@ async function main() {
     }
   }
 
+  // ── notify: Windows persistent tray icon (startWindowsTray), mocked
+  // platform -- same technique as notifyDesktop's own Windows tests just
+  // above, and the same reason: unreachable on this dev/CI machine any
+  // other way. Deliberately a SEPARATE test block: this is a genuinely
+  // different mechanism from the balloon-tip one (persistent vs.
+  // fire-and-forget), not a variant worth folding into the same block.
+  {
+    const cp = require("child_process");
+    const { startWindowsTray } = require("../src/notify");
+    const origPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    const origSpawn = cp.spawn;
+
+    // Real (non-mocked) platform first: on every platform this suite
+    // actually runs on, this must return null rather than attempt anything.
+    check("startWindowsTray: returns null outright on a non-Windows platform (no spawn attempted)",
+      process.platform === "win32" || startWindowsTray("residoo is watching") === null);
+
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      let captured = null;
+      let killed = false;
+      cp.spawn = (cmd, cmdArgs, opts) => {
+        captured = { cmd, cmdArgs, opts };
+        return { on: () => {}, kill: () => { killed = true; }, unref: () => { throw new Error("must not be called -- see docstring"); } };
+      };
+      const child = startWindowsTray("residoo is watching");
+      check("startWindowsTray (Windows): spawns powershell.exe with a persistent NotifyIcon + ContextMenuStrip + message loop",
+        !!captured && captured.cmd === "powershell.exe" &&
+        captured.cmdArgs.some((a) => typeof a === "string" &&
+          a.includes("NotifyIcon") && a.includes("ContextMenuStrip") &&
+          a.includes("[System.Windows.Forms.Application]::Run()")));
+      check("startWindowsTray (Windows): uses the Shield system icon, not Information (distinct from the balloon-tip notification)",
+        !!captured && captured.cmdArgs.some((a) => typeof a === "string" && a.includes("SystemIcons]::Shield")));
+      check("startWindowsTray (Windows): the context menu's Hide-icon action disposes the icon and calls Application.Exit()",
+        !!captured && captured.cmdArgs.some((a) => typeof a === "string" &&
+          a.includes("Hide icon") && a.includes("$ni.Dispose()") && a.includes("[System.Windows.Forms.Application]::Exit()")));
+      check("startWindowsTray (Windows): runs hidden and non-interactively",
+        !!captured && captured.cmdArgs.includes("-WindowStyle") && captured.cmdArgs.includes("Hidden") && captured.cmdArgs.includes("-NonInteractive"));
+      check("startWindowsTray (Windows): returns the spawned child process handle, not null",
+        child !== null && typeof child.kill === "function");
+      check("startWindowsTray (Windows): never calls .unref() on the child -- the caller must be able to kill() it later on its own shutdown",
+        (() => { try { child.unref && child.unref(); return false; } catch { return true; } })() || typeof child.unref !== "function");
+      child.kill();
+      check("startWindowsTray (Windows): the returned handle's kill() actually reaches the real spawned child",
+        killed === true);
+
+      // The 63-character NotifyIcon.Text limit is real and THROWS if
+      // exceeded (Microsoft's own docs, fetched directly) -- not cosmetic,
+      // a required truncation to prevent a real crash in the spawned script.
+      const longTooltip = "x".repeat(200);
+      let captured2 = null;
+      cp.spawn = (cmd, cmdArgs) => { captured2 = { cmd, cmdArgs }; return { on: () => {}, kill: () => {} }; };
+      startWindowsTray(longTooltip);
+      const textArg = captured2 && captured2.cmdArgs.find((a) => typeof a === "string" && a.includes("$ni.Text ="));
+      // Extract just the quoted tooltip value itself, not the whole script
+      // string -- the script's OWN surrounding text ("Text", "Context",
+      // "Exit", ...) contains real "x" characters too, which would inflate
+      // a naive whole-string count.
+      const tooltipMatch = textArg && /\$ni\.Text = '([^']*)'/.exec(textArg);
+      check("startWindowsTray (Windows): truncates the tooltip to 63 characters, NotifyIcon.Text's real documented (and throwing) limit",
+        !!tooltipMatch && tooltipMatch[1].length === 63 && /^x+$/.test(tooltipMatch[1]));
+
+      let captured3 = null;
+      cp.spawn = (cmd, cmdArgs) => { captured3 = { cmd, cmdArgs }; return { on: () => {}, kill: () => {} }; };
+      startWindowsTray("tooltip with 'a quote'");
+      check("startWindowsTray (Windows): single quotes in the tooltip are escaped, not left to break the script",
+        !!captured3 && captured3.cmdArgs.some((a) => typeof a === "string" && a.includes("''a quote''")));
+
+      cp.spawn = () => { throw new Error("simulated: powershell.exe missing"); };
+      let threw = false;
+      let result = "not set";
+      try { result = startWindowsTray("t"); } catch { threw = true; }
+      check("startWindowsTray (Windows): a spawn failure (e.g. powershell.exe missing) never throws",
+        !threw && result === null);
+    } finally {
+      Object.defineProperty(process, "platform", origPlatform);
+      cp.spawn = origSpawn;
+    }
+  }
+
   // ── watch: continuous scanning (src/watch.js) ───────────────────────────────
   // In-process only, real timers at a tiny pollMs, real temp files — never a
   // spawned child (no precedent for that anywhere else in this suite, and a

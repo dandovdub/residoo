@@ -8,5 +8,6 @@ residoo-vault-*/
 pypi/dist/
 pypi/*.egg-info/
 # Built locally or by CI (.github/workflows/publish.yml); the source
-# (build.sh, scripts/postinstall) is committed, the binary is not.
+# (build.sh, scripts/postinstall, scripts-uninstall/postinstall) is
+# committed, the binaries are not.
 packaging/macos-pkg/*.pkg

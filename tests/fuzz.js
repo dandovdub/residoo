@@ -27,7 +27,7 @@ const { evaluateToolInput, matchSensitivePath, evaluatePromptText, evaluatePostT
 const { fingerprintFinding } = require("../src/rotation");
 const { extractImageBlocks } = require("../src/ocr");
 const { luhnValid, ibanValid, bip39ChecksumValid, findBip39Phrase } = require("../src/pii");
-const { notifyDesktop } = require("../src/notify");
+const { notifyDesktop, startWindowsTray } = require("../src/notify");
 const { checkVersion, parseVersion } = require("../src/cve");
 
 const ALL_RULES = PATTERNS.concat(NOISY_PATTERNS);
@@ -254,6 +254,26 @@ property("checkVersion always returns the documented {checkable, matches} shape"
   property("notifyDesktop never throws on any title/message input, any type",
     fc.tuple(fc.anything(), fc.anything()),
     ([title, message]) => { notifyDesktop(title, message); return true; });
+  cp.spawn = origSpawn;
+}
+
+// startWindowsTray returns null outright on a non-Windows platform without
+// touching `tooltip` at all, so the platform is mocked to win32 here too --
+// otherwise this property would never actually exercise the String()
+// coercion / truncation logic it exists to guard (the exact class of bug
+// this same fix already caught once in cve.js's parseVersion this session:
+// an object whose own `toString` isn't a function fails ToPrimitive before
+// anything else runs).
+{
+  const cp = require("child_process");
+  const origPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  const origSpawn = cp.spawn;
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  cp.spawn = () => ({ on: () => {}, kill: () => {} });
+  property("startWindowsTray never throws on any tooltip input, any type",
+    fc.anything(),
+    (tooltip) => { startWindowsTray(tooltip); return true; });
+  Object.defineProperty(process, "platform", origPlatform);
   cp.spawn = origSpawn;
 }
 

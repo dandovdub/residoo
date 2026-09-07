@@ -57,6 +57,14 @@ residoo watch [options]
   --verify                same opt-in vendor check as scan --verify, applied to
                           each newly found credential once
   --no-notify             skip the desktop notification, keep the terminal line
+  --tray                  Windows only: a persistent "residoo is watching"
+                          tray icon for the session, separate from
+                          --no-notify's own per-finding balloon-tip alerts
+                          (which still fire independently -- the two are
+                          deliberately decoupled, see notify.js). No
+                          equivalent stock mechanism on macOS/Linux yet;
+                          disclosed with a one-line message there, not
+                          silently ignored.
   --include-noisy, --include-suppressed, --include-pii,
   --include-injection, --no-color                       same meaning as scan
 ```
