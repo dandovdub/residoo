@@ -61,6 +61,69 @@ residoo watch [options]
   --include-injection, --no-color                       same meaning as scan
 ```
 
+## Dashboard: a local, read-only web UI
+
+`residoo dashboard` is `scan --html`'s own self-contained report, served
+live at a local URL instead of written to a file, and opened in your
+browser automatically. Same data, same redaction, same rotation
+guidance -- just a page instead of a terminal, for anyone who'd rather
+look at a filterable table than scroll stdout.
+
+```
+$ residoo dashboard
+residoo dashboard: http://127.0.0.1:53211/?token=9f2c...
+Read-only, localhost only -- nothing here leaves this machine, and
+nothing here can change anything on it.
+Every page reload re-scans from scratch. Press Ctrl-C to stop.
+```
+
+  --port <n>              use a specific port instead of an OS-assigned one
+  --no-open               print the URL instead of opening a browser tab
+  --include-noisy, --include-suppressed, --include-pii,
+  --include-injection, --no-integrity, --project [dir]   same meaning as scan
+
+**On-demand only, by deliberate choice**, not an always-on background
+service: it runs in your terminal, stops on Ctrl-C, and starts nothing
+that outlives that terminal -- an always-on version (auto-start at login,
+a menu-bar icon, always-reachable) is a real, separate, later decision
+this project has not made, the same "researched, not acted on" posture
+[docs/platform-scope.md](platform-scope.md) already gives a native
+mobile app and a tray-icon status indicator.
+
+**Read-only, by this release's own scope**: every page reload triggers a
+real, fresh re-scan (there's no cached snapshot to go stale), but nothing
+in the UI can ack, dismiss, or seal a finding yet -- that's terminal-only
+for now, a separate decision from whether to visualize results at all.
+
+**Security, treated as seriously as everything else here** -- this is
+the first HTTP server residoo has ever run, built with the exact lesson
+this project spent two releases cataloguing for MCP servers (see
+[docs/comparison.md](comparison.md) and [`src/cve.js`](../src/cve.js):
+CVE-2025-66414/CVE-2025-66416, "DNS rebinding protection not enabled by
+default"), applied to its own new server instead of just documented
+about someone else's:
+
+- Bound to `127.0.0.1` only, never your network interface.
+- Every request must carry a random token generated fresh for that run
+  (already embedded in the printed URL) -- the same model Jupyter
+  Notebook has used for local security for years.
+- Every request's `Host` header is checked server-side and rejected
+  unless it's exactly `127.0.0.1`/`localhost` at that port -- binding to
+  127.0.0.1 alone does not stop a DNS-rebinding attack from a malicious
+  webpage open in the same browser; this is the actual fix.
+- Response headers a static file has no mechanism to carry at all:
+  `X-Frame-Options: DENY`, a `Content-Security-Policy` blocking any
+  remote resource load, `Cache-Control: no-store`. No CORS header is
+  ever sent, so the browser's own same-origin policy stays the boundary
+  it already is.
+
+**This is not a consumer product**, and isn't presented as one: it's a
+nicer way to look at the same data a CLI-first tool already produces,
+not a GUI wrapper, an onboarding flow, or a background "you're
+protected" indicator. See [docs/platform-scope.md](platform-scope.md)
+for the fuller reasoning on why residoo has stayed CLI-first and what
+would have to be true to change that.
+
 ## Injection: prompt-injection signatures in transcript content
 
 `--include-injection` scans the same transcript content every other pass

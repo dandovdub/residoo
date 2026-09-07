@@ -53,8 +53,10 @@ again, since there's nothing to lose. `residoo guard` blocks an obviously
 sensitive file read before it happens (100% recall, 0% false positives on
 its own [scored 81-case corpus](bench/guard/RESULTS.md)) and, via a second
 hook, a secret typed directly into the prompt itself — confirmed against
-Claude Code's own docs to block before the model ever processes it. All
-four are covered in [docs/features.md](docs/features.md).
+Claude Code's own docs to block before the model ever processes it.
+`residoo dashboard` is this same report as a local, read-only web page
+instead of a terminal, opened in your browser on demand. All five are
+covered in [docs/features.md](docs/features.md).
 
 > [!NOTE]
 > gitleaks and trufflehog scan **commits**. residoo scans the **conversation
@@ -148,10 +150,11 @@ while losing rows, then fixed in public against the classes it was losing
   acknowledgement ledger. See [docs/architecture.md](docs/architecture.md#rotation-from-found-to-closed).
 - `--project <dir>` scans a repository checkout instead of the machine,
   for CI and pre-commit. See [docs/ci.md](docs/ci.md).
-- `residoo watch` / `residoo mcp` / `residoo cred` / `residoo guard`:
-  continuous scanning, conversational queries, credential injection
-  without pasting, and blocking a sensitive file read or a sensitive
-  prompt before either happens. See [docs/features.md](docs/features.md).
+- `residoo watch` / `residoo mcp` / `residoo cred` / `residoo guard` /
+  `residoo dashboard`: continuous scanning, conversational queries,
+  credential injection without pasting, blocking a sensitive file read or
+  a sensitive prompt before either happens, and a local read-only web UI.
+  See [docs/features.md](docs/features.md).
 
 ## What it does not do
 
@@ -243,7 +246,7 @@ residoo ack <fingerprint> [--note <text>]           mark one finding rotated
 residoo unseal <vault-dir>                          list a vault's contents
 residoo unseal <vault-dir> --restore <n> --out <p>  restore one file, hash-verified
 
-residoo watch / mcp / cred / guard                  see docs/features.md
+residoo watch / mcp / cred / guard / dashboard      see docs/features.md
 ```
 
 The vault passphrase comes from `RESIDOO_PASSPHRASE` or a hidden interactive

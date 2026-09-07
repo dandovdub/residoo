@@ -5005,6 +5005,163 @@ async function main() {
     }
   }
 
+  // ── dashboard.js: the local HTTP server engine, in-process (real HTTP
+  // requests via fetch against a real http.createServer, no subprocess --
+  // exercises the actual server code, just without spawning a whole CLI
+  // process for every assertion). See dashboard.js's own header for why
+  // each security check exists; this proves each one actually behaves,
+  // not just that the code compiles.
+  {
+    const { startDashboardServer } = require("../src/dashboard");
+    let callCount = 0;
+    const gatherDataOk = async () => {
+      callCount++;
+      const fakeResult = {
+        findings: [{ ruleId: "aws_access_key_id", label: "AWS Access Key ID", confidence: "high",
+          source: "claude-code", file: "s.jsonl", relFile: "s.jsonl", line: 1, preview: "AKIA…FAKE  (20 chars)", fileMTimeMs: Date.now() }],
+        filesScanned: 1, sourcesScanned: ["claude-code"], bytesScanned: 100, unreadableFiles: [],
+      };
+      const fakeIntegrity = { findings: [], filesChecked: [], scopeNote: "test" };
+      const fakeRotation = { counts: { distinct: 1, pending: 1, confirmedDead: 0 },
+        entries: [{ fingerprint: "rf1-test", ruleId: "aws_access_key_id", label: "AWS Access Key ID",
+          preview: "AKIA…FAKE  (20 chars)", status: "pending", occurrences: 1, files: ["s.jsonl"], sources: ["claude-code"],
+          guidance: { label: "AWS IAM access key", steps: [] } }] };
+      return { result: fakeResult, integrity: fakeIntegrity, rotation: fakeRotation };
+    };
+
+    const { url, stop } = await startDashboardServer({ port: 0, gatherData: gatherDataOk });
+    const parsed = new URL(url);
+    const token = parsed.searchParams.get("token");
+    const base = `http://127.0.0.1:${parsed.port}`;
+
+    try {
+      const okRes = await fetch(`${base}/?token=${token}`);
+      check("dashboard: correct token + default Host succeeds with 200",
+        okRes.status === 200);
+      const okBody = await okRes.text();
+      check("dashboard: the rendered page contains the finding's label",
+        okBody.includes("AWS Access Key ID"));
+      check("dashboard: the rendered page is the same self-contained shape as --html (has a <style> and residoo report title)",
+        okBody.includes("<style>") && okBody.includes("residoo report"));
+
+      check("dashboard: no token at all is rejected with 403",
+        (await fetch(`${base}/`)).status === 403);
+      check("dashboard: a wrong token is rejected with 403",
+        (await fetch(`${base}/?token=wrong-token-value`)).status === 403);
+      check("dashboard: an unknown path is rejected with 404 even with a valid token",
+        (await fetch(`${base}/other?token=${token}`)).status === 404);
+
+      // DNS-rebinding defense: a request whose Host header names anything
+      // other than 127.0.0.1/localhost at this port must be rejected,
+      // regardless of a correct token -- the actual fix class CVE-2025-
+      // 66414/CVE-2025-66416 (cve.js) shipped for the MCP SDKs. `fetch()`
+      // can't exercise this: Host is a WHATWG-spec "forbidden header,"
+      // silently overridden back to the real destination by the client
+      // (verified directly before writing this) -- raw `http.request`
+      // has no such restriction, matching how a real DNS-rebinding
+      // attacker's browser would actually send the request.
+      const rebindStatus = await new Promise((resolve, reject) => {
+        const req = require("http").request(`${base}/?token=${token}`,
+          { headers: { Host: "evil.example.com" } },
+          (res) => { res.resume(); resolve(res.statusCode); });
+        req.on("error", reject);
+        req.end();
+      });
+      check("dashboard: a spoofed Host header is rejected with 403 even with a valid token (DNS-rebinding defense)",
+        rebindStatus === 403);
+
+      const headersRes = await fetch(`${base}/?token=${token}`);
+      check("dashboard: response carries X-Frame-Options: DENY",
+        headersRes.headers.get("x-frame-options") === "DENY");
+      check("dashboard: response carries a CSP with frame-ancestors 'none' and default-src 'self'",
+        (headersRes.headers.get("content-security-policy") || "").includes("frame-ancestors 'none'") &&
+        (headersRes.headers.get("content-security-policy") || "").includes("default-src 'self'"));
+      check("dashboard: response carries X-Content-Type-Options: nosniff",
+        headersRes.headers.get("x-content-type-options") === "nosniff");
+      check("dashboard: response is never cached (Cache-Control: no-store)",
+        headersRes.headers.get("cache-control") === "no-store");
+      check("dashboard: no CORS header is ever sent (same-origin policy is the real boundary, not undermined here)",
+        headersRes.headers.get("access-control-allow-origin") === null);
+
+      const callsBefore = callCount;
+      await fetch(`${base}/?token=${token}`);
+      check("dashboard: gatherData is called fresh on every request -- reloading the page re-scans, no server-side caching",
+        callCount === callsBefore + 1);
+
+      let gatherDataThrew = false;
+      const { url: url2, stop: stop2 } = await startDashboardServer({
+        port: 0, gatherData: async () => { gatherDataThrew = true; throw new Error("boom"); },
+      });
+      const parsed2 = new URL(url2);
+      const crashRes = await fetch(`http://127.0.0.1:${parsed2.port}/?token=${parsed2.searchParams.get("token")}`);
+      check("dashboard: a scan/render failure degrades to a visible 500, never crashes the server",
+        gatherDataThrew && crashRes.status === 500);
+      await stop2();
+
+      await stop();
+      let connectionRefusedAfterStop = false;
+      try { await fetch(`${base}/?token=${token}`); }
+      catch { connectionRefusedAfterStop = true; }
+      check("dashboard: stop() actually closes the listening socket -- a request afterward fails to connect",
+        connectionRefusedAfterStop);
+    } finally {
+      try { await stop(); } catch { /* already stopped above in the success path */ }
+    }
+  }
+
+  // ── residoo dashboard: full CLI wiring, real subprocess, real fixture ──────
+  // Proves the whole stack together (arg parsing -> sources -> integrity ->
+  // scan -> the real HTTP server) the way a real user actually invokes it,
+  // not just dashboard.js's engine in isolation above.
+  {
+    const { spawn } = require("child_process");
+    const dashHome = path.join(tmp, "dashboard-home");
+    const projDir = path.join(dashHome, ".claude", "projects", "dashproj");
+    fs.mkdirSync(projDir, { recursive: true });
+    const dashKey = "AKIA" + "CLIDASHTESTFAKE1"; // 16 chars after AKIA
+    fs.writeFileSync(path.join(projDir, "session1.jsonl"),
+      JSON.stringify({ message: { content: "key: " + dashKey } }) + "\n");
+
+    const child = spawn(process.execPath,
+      [path.join(__dirname, "..", "bin", "residoo.js"), "dashboard", "--port", "18391", "--no-open"], {
+        env: { ...process.env, HOME: dashHome, USERPROFILE: dashHome },
+      });
+    let stderrText = "";
+    child.stderr.on("data", (d) => { stderrText += d.toString(); });
+    const stdoutChunks = [];
+    child.stdout.on("data", (d) => stdoutChunks.push(d));
+
+    // Poll for the "residoo dashboard: <url>" startup line rather than a
+    // fixed sleep -- bounded, but not flaky on a slow CI runner.
+    const deadline = Date.now() + 10000;
+    while (!stderrText.includes("residoo dashboard: http") && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    check("residoo dashboard CLI: prints the startup URL to stderr within the timeout",
+      stderrText.includes("residoo dashboard: http"));
+
+    const urlMatch = /residoo dashboard: (http:\/\/127\.0\.0\.1:18391\/\?token=[a-f0-9]+)/.exec(stderrText);
+    let cliRes = null, cliBody = "";
+    if (urlMatch) {
+      cliRes = await fetch(urlMatch[1]);
+      cliBody = await cliRes.text();
+    }
+    check("residoo dashboard CLI: the real subprocess serves the real fixture's finding over HTTP",
+      !!cliRes && cliRes.status === 200 && cliBody.includes("AWS Access Key ID"));
+    check("residoo dashboard CLI: the raw planted key never appears anywhere in the response",
+      !cliBody.includes(dashKey));
+    check("residoo dashboard CLI: --no-open means no browser-opening attempt is reflected in stderr (no 'open'/'xdg-open' failure noise)",
+      !stderrText.toLowerCase().includes("enoent"));
+
+    const exitPromise = new Promise((resolve) => child.once("exit", (code) => resolve(code)));
+    child.kill("SIGINT");
+    const exitCode = await Promise.race([exitPromise, new Promise((r) => setTimeout(() => r("timeout"), 5000))]);
+    check("residoo dashboard CLI: Ctrl-C (SIGINT) stops the process cleanly, not left hanging",
+      exitCode !== "timeout");
+    check("residoo dashboard CLI: prints a clean-stop message on shutdown",
+      stderrText.includes("residoo dashboard: stopped."));
+  }
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

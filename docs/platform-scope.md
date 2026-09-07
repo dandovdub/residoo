@@ -174,3 +174,18 @@ away from on the strength of one research pass. If a lightweight status
 indicator is ever built, Malwarebytes' badge-on-a-default-icon pattern is
 the more relevant precedent than 1Password's click-through one, since it
 signals status without requiring a click at all.
+
+**Update, explicit user decision (2026-09-07)**: the user asked directly
+for a more consumer-oriented direction and named a localhost UI/dashboard
+specifically, resolving the "not acted on" status above for that one
+narrow piece -- `residoo dashboard` (see
+[features.md](features.md#dashboard-a-local-read-only-web-ui)) ships
+`scan --html`'s own report served live at a local URL, on-demand only,
+read-only, opened manually. This is deliberately NOT the tray-icon/
+always-on/GUI-wrapper scope this section describes: it doesn't
+auto-start, doesn't run in the background, and adds no persistent status
+indicator anywhere. The always-on, background-service, and full-consumer-
+app-shell options were explicitly offered and explicitly declined in
+favor of this narrower one when scoping the feature -- still recorded
+here as real, later, separate decisions, not implicitly closed by this
+one narrower step.

@@ -12,6 +12,7 @@ const {
   ROTATION_GUIDANCE, guidanceFor, loadAcks, loadDismissed, ackFinding, dismissFinding, renderRotation,
 } = require("./rotation");
 const { startWatch, isTailable } = require("./watch");
+const { startDashboardServer, openBrowser } = require("./dashboard");
 const { startMcpServer } = require("./mcp");
 const { buildTools } = require("./mcpTools");
 const { runGuard: runGuardEngine, buildHookConfig } = require("./guard");
@@ -217,6 +218,30 @@ Watch:
                           something already seen, and never in --json mode.
   Ctrl+C stops cleanly and prints a session summary (skipped with --json,
   where the same information is one final NDJSON event).
+
+Dashboard:
+  residoo dashboard        the exact "scan --html" report, served live at
+                          a local URL instead of written to disk, and
+                          opened in your browser automatically. Read-only:
+                          this only visualizes what a scan already shows
+                          you, it never acks/dismisses/seals anything.
+                          Every page reload re-scans from scratch -- there
+                          is no separate refresh action, and nothing here
+                          is cached across requests.
+  --port <n>              use a specific port instead of letting the OS
+                          assign one
+  --no-open               print the URL instead of opening a browser tab
+                          automatically
+  --include-noisy, --include-suppressed, --include-pii,
+  --include-injection, --no-integrity, --project [dir]
+                          same meaning as scan
+  Bound to 127.0.0.1 only, never your network, and every request must
+  present a random token generated fresh for this run (printed as part
+  of the URL) -- the same local-security model Jupyter Notebook uses.
+  The server also rejects any request whose Host header isn't
+  127.0.0.1/localhost, closing the DNS-rebinding class this project's
+  own cve.js already catalogued two real MCP SDK CVEs for. Ctrl+C stops
+  it; nothing is left running in the background afterward.
 
 MCP:
   residoo mcp              run residoo as an MCP server over stdio, so
@@ -854,6 +879,138 @@ async function runWatch(args) {
 }
 
 /**
+ * `residoo dashboard`: the exact `--html` report, served live over a local,
+ * read-only HTTP server instead of written to disk -- see dashboard.js's
+ * own header for the DNS-rebinding defense, the per-run token, and why
+ * this is strictly more locked-down than the static file it's built from.
+ * On-demand only (this session's own explicit scope decision, matching
+ * `watch`'s "you run a command when you want it" model, not an always-on
+ * background service): the server runs until Ctrl-C, same shutdown
+ * contract as `runWatch` above. Every request re-scans from scratch, so
+ * reloading the page in the browser is how you refresh it -- no separate
+ * "refresh" action, no cached-at-startup snapshot going stale.
+ */
+async function runDashboard(args) {
+  const includeNoisy = args.includes("--include-noisy");
+  const includeSuppressed = args.includes("--include-suppressed");
+  const includePii = args.includes("--include-pii");
+  const includeInjection = args.includes("--include-injection");
+  const wantsIntegrity = !args.includes("--no-integrity");
+  const noBrowser = args.includes("--no-open");
+
+  let port = 0; // 0: OS assigns an ephemeral port
+  const portArg = argValue(args, "--port");
+  if (portArg !== null) {
+    const n = Number(portArg);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 65535) {
+      process.stderr.write(`--port must be an integer between 1 and 65535; got "${portArg}".\n`);
+      return 2;
+    }
+    port = n;
+  }
+
+  let projectRoot = null;
+  const projectIdx = args.indexOf("--project");
+  if (projectIdx >= 0) {
+    const next = args[projectIdx + 1];
+    projectRoot = path.resolve(next && !next.startsWith("--") ? next : ".");
+  }
+
+  let sources;
+  if (projectRoot) {
+    const projectArtifacts = require("./sources/project-artifacts");
+    const src = projectArtifacts.withRoot(projectRoot);
+    if (!src.available()) {
+      process.stderr.write(`--project: "${projectRoot}" is not a readable directory.\n`);
+      return 2;
+    }
+    sources = [src];
+  } else {
+    sources = availableSources();
+    if (sources.length === 0) {
+      process.stderr.write(
+        "No known transcript sources found on this machine; nothing to show.\n" +
+        `Checked: ${sourceStatusList()}.\n`
+      );
+      return 0;
+    }
+  }
+
+  // Same crash-degrades-to-a-visible-warning contract runIntegrity() in
+  // the scan path above already has, duplicated rather than shared: this
+  // function does its own arg parsing and orchestration independently of
+  // the scan-command code path (the same "one small self-contained CLI
+  // command function" split runWatch/runMcp already establish), rather
+  // than risking a regression in the far more heavily depended-on scan
+  // path by factoring it out.
+  const runIntegrityOnce = () => {
+    try {
+      const integ = checkIntegrity(projectRoot ? { home: projectRoot, cwd: projectRoot, projectMode: true } : {});
+      if (projectRoot) {
+        integ.scopeNote = "Integrity checks cover the --project directory only (paths shown relative to it); this machine's home-level agent configs were not examined on this run.";
+      }
+      return integ;
+    } catch (e) {
+      const why = String((e && e.message) || e).replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200);
+      return {
+        findings: [{
+          severity: "warn", kind: "integrity-crashed", file: "(integrity checker)",
+          detail: `integrity checks crashed (${why}). Config locations are UNVERIFIED, not clean; the secret-scan results are unaffected`,
+        }],
+        filesChecked: [],
+        scopeNote: "Integrity checks did not complete on this run.",
+      };
+    }
+  };
+
+  // Called fresh on every HTTP request (see dashboard.js) -- never caches
+  // across requests, so a reload always reflects the current machine
+  // state, not a snapshot from when the server started.
+  const gatherData = async () => {
+    const acks = loadAcks();
+    const dismissed = loadDismissed();
+    const integrity = wantsIntegrity ? runIntegrityOnce() : null;
+    const result = await scan({
+      sources, includeNoisy, includeSuppressed, includePii, includeInjection,
+      verify: false, noColor: false,
+    });
+    const rotation = renderRotation(result.findings, acks, dismissed);
+    return { result, integrity, rotation };
+  };
+
+  let started;
+  try {
+    started = await startDashboardServer({ port, gatherData });
+  } catch (err) {
+    process.stderr.write(`residoo dashboard: could not start the local server: ${(err && err.message) || err}\n`);
+    return 1;
+  }
+
+  process.stderr.write(
+    `residoo dashboard: ${started.url}\n` +
+    "Read-only, localhost only -- nothing here leaves this machine, and nothing here can change anything on it.\n" +
+    "Every page reload re-scans from scratch. Press Ctrl-C to stop.\n"
+  );
+  if (!noBrowser) openBrowser(started.url);
+
+  let signalled = false;
+  return new Promise((resolve) => {
+    const onSignal = () => {
+      if (signalled) return;
+      signalled = true;
+      started.stop().then(() => {
+        process.removeListener("SIGINT", onSignal);
+        process.removeListener("SIGTERM", onSignal);
+        process.stderr.write("residoo dashboard: stopped.\n");
+        resolve(0);
+      });
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  });
+}
+
+/**
  * `residoo guard --print-config`: print the merged .claude/settings.json
  * a user would need to register all three guard hooks, without ever
  * writing it -- see guard.js's own buildHookConfig docstring for why this
@@ -1084,6 +1241,7 @@ async function main(argv) {
   if (cmd === "ack") return runAck(args);
   if (cmd === "dismiss") return runDismiss(args);
   if (cmd === "watch") return runWatch(args);
+  if (cmd === "dashboard") return runDashboard(args);
   if (cmd === "mcp") return runMcp(args);
   if (cmd === "cred") return runCred(args);
   if (cmd === "guard") {

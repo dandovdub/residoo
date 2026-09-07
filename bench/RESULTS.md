@@ -2061,6 +2061,80 @@ checks) and `npm run fuzz` (2000 runs/property) both green.
 
 No scan.js/decode.js/patterns.js change; no benchmark reproduce needed.
 
+## residoo 0.24.0: a local, read-only dashboard -- explicitly scoped, not the tray-icon/GUI-wrapper path this project already declined (added 2026-09-07)
+
+Direct response to an explicit user decision: after a "where do we stand
+for consumers" discussion, the user asked for a more consumer-oriented
+direction and specifically named a localhost UI/dashboard. Rather than
+guess at scope for "all the features consumers usually have," asked two
+scoping questions first and got clear answers: on-demand only (not an
+always-on background service with a tray icon and autostart), and
+visualize existing data only (not action-taking, not a setup wizard).
+That answer matters architecturally -- it's the difference between a
+few hundred lines and a background-daemon-lifecycle project.
+
+**No new rendering code at all.** `residoo dashboard` serves
+`renderHtml()` -- the exact function `scan --html` already writes to
+disk -- live over a local HTTP server instead. Same data, same
+redaction, same rotation guidance, same filterable table. New
+[`src/dashboard.js`](../src/dashboard.js) is the server engine (Node's
+built-in `http` module only, zero new dependency); `runDashboard` in
+cli.js is the thin CLI-glue layer, mirroring the existing
+`watch.js`/`runWatch` engine-vs-glue split.
+
+**Security got the same treatment this project just spent two releases
+giving to OTHER people's local MCP servers, applied to residoo's own
+first one.** `src/cve.js` already catalogues CVE-2025-66414 and
+CVE-2025-66416 -- "DNS rebinding protection not enabled by default" in
+the MCP TypeScript and Python SDKs. Binding to 127.0.0.1 alone does not
+stop that attack: a malicious webpage open in the same browser can make
+the browser itself reach the server via a hostname that resolves to
+127.0.0.1 after an initial check passes. The actual fix, applied here:
+every request's `Host` header is validated server-side and rejected
+unless it's exactly `127.0.0.1`/`localhost` at the server's own port.
+Verified this couldn't be tested via `fetch()` -- Host is a WHATWG-spec
+"forbidden header" a browser-spec-compliant client silently overrides
+back to the real destination, confirmed directly in Node before writing
+the test -- so the DNS-rebinding test uses raw `http.request`, which has
+no such restriction, matching how a real attacker's browser would
+actually send the request. On top of that: a random per-run token
+(Jupyter Notebook's own long-standing local-security model) required on
+every request, and response headers a static file has no mechanism to
+carry at all (`X-Frame-Options: DENY`, a CSP blocking any remote
+resource load, `Cache-Control: no-store`, no CORS header ever sent) --
+meaning the dashboard ends up MORE locked down than the plain `--html`
+file it's built from, not less.
+
+**On-demand only, by the scoping decision above**: runs until Ctrl-C,
+starts nothing that outlives the terminal it was launched from, adds no
+autostart registration and no tray icon. **Read-only, by the same
+decision**: every page reload triggers a real, fresh re-scan (verified
+live -- editing the fixture file on disk while the server was already
+running was picked up on the very next request, no restart needed), but
+nothing in the UI can ack/dismiss/seal yet. Recorded explicitly in
+[docs/platform-scope.md](../docs/platform-scope.md) that the always-on/
+background-service and full-consumer-app-shell options were offered and
+declined for this release specifically, not silently ruled out --
+separate, later decisions if ever made.
+
+21 new tests: an in-process suite against `dashboard.js`'s real HTTP
+server (token/Host/path/method checks, all four security response
+headers, the live-re-scan-per-request behavior, graceful `stop()`, a
+`gatherData` failure degrading to a visible 500 instead of crashing the
+server) plus a full CLI e2e test spawning the real `residoo dashboard`
+subprocess against a real fixture and driving it exactly like a user
+would (start, fetch, verify content, Ctrl-C, confirm clean exit).
+Live-verified beyond the test suite too: opened the actual rendered page
+in a real browser, confirmed it looks right (stat cards, dark theme,
+filterable table, the MCP-CVE integrity warning rendering correctly
+inline) and that the client-side filter box actually filters, not just
+that the HTTP responses have the right status codes.
+
+`npm test` (824 checks) and `npm run fuzz` (2000 runs/property) both
+green.
+
+No scan.js/decode.js/patterns.js change; no benchmark reproduce needed.
+
 ## Reproduce
 
 ```
