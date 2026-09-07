@@ -129,3 +129,32 @@ jobs:
           gh release create "$tag" --title "$tag" --generate-notes --repo "${GITHUB_REPOSITORY}" || true
           gh release upload "$tag" "/tmp/residoo-${version}.intoto.jsonl" "/tmp/residoo-${version}.sigstore.json" \
             --repo "${GITHUB_REPOSITORY}" --clobber
+
+  # Builds the macOS .pkg installer (see packaging/macos-pkg/) on a real
+  # macOS runner -- pkgbuild/productbuild are macOS-only, so this can't
+  # live in the ubuntu-latest `publish` job above -- and attaches it to
+  # the SAME GitHub Release that job already created. Depends on
+  # `publish` specifically for that release to exist, not because the
+  # .pkg's own contents depend on npm's publish having completed: the
+  # .pkg has no payload of its own (see build.sh) and its postinstall
+  # script runs `npm install -g residoo` on the END USER's machine at
+  # INSTALL time, which naturally picks up whatever is on the registry
+  # then, not whatever was there when this job ran.
+  build-macos-pkg:
+    needs: publish
+    runs-on: macos-latest
+    permissions:
+      contents: write # uploads the built .pkg to the GitHub Release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - run: bash packaging/macos-pkg/build.sh
+
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME}"
+          gh release upload "$tag" "packaging/macos-pkg/residoo-${version}.pkg" \
+            --repo "${GITHUB_REPOSITORY}" --clobber

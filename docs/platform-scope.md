@@ -189,3 +189,26 @@ app-shell options were explicitly offered and explicitly declined in
 favor of this narrower one when scoping the feature -- still recorded
 here as real, later, separate decisions, not implicitly closed by this
 one narrower step.
+
+**Follow-up, same session: a real macOS/Windows asymmetry checked
+directly, not assumed, before deciding not to build a tray icon this
+pass.** Windows has a genuinely simple, zero-dependency path: `notify.js`
+already proved `System.Windows.Forms.NotifyIcon` (PowerShell's own
+built-in .NET binding) works for one-shot balloon notifications, and the
+same API supports a PERSISTENT icon with a context menu, kept alive by
+the PowerShell process's own message loop -- no extra install, matching
+this project's existing shell-out pattern exactly. macOS has no
+equivalent stock mechanism: `osascript`/AppleScript can show one-shot
+notifications but cannot create a persistent `NSStatusItem` menu-bar
+icon; that needs a compiled Cocoa app or a `swift` script run through
+`swiftc`. `swift` IS present on this build machine (confirmed directly:
+`/usr/bin/swift`, functional) -- but only because Xcode Command Line
+Tools are installed here, which is common on a *developer's* Mac but not
+guaranteed on every Mac, including a true non-developer consumer's.
+Building this only for the platform where it happens to be easy, and
+silently degrading (or worse, failing unclearly) on the platform where
+residoo's own primary build-and-test machine runs, was judged worse than
+not shipping it this pass -- recorded here as a real, scoped, buildable
+follow-up (Windows: straightforward; macOS: needs a `swiftc`-availability
+check and a graceful "not on this Mac" fallback, the same feature-
+detection pattern `ocr.js` already uses for `tesseract`), not ruled out.

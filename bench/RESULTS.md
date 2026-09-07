@@ -2135,6 +2135,77 @@ green.
 
 No scan.js/decode.js/patterns.js change; no benchmark reproduce needed.
 
+## residoo 0.25.0: a macOS installer, no `src/` change at all -- a distribution decision, not a detection one, and a real bug caught by testing it against this project's own real machine before shipping (added 2026-09-07)
+
+Continuation of the "polish the developer tool" direction: after
+`residoo dashboard` closed the "what does this look like" gap, the next
+honest gap was "you still need to know what `npm install -g` means to
+get residoo onto your Mac at all." New
+[`packaging/macos-pkg/`](../packaging/macos-pkg/): a script-only `.pkg`
+(`pkgbuild --nopayload` -- no files copied by the package mechanism
+itself) whose postinstall script runs `npm install -g residoo` on the
+user's behalf. Double-click instead of open-Terminal-and-type; Node.js
+itself remains a real, disclosed prerequisite (bundling a full Node
+runtime is a materially different, bigger undertaking this pass didn't
+attempt, and arguably cuts against residoo's own "small, auditable"
+identity anyway).
+
+**Tested against this project's own real, already-installed residoo
+before shipping, and that caught a real gap a synthetic test would have
+missed**: running the postinstall script for real showed `npm install -g`
+failing with `EEXIST` against the Homebrew-managed symlink already at
+`/opt/homebrew/bin/residoo` -- correct npm behavior (it refuses to
+overwrite a file it doesn't own), but the script's own dialog for that
+case was the same generic "could not be installed automatically" message
+a genuine failure gets, actively confusing for someone who already has a
+working install. Fixed by checking for an existing `residoo` upfront
+(same real-path-checking discipline as the npm-detection logic right
+next to it) and showing a distinct "already installed, nothing to do"
+message instead of ever attempting the doomed install. Re-verified the
+real global Homebrew symlink was untouched throughout this whole testing
+pass (`readlink /opt/homebrew/bin/residoo`, checked before and after
+every test run) -- this project's own actual working install was never
+put at real risk, by design: every `npm install -g residoo` invocation
+during testing was redirected to an isolated `--prefix`, confirmed to
+produce a working isolated binary, never run against the real global
+prefix except through the new already-installed short-circuit (which
+exits before attempting any install at all).
+
+**Unsigned, disclosed plainly**: no Apple Developer ID certificate is
+available to this pass, so Gatekeeper shows an "unidentified developer"
+warning on first open (right-click > Open once). Real signing/
+notarization needs the maintainer's own paid Apple Developer Program
+enrollment -- a separate, later step.
+
+**New CI**: `.github/workflows/publish.yml` gained a `build-macos-pkg`
+job (`runs-on: macos-latest`, `needs: publish`) that builds the `.pkg`
+fresh on every tagged release and attaches it to that release's GitHub
+Release page via `gh release upload` -- the same release `publish`'s own
+existing steps already create for the npm provenance attestations, just
+one more asset on it. This release's own tag is what actually exercises
+that job for the first time; its result is the live verification.
+
+**A tray-icon / "protected" status indicator was checked, not built,
+this pass** -- a real, disclosed platform asymmetry, not a guess:
+Windows has a genuinely simple, zero-dependency path
+(`System.Windows.Forms.NotifyIcon` already proven for one-shot
+notifications in `notify.js` supports a persistent icon with a context
+menu too, kept alive by PowerShell's own message loop). macOS has no
+equivalent stock mechanism -- a persistent `NSStatusItem` needs a
+compiled Cocoa app or a `swift` script run through `swiftc`, and while
+`swift` is present and functional on this build machine (confirmed
+directly), that's only because Xcode Command Line Tools happen to be
+installed here, not something guaranteed on every Mac. Recorded in
+[docs/platform-scope.md](../docs/platform-scope.md) as a real, scoped,
+buildable follow-up (Windows straightforward; macOS needs a
+`swiftc`-availability check and a graceful fallback, the same pattern
+`ocr.js` already uses for `tesseract`), not silently dropped.
+
+No scan.js/decode.js/patterns.js change, no `src/` change at all -- this
+is a distribution decision, not a detection one; no benchmark reproduce
+needed. `npm test` (824 checks, unchanged) still green -- confirmed
+nothing in this pass touched anything the test suite covers.
+
 ## Reproduce
 
 ```

@@ -1,0 +1,108 @@
+#!/bin/bash
+# residoo .pkg installer's postinstall script.
+#
+# The .pkg itself has no file payload (built with `pkgbuild --nopayload`,
+# see build.sh) -- its entire job is running this script once, which does
+# the exact thing a terminal-comfortable user would type by hand:
+# `npm install -g residoo`. What this buys someone who is NOT comfortable
+# in a terminal: double-click the .pkg, click through the standard macOS
+# installer wizard, done -- no npm/Homebrew knowledge required for the
+# INSTALL step itself.
+#
+# What this does NOT remove, disclosed rather than glossed over: Node.js
+# itself is still a real prerequisite. residoo's own zero-runtime-
+# dependency rule (CONTRIBUTING.md) is about what residoo ships, not
+# about the Node runtime it's written in -- bundling a full Node runtime
+# into this installer would be a much bigger, different undertaking (and
+# arguably works against residoo's own "small, auditable" identity), so
+# this script detects Node's absence and tells the user clearly what to
+# do next, rather than pretending to succeed.
+#
+# Installer postinstall scripts run as root, with a minimal environment
+# (no user PATH). Two things follow from that, both handled explicitly
+# below: npm has to be located by checking real install paths, not by
+# trusting $PATH; and the actual `npm install -g` has to run AS THE
+# LOGGED-IN USER, not root -- a root-owned global npm install would be
+# unusable (and a real permissions mess) for that user afterward.
+
+set -uo pipefail
+
+LOG="/tmp/residoo-installer.log"
+{
+  echo "=== residoo installer: $(date) ==="
+} > "$LOG"
+
+notify() {
+  # display dialog, not display notification: this needs to be seen and
+  # acknowledged (a failed/blocked install), not glanced at in Notification
+  # Center. Never fatal if osascript itself fails (e.g. no GUI session) --
+  # the log file is always the fallback source of truth.
+  osascript -e "display dialog \"$1\" with title \"residoo installer\" buttons {\"OK\"} default button \"OK\"" >> "$LOG" 2>&1 || true
+}
+
+# Common real install locations checked directly, in addition to a PATH
+# lookup -- a postinstall script's $PATH is minimal and cannot be trusted
+# to include Homebrew's or nvm's own bin directories.
+NPM_BIN=""
+for candidate in /opt/homebrew/bin/npm /usr/local/bin/npm /usr/bin/npm; do
+  if [ -x "$candidate" ]; then NPM_BIN="$candidate"; break; fi
+done
+if [ -z "$NPM_BIN" ]; then
+  NPM_BIN=$(command -v npm 2>/dev/null || true)
+fi
+
+if [ -z "$NPM_BIN" ]; then
+  echo "npm not found in any known location" >> "$LOG"
+  notify "residoo needs Node.js, which was not found on this Mac.\n\nInstall it from nodejs.org, then open Terminal and run:\n\nnpm install -g residoo"
+  exit 0
+fi
+echo "using npm at: $NPM_BIN" >> "$LOG"
+
+# A real gap found by testing this script before shipping, not assumed:
+# if residoo is already installed (Homebrew's own symlink at this exact
+# path, or a prior npm install), `npm install -g` fails with EEXIST --
+# npm correctly refuses to overwrite a file it doesn't own, which is the
+# RIGHT behavior, but the dialog this script showed for that case used to
+# be the same generic "could not be installed automatically" message a
+# genuine failure gets, which is actively confusing for someone who
+# already has residoo working fine. Checked upfront instead, across the
+# same real install locations already checked for npm above, so this
+# never even attempts (and fails) an install that was never going to be
+# needed.
+EXISTING_RESIDOO=""
+for candidate in /opt/homebrew/bin/residoo /usr/local/bin/residoo; do
+  if [ -x "$candidate" ]; then EXISTING_RESIDOO="$candidate"; break; fi
+done
+if [ -z "$EXISTING_RESIDOO" ]; then
+  EXISTING_RESIDOO=$(command -v residoo 2>/dev/null || true)
+fi
+if [ -n "$EXISTING_RESIDOO" ]; then
+  echo "residoo is already installed at $EXISTING_RESIDOO; nothing to do" >> "$LOG"
+  osascript -e "display notification \"Already installed at $EXISTING_RESIDOO -- nothing to do.\" with title \"residoo\"" >> "$LOG" 2>&1 || true
+  exit 0
+fi
+
+# stat -f%Su /dev/console is Apple's own documented pattern (Installer
+# postinstall scripts, Apple Technical Note) for finding the actual
+# logged-in console user from a root-run script.
+TARGET_USER=$(stat -f%Su /dev/console 2>/dev/null || true)
+if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
+  echo "could not determine a real logged-in user (got \"$TARGET_USER\"); aborting rather than installing as root" >> "$LOG"
+  notify "residoo could not determine which user account to install for. Please run this instead, in Terminal:\n\nnpm install -g residoo"
+  exit 0
+fi
+echo "installing for user: $TARGET_USER" >> "$LOG"
+
+if sudo -u "$TARGET_USER" "$NPM_BIN" install -g residoo >> "$LOG" 2>&1; then
+  echo "npm install succeeded" >> "$LOG"
+  osascript -e 'display notification "residoo is installed. Open Terminal and run: residoo scan" with title "residoo installed"' >> "$LOG" 2>&1 || true
+else
+  echo "npm install failed (exit $?)" >> "$LOG"
+  notify "residoo could not be installed automatically. Details were saved to /tmp/residoo-installer.log -- or just run this in Terminal:\n\nnpm install -g residoo"
+fi
+
+# Always exit 0: the .pkg's own payload is empty, so there is nothing for
+# the macOS Installer to roll back either way, and this script's own
+# dialog already gives the real, honest status -- a generic "Installation
+# Failed" system dialog on top of that would be noise, not information.
+exit 0

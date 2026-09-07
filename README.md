@@ -206,6 +206,16 @@ brew install residoo
 The Homebrew formula installs the exact tarball published to npm (sha256
 verified): same bits, not a second build.
 
+**macOS, no terminal needed for the install step itself:** download
+`residoo-<version>.pkg` from the
+[latest release](https://github.com/dandovdub/residoo/releases/latest)
+and double-click it. It's unsigned (no Apple Developer ID -- right-click
+> Open once to get past Gatekeeper's "unidentified developer" warning),
+and it still needs Node.js present on the machine (it runs
+`npm install -g residoo` on your behalf, it doesn't bundle a Node
+runtime) -- see [packaging/macos-pkg](packaging/macos-pkg/README.md) for
+exactly what it does and how it was verified.
+
 Requires Node.js 18+ (22.5+ for the SQLite-backed sources listed in
 [docs/sources.md](docs/sources.md); residoo still runs fine without it).
 Zero runtime dependencies: check `package.json` rather than take that on
